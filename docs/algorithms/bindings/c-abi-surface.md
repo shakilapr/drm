@@ -6,15 +6,15 @@ Scope: the stable C ABI (`drm.h`, crate `drm-ffi`) — raw-pointer `extern "C"` 
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-BIND-abi-raw-pointers` | `extern "C"` raw pointers; checks precede any reference/slice | — |
-| `REQ-BIND-abi-validation-once` | access validation once at endpoint open; zero per-message checks | — |
-| `REQ-BIND-abi-opaque-handles` | opaque handles; never raw cross-process pointers | — |
-| `REQ-BIND-abi-status-mirror` | one status taxonomy mirrored 1:1 to C codes (codebase R4) | — |
-| `REQ-BIND-abi-borrow-view` | caller-owned `drm_borrow_view` + token; explicit release | — |
-| `REQ-BIND-abi-single-borrow` | one outstanding borrow per consumer endpoint | — |
-| `REQ-BIND-abi-no-borrow-alloc` | borrow acquire/release performs no heap allocation (codebase R5) | — |
-| `REQ-BIND-abi-close` | explicit publisher/consumer close; documented thread-safety | — |
-| `REQ-BIND-abi-versioning` | append-only; never rename; layout change = version bump | — |
+| `REQ-BIND-abi-raw-pointers` | `extern "C"` raw pointers; checks precede any reference/slice | `REQ-BIND-005` |
+| `REQ-BIND-abi-validation-once` | access validation once at endpoint open; zero per-message checks | `REQ-BIND-008` |
+| `REQ-BIND-abi-opaque-handles` | opaque handles; never raw cross-process pointers | `REQ-BIND-004` |
+| `REQ-BIND-abi-status-mirror` | one status taxonomy mirrored 1:1 to C codes (codebase R4) | `REQ-BIND-007` |
+| `REQ-BIND-abi-borrow-view` | caller-owned `drm_borrow_view` + token; explicit release | `REQ-BIND-001` |
+| `REQ-BIND-abi-single-borrow` | one outstanding borrow per consumer endpoint | `REQ-BIND-006` |
+| `REQ-BIND-abi-no-borrow-alloc` | borrow acquire/release performs no heap allocation (codebase R5) | `REQ-BIND-003` |
+| `REQ-BIND-abi-close` | explicit publisher/consumer close; documented thread-safety | `REQ-BIND-002` |
+| `REQ-BIND-abi-versioning` | append-only; never rename; layout change = version bump | `REQ-BIND-009` |
 
 ## Data Structures
 
@@ -36,6 +36,8 @@ typedef enum { // mirrors drm-types::Status 1:1 (append-only)
  DRM_ERR_PERMISSION, DRM_ERR_QUEUE_FULL, DRM_ERR_GAP, DRM_ERR_STALE,
  DRM_ERR_WRONG_ABI, DRM_ERR_POOL_EXHAUSTED, DRM_ERR_RETRY, DRM_ERR_BUSY,
  DRM_ERR_NO_SAMPLE, DRM_ERR_INVALID_BORROW, DRM_ERR_GENERATION_EXHAUSTED,
+ DRM_ERR_INVALID_DATA, DRM_ERR_INVALID_CONFIG, DRM_ERR_NOT_READY, DRM_ERR_LOCK_FAILED,
+ DRM_ERR_SEQUENCE_EXHAUSTED, DRM_ERR_EPOCH_EXHAUSTED, DRM_ERR_RING_STAMP_EXHAUSTED,
  DRM_ERR_INTERNAL,
 } drm_status;
 ```
@@ -55,6 +57,7 @@ pub struct ConsumerBox { auth: EndpointAuth, core: drm_core::Consumer, outstandi
 - **I-A5 BorrowDiscipline**: one outstanding borrow per consumer endpoint; a second ⇒ `Busy`; release with a stale/foreign/double token ⇒ `InvalidBorrow`; no heap allocation on acquire/release. Test: `ffi_borrow_discipline`, `ffi_no_borrow_alloc`, `ffi_borrow_busy`.
 - **I-A6 NoUnwind**: no Rust panic crosses the FFI boundary (catch_unwind shield ⇒ `DRM_ERR_INTERNAL`). Test: `ffi_no_unwind` (injected panic fixture).
 - **I-A7 ThreadSafety**: endpoints are not thread-safe by default; a caller must not use one endpoint concurrently from multiple threads (each concurrent borrower opens its own consumer). Test: documented contract + `ffi_thread_contract` (debug assertion on concurrent misuse).
+- **I-A8 PriorAbiCompat**: the ABI compatibility suite tests against all previously supported ABI versions — at v1.0 that is ABI v0 (the only prior version, frozen at the Phase 7 draft gate); every later release adds its predecessor to the suite. Test: `abi_compat` (v0 golden suite re-run against current exports).
 
 ## Functions
 

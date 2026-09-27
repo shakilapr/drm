@@ -6,11 +6,11 @@ Scope: `drm build` as high-level orchestrator (parse → generate → verify →
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-build-orchestrate` | parse → generate → verify → native adapter invoke | — |
-| `REQ-TOOL-build-adapter-delegate` | header deps/object freshness owned by native toolchains | — |
-| `REQ-TOOL-dev-two-events` | DRM declaration changed / application source changed — nothing else | — |
-| `REQ-TOOL-dev-no-source-graph` | DRM never tracks header/source dependency graphs | — |
-| `REQ-TOOL-dev-no-stale-code` | repeated edits never produce stale generated code | — |
+| `REQ-TOOL-build-orchestrate` | parse → generate → verify → native adapter invoke | `REQ-TOOL-012` |
+| `REQ-TOOL-build-adapter-delegate` | header deps/object freshness owned by native toolchains | `REQ-TOOL-011` |
+| `REQ-TOOL-dev-two-events` | DRM declaration changed / application source changed — nothing else | `REQ-TOOL-016` |
+| `REQ-TOOL-dev-no-source-graph` | DRM never tracks header/source dependency graphs | `REQ-TOOL-014` |
+| `REQ-TOOL-dev-no-stale-code` | repeated edits never produce stale generated code | `REQ-TOOL-015` |
 
 ## Data Structures
 
@@ -41,22 +41,25 @@ fn build(req: BuildRequest) -> Result<BuildReport, Status> {
  let ids = handle_system::assign(&model, prior_ids())?; // handle-system.md
  codegen::execute(&codegen::plan(&model, prev_fingerprints()))?; // codegen-invalidation.md
  verify::run(&model, &deployment_config(req.workspace)?)?; // verify-engine.md (Phase 26; minimal set here)
- for node in req.targets.unwrap_or(model.nodes.keys()) {
+ let targets = resolve_targets(req.targets.as_ref(), &model)?; // sorted, owned names
+ for node in targets {
  adapter_for(node)?.invoke(node)?; // delegate (I-BO2)
  }
  Ok(BuildReport { generated, verified, built })
 }
 
-fn watch(ws: PathBuf, mut on_event: impl FnMut(WatchEvent)) {
- let mut model = workspace_model::build(tree(&ws)).expect("initial build");
+fn watch(ws: PathBuf, mut on_event: impl FnMut(WatchEvent)) -> Result<(), Status> {
+ let mut model = workspace_model::build(tree(&ws))?;
  loop {
  let evs = fs_events.debounce(200ms).batch(); // I-BO4: batch to final state
 
  // I-BO5: apply declaration changes (reload) BEFORE mapping source events
  let declarations: Vec<_> = evs.iter().filter(|e| is_declaration(e)).cloned().collect();
  if !declarations.is_empty() {
- model = workspace_model::build(tree(&ws)).expect("reload"); // full reload; no incremental cache
- on_event(DrmDeclarationChanged(declarations)); // regenerate + verify affected
+ match workspace_model::build(tree(&ws)) {
+ Ok(next) => { model = next; on_event(DrmDeclarationChanged(declarations)); }
+ Err(e) => { on_event(DeclarationError(e)); continue; } // suspend source dispatch; keep last valid model
+ }
  }
  for ev in evs.iter().filter(|e| !is_declaration(e)) {
  if let Some(node) = owner_of(ev, &model) { // ownership from the NEW model
@@ -91,7 +94,8 @@ fn watch(ws: PathBuf, mut on_event: impl FnMut(WatchEvent)) {
 | Adapter failure | per-node failure surfaced; other nodes continue (`--keep-going` default in dev) |
 | Renamed node dir | manifest discovery resolves; old adapter target dropped |
 | Non-UTF8 source file touched | ignored (not a declaration; owner mapping by path only) |
-| Watch event during build | queued; applied after current build completes (single in-flight build) |
+| Watch event during build | queued; coalesced and applied after the single in-flight build |
+| Invalid declaration batch | emit `DeclarationError`; dispatch no source events until a later valid reload |
 | Custom command missing | clear error naming manifest field |
 
 ## Test Matrix

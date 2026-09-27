@@ -6,11 +6,11 @@ Scope: `drm-record` — borrow-copy-release logging pipeline, recorder-owned bou
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-OPS-record-borrow-copy-release` | ingress borrows, copies into recorder-owned buffer, releases immediately | — |
-| `REQ-OPS-record-no-disk-on-borrow` | disk threads never touch DRM slots | — |
-| `REQ-OPS-record-on-full` | drop / stop / backpressure policies | — |
-| `REQ-OPS-record-mcap` | MCAP framing; gaps recorded | — |
-| `REQ-OPS-replay-faithful` | replay preserves samples/order/timestamps/gaps | — |
+| `REQ-OPS-record-borrow-copy-release` | ingress borrows, copies into recorder-owned buffer, releases immediately | `REQ-OPS-005` |
+| `REQ-OPS-record-no-disk-on-borrow` | disk threads never touch DRM slots | `REQ-OPS-007` |
+| `REQ-OPS-record-on-full` | drop / stop / backpressure policies | `REQ-OPS-008` |
+| `REQ-OPS-record-mcap` | MCAP framing; gaps recorded | `REQ-OPS-006` |
+| `REQ-OPS-replay-faithful` | replay preserves samples/order/timestamps/gaps | `REQ-OPS-009` |
 
 ## Data Structures
 
@@ -23,8 +23,8 @@ pub struct RecorderConfig {
 }
 pub enum OnFull { Drop, Stop, Backpressure }
 
-pub struct RecorderBuffer { ring: RingBuf<Sample>, owned: bool } // recorder-owned memory ONLY
-pub struct Sample { topic: TopicPath, seq: u64, recv_ns: u64, src_ns: Option<u64>, payload: Bytes }
+pub struct RecorderBuffer { slots: FixedRing<OwnedSampleSlot>, free: FixedFreeList } // preallocated at session activation
+pub struct OwnedSampleSlot { topic_id: u32, seq: u64, recv_ns: u64, src_ns: Option<u64>, len: u32, payload: [u8; MAX_SAMPLE] }
 ```
 
 ## Invariants
@@ -38,21 +38,29 @@ pub struct Sample { topic: TopicPath, seq: u64, recv_ns: u64, src_ns: Option<u64
 
 ```rust
 // Ingress thread
-fn ingress_loop(rec: &Recorder) {
+fn ingress_loop(rec: &Recorder, topic: TopicId) {
  loop {
- match rec.topic.borrow_next_owned() { // cursor next + copy in one call (cursor-delivery.md)
- Ok(sample) => match rec.buffer.push(sample) {
- Ok(()) => {}
- Err(Full) => match rec.cfg.on_full {
- Drop => { rec.gaps.fetch_add(1); continue; } // I-RC3
+ match rec.copy_next_into_free_slot(topic) { // borrow → copy into preallocated slot → release
+ Ok(slot) => {
+ let mut pending = slot;
+ loop {
+ match rec.buffer.try_push(pending) {
+ Ok(()) => break,
+ Err(Full(slot)) => {
+ pending = slot;
+ match rec.cfg.on_full {
+ Drop => { rec.write_policy_gap(topic, pending.seq, 1); rec.release_slot(pending); break; }
  Stop => { rec.abort(RECORDING_FAILED, BUFFER_EXHAUSTED); return; }
- Backpressure => { rec.pause_until_space(); } // topic overflow governs publisher
+ Backpressure => { rec.wait_for_space(); continue; } // owned slot retained; no sample loss
+ }
+ },
+ }
  },
  },
  Err(Gap { missed }) => rec.record_gap_marker(missed), // MCAP gap record
  Err(Empty) => wait_for_sequence(),
  }
- // borrow already released inside borrow_next_owned — slot freed (I-RC1)
+ // DRM borrow was released before try_push/wait/disk work (I-RC1)
  }
 }
 
@@ -70,7 +78,7 @@ fn disk_thread(rec: &Recorder) {
 
 1. `drm record --topics a,b --on-full drop --out session/` — opens sequential readers (cursor next), spawns ingress + disk threads.
 2. Ingress: borrow → copy → release (single atomic window per sample).
-3. Disk: MCAP chunks; gap markers for `GAP { missed }` and policy drops.
+3. Disk: MCAP chunks; exact `{topic, first_seq, missed}` markers for history gaps and policy drops.
 4. Stop: flush chunks; footer; explicit session summary (counts, gaps, drops).
 
 *Replay session:*

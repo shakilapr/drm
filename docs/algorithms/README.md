@@ -74,7 +74,7 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 | Doc | Phase(s) | Scope |
 |---|---|---|
 | [ops/record-replay.md](ops/record-replay.md) | 32 | Borrow-copy-release pipeline, on_full policies, MCAP, faithful replay |
-| [ops/observability-plane.md](ops/observability-plane.md) | 32 | diag aggregation, compiled trace rings, read-only introspection |
+| [ops/observability-plane.md](ops/observability-plane.md) | 32 | diag aggregation, compiled trace rings, non-publishing introspection |
 | [ops/rpc-actions.md](ops/rpc-actions.md) | 32 | Correlated topic pairs, cid dispatch, deterministic cancellation |
 
 ### studio/ — Studio host, protocol, extensions

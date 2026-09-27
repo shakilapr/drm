@@ -6,17 +6,17 @@ Scope: canonical binary representation — primitive encode/decode over raw byte
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-layout-le` | §Canonical Binary Layout — consistent little-endian | — |
-| `REQ-TOOL-layout-standard-sizes` | standard sizes (4-byte int, 4-byte IEEE float) | — |
-| `REQ-TOOL-layout-declaration-order` | fields in declaration order, natural alignment, total padded | — |
-| `REQ-TOOL-bounds-structural` | §Structural Bounds — `string[32]`, `f32[16]`, `f32[<=16]` | — |
-| `REQ-TOOL-bounds-unbounded-reject` | unbounded data-plane structures rejected | — |
-| `REQ-TOOL-layout-bounded-align` | bounded array data area aligned to element alignment | — |
-| `REQ-TOOL-layout-checked` | all size/offset math checked; overflow ⇒ error | — |
-| `REQ-TOOL-observable-bytes` | observable canonical bytes deterministic; out-of-sample bytes inaccessible | — |
-| `REQ-CORE-codec-no-alloc` | codebase R5 — codec path zero allocation | — |
-| `REQ-CORE-codec-bounds-before-write` | Phase 13 — reject beyond structural max before any write | — |
-| `REQ-CORE-codec-no-ub` | arbitrary bytes decode to value or error, never UB | — |
+| `REQ-TOOL-layout-le` | §Canonical Binary Layout — consistent little-endian | `REQ-TOOL-043` |
+| `REQ-TOOL-layout-standard-sizes` | standard sizes (4-byte int, 4-byte IEEE float) | `REQ-TOOL-044` |
+| `REQ-TOOL-layout-declaration-order` | fields in declaration order, natural alignment, total padded | `REQ-TOOL-042` |
+| `REQ-TOOL-bounds-structural` | §Structural Bounds — `string[32]`, `f32[16]`, `f32[<=16]` | `REQ-TOOL-001` |
+| `REQ-TOOL-bounds-unbounded-reject` | unbounded data-plane structures rejected | `REQ-TOOL-002` |
+| `REQ-TOOL-layout-bounded-align` | bounded array data area aligned to element alignment | `REQ-TOOL-040` |
+| `REQ-TOOL-layout-checked` | all size/offset math checked; overflow ⇒ error | `REQ-TOOL-041` |
+| `REQ-TOOL-observable-bytes` | observable canonical bytes deterministic; out-of-sample bytes inaccessible | `REQ-TOOL-051` |
+| `REQ-CORE-codec-no-alloc` | codebase R5 — codec path zero allocation | `REQ-CORE-082` |
+| `REQ-CORE-codec-bounds-before-write` | Phase 13 — reject beyond structural max before any write | `REQ-CORE-081` |
+| `REQ-CORE-codec-no-ub` | arbitrary bytes decode to value or error, never UB | `REQ-CORE-083` |
 
 ## Data Structures
 
@@ -27,9 +27,9 @@ Scope: canonical binary representation — primitive encode/decode over raw byte
 | `u32/i32/f32` | 4 | 4 | LE; IEEE-754 bit pattern preserved (no NaN canonicalization) |
 | `u64/i64/f64` | 8 | 8 | LE |
 | `T[N]` | `N·size(T)` | `align(T)` | contiguous, row-major, no inter-element padding |
-| `string[N]` | `4+N` | 4 | `u32` byte-length header + ≤ N UTF-8 bytes (N = max bytes) |
-| `bytes[<=N]` | `4+N` | 4 | `u32` length + ≤ N raw bytes |
-| `T[<=N]` | `align_up(4, align(T)) + N·size(T)` | `max(4, align(T))` | `u32` count, then elements at `data_off = align_up(4, align(T))` |
+| `string[N]` | `align_up(4+N, 4)` | 4 | `u32` byte-length header + ≤ N UTF-8 bytes; zero tail padding |
+| `bytes[<=N]` | `align_up(4+N, 4)` | 4 | `u32` length + ≤ N raw bytes; zero tail padding |
+| `T[<=N]` | `align_up(align_up(4, align(T)) + N·size(T), max(4, align(T)))` | `max(4, align(T))` | `u32` count, then aligned elements; zero padding |
 | `enum{…}` | 1 | 1 | `u8` tag = declaration index; unknown tag ⇒ `InvalidData` |
 
 The bounded-array data area must be element-aligned: a naive `4 + N·size(T)` puts the first `u64`/`f64` element at `offset+4` (not 8-byte aligned). The data offset is therefore `align_up(4, align(T))`.
@@ -41,7 +41,9 @@ fn layout(t: &Type) -> Result<Layout, Status> {
  Ok(match t {
  Prim(p) => prim_layout(p),
  Enum { .. } => Layout { size: 1, align: 1 },
- String { max } | Bytes { max } => Layout { size: 4usize.checked_add(*max as usize)?, align: 4 },
+ String { max } | Bytes { max } => Layout {
+ size: align_up_checked(4usize.checked_add(*max as usize)?, 4)?, align: 4
+ },
  FixedArray { elem, n } => {
  let e = layout(&elem.as_type())?;
  Layout { size: e.size.checked_mul(*n as usize)?, align: e.align }
@@ -50,7 +52,8 @@ fn layout(t: &Type) -> Result<Layout, Status> {
  let e = layout(&elem.as_type())?;
  let data_off = align_up_checked(4, e.align)?; // I7: element-aligned data area
  Layout {
- size: data_off.checked_add(e.size.checked_mul(*max as usize)?)?,
+ size: align_up_checked(
+ data_off.checked_add(e.size.checked_mul(*max as usize)?)?, e.align.max(4))?,
  align: e.align.max(4),
  }
  }
@@ -86,7 +89,10 @@ fn write_f32(buf: &mut [u8], off: usize, v: f32) -> Result<(), Status> {
  Ok(())
 }
 
-fn read_u32(buf: &[u8], off: usize) -> Result<u32, Status> { check_bounds(buf.len(), off, 4)?; Ok(u32::from_le_bytes(..)) }
+fn read_u32(buf: &[u8], off: usize) -> Result<u32, Status> {
+ check_bounds(buf.len(), off, 4)?;
+ Ok(u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]))
+}
 
 fn read_bool(buf: &[u8], off: usize) -> Result<bool, Status> {
  Ok(match read_u8(buf, off)? { 0 => false, 1 => true, _ => return Err(InvalidData) }) // I5
@@ -101,18 +107,23 @@ fn read_bounded(buf: &[u8], off: usize, cap: usize, elem_size: usize, elem_align
  let data_off = align_up_checked(header_end, elem_align)?; // I7: element-aligned data area
  let bytes = n.checked_mul(elem_size).ok_or(InvalidData)?; // I7: overflow-safe
  check_bounds(buf.len(), data_off, bytes)?;
- Ok(data_off .. data_off + bytes) // slice handed to caller
+ let end = data_off.checked_add(bytes).ok_or(InvalidData)?;
+ Ok(data_off .. end) // slice handed to caller
 }
 
 // Variable-length write: clearing policy (I8)
-fn write_bounded(buf: &mut [u8], off: usize, cap: usize, new_len: usize, prev_len_slot: &mut usize, payload: &[u8])
+fn write_bytes_bounded(buf: &mut [u8], off: usize, cap: usize, prev_len: usize, payload: &[u8])
  -> Result<(), Status>
 {
- // ... write header + payload ...
- // I8: clear only the region that was visible before and is no longer part of the sample,
- // never the whole capacity.
- buf[off + data_off + new_len .. off + data_off + prev_len.max(new_len)].fill(0);
- *prev_len_slot = new_len;
+ if payload.len() > cap || prev_len > cap { return Err(InvalidArg); }
+ let data_off = off.checked_add(4).ok_or(InvalidArg)?;
+ let new_end = data_off.checked_add(payload.len()).ok_or(InvalidArg)?;
+ let old_end = data_off.checked_add(prev_len).ok_or(InvalidArg)?;
+ check_bounds(buf.len(), off, 4)?;
+ check_bounds(buf.len(), data_off, payload.len().max(prev_len))?; // preflight before write
+ buf[off..off + 4].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+ buf[data_off..new_end].copy_from_slice(payload);
+ if old_end > new_end { buf[new_end..old_end].fill(0); }
  Ok(())
 }
 

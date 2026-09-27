@@ -8,11 +8,12 @@ E1 (`drm-core::channel::consumer`).
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-consumer-static-record` | records fixed at activation | — |
-| `REQ-CORE-consumer-exclusive-claim` | one live owner per declared endpoint | — |
-| `REQ-CORE-consumer-incarnation` | owner identity is incarnation-safe | — |
-| `REQ-CORE-consumer-generation` | recycled record cannot be cleared by stale owner/reclaimer | — |
-| `REQ-CORE-consumer-clean-close` | close requires no outstanding borrow | — |
+| `REQ-CORE-consumer-static-record` | records fixed at activation | `REQ-CORE-009` |
+| `REQ-CORE-consumer-exclusive-claim` | one live owner per declared endpoint | `REQ-CORE-006` |
+| `REQ-CORE-consumer-incarnation` | owner identity is incarnation-safe | `REQ-CORE-008` |
+| `REQ-CORE-consumer-generation` | recycled record cannot be cleared by stale owner/reclaimer | `REQ-CORE-007` |
+| `REQ-CORE-consumer-clean-close` | close requires no outstanding borrow | `REQ-CORE-005` |
+| `REQ-CORE-consumer-diagnostic-bound` | ad-hoc tools use a fixed diagnostic record range | `REQ-CORE-079` |
 
 ## Data Structures
 
@@ -30,7 +31,9 @@ pub struct ConsumerRecord {
 ```
 
 All fields are naturally aligned. Generation zero is invalid. Generation exhaustion refuses reuse.
-The record index is generated from the deployment contract; attachment never searches or allocates.
+Application endpoints use a generated record index and
+`<topic>.<consumer_id>.consumer.lock`. Diagnostic tools scan only the fixed diagnostic subrange at
+attachment. The OS lock is held for the registration lifetime and released by the kernel on death.
 
 ## Invariants
 
@@ -48,50 +51,48 @@ The record index is generated from the deployment contract; attachment never sea
 
 ```rust
 fn claim(rec: &ConsumerRecord, me: ProcessIdentity, floor: u64) -> Result<Registration, Status> {
- loop {
-  match rec.state.load(Acquire) {
-   Vacant => if rec.state.compare_exchange(Vacant, Claiming, AcqRel, Acquire).is_err() { continue; },
-   Claiming => return Err(Busy),
-   Active => {
-    let old = snapshot_owner(rec)?;
-    if identity_alive(&old) { return Err(Busy); }
-    if rec.state.compare_exchange(Active, Claiming, AcqRel, Acquire).is_err() { continue; }
-   }
-  }
-  let generation = rec.registration_generation.load(Relaxed)
-   .checked_add(1).filter(|g| *g != 0).ok_or(GenerationExhausted)?;
-  rec.owner_pid.store(me.pid, Relaxed);
-  rec.owner_start.store(me.start, Relaxed);
-  rec.registration_generation.store(generation, Relaxed);
-  rec.hazard.store(pack(generation, NONE), SeqCst);
-  rec.ack_seq.store(floor, Relaxed);
-  rec.state.store(Active, Release);
-  return Ok(Registration { rec, generation });
- }
+ let lock = lock_backend.try_exclusive(rec.generated_lock_path())?; // Busy if live owner
+ rec.state.store(Claiming, Release); // stale Claiming/Active is safe: prior OS lock is gone
+ let Some(generation) = rec.registration_generation.load(Relaxed).checked_add(1)
+  .filter(|g| *g != 0) else {
+  rec.state.store(Vacant, Release);
+  return Err(GenerationExhausted);
+ };
+ rec.owner_pid.store(me.pid, Relaxed);
+ rec.owner_start.store(me.start, Relaxed);
+ rec.registration_generation.store(generation, Relaxed);
+ rec.hazard.store(pack(generation, NONE), SeqCst);
+ rec.ack_seq.fetch_max(floor, Relaxed); // never forget completed required sequences
+ let next_needed = rec.ack_seq.load(Acquire);
+ rec.state.store(Active, Release);
+ Ok(Registration { rec, generation, next_needed, lock })
 }
 
-fn close(reg: Registration) -> Result<(), Status> {
+fn close(reg: &mut Registration) -> Result<(), Status> {
  if reg.rec.hazard.load(SeqCst) != pack(reg.generation, NONE) { return Err(Busy); }
- reg.rec.state.compare_exchange(Active, Vacant, AcqRel, Acquire)
-  .map(|_| ()).map_err(|_| InvalidData)
+ reg.rec.state.store(Vacant, Release);
+ reg.release_lock();
+ Ok(())
 }
 ```
 
-If initialization fails after entering `Claiming`, the claimant restores `Vacant`. Process death in
-`Claiming` is recovered by the publisher/next claimant after proving the stored prior identity dead;
-fresh segments initialize every record to `Vacant` with generation zero.
+If initialization fails after entering `Claiming`, the claimant restores `Vacant`. Death at any claim
+step releases the OS lock; the next claimant overwrites stale state with a new generation. Fresh
+segments initialize every record to `Vacant`, generation zero, hazard `{0,NONE}`, and ack zero.
 
 ## Protocols
 
 *Borrow:* verify `Active` and generation; CAS `pack(g,NONE) → pack(g,slot)`; reread the ring; on
 mismatch CAS the exact word back to `pack(g,NONE)`. Guard drop performs the same exact CAS.
 
-*Dead takeover:* snapshot state, generation, identity, and hazard; reread state and generation; prove
-the identity dead; CAS `Active → Claiming`; increment generation and publish the new owner. Any
-concurrent stale hazard CAS contains the old generation and fails.
+*Dead takeover:* acquiring the endpoint OS lock proves no live DRM owner retains authority. The new
+claimant increments generation and overwrites stale registration state. Hazard reclamation remains
+separate and still requires exact process-incarnation proof before the old payload slot is reused.
 
 *Required consumer:* initial `ack_seq` is the current `first_valid_seq`, meaning prior-run sequences
-need no acknowledgement. Successful sequential completion advances it monotonically with a CAS-max.
+need no acknowledgement. Reattachment initializes its local cursor to `ack_seq - 1` (`None` when
+`ack_seq == 0`), so the first `next()` requests exactly `ack_seq`. Successful completion advances it
+monotonically with a CAS-max.
 
 ## Edge Cases & Errors
 
@@ -102,6 +103,7 @@ need no acknowledgement. Successful sequential completion advances it monotonica
 | close with borrow | `Busy`; record remains active |
 | generation exhausted | `GenerationExhausted`; no reuse |
 | undeclared record index | `Permission` |
+| every reserved diagnostic record owned | `Busy` |
 
 ## Test Matrix
 
@@ -113,3 +115,5 @@ need no acknowledgement. Successful sequential completion advances it monotonica
 | `consumer_close_borrowed` | I-CR4 |
 | `consumer_takeover_identity` | I-CR5 |
 | kill in each claim step | recoverable without live-owner takeover |
+| `required_reattach_resume` | first request equals persisted `ack_seq`; no acknowledged replay |
+| `diagnostic_claim_bound` | scans at most `diagnostic_count`; no channel growth |

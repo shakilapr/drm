@@ -6,16 +6,16 @@ Scope: deterministic memory verification against configured deployment budgets �
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-budget-config-declared` | each compute target declares DRM memory budget in deployment config | — |
-| `REQ-TOOL-budget-worst-case-calc` | Σ worst-case capacity if every slot filled to max bound simultaneously | — |
-| `REQ-TOOL-budget-checked-arith` | all capacity math checked; overflow ⇒ `CapacityOverflow`, never a wrapped small value | — |
-| `REQ-TOOL-budget-hard-error` | worst-case > configured budget ⇒ hard error; locked > lockable budget ⇒ hard error | — |
-| `REQ-TOOL-budget-ram-warning` | > physical RAM but ≤ budget ⇒ strong warning, not invalid | — |
-| `REQ-TOOL-budget-nominal-informational` | nominal estimate informational only | — |
-| `REQ-TOOL-budget-per-process-locked` | each precommit node's own mapped locked set fits the lockable budget | — |
-| `REQ-TOOL-budget-router-buffers` | router-owned lane buffers counted against the compute budget | — |
-| `REQ-CORE-precommit-refuse-activation` | pre-fault+lock fails ⇒ refuse active state, never continue pageable | — |
-| `REQ-CORE-precommit-static-checks` | verifier checks backend locking capability + lockable budget coverage | — |
+| `REQ-TOOL-budget-config-declared` | each compute target declares DRM memory budget in deployment config | `REQ-TOOL-004` |
+| `REQ-TOOL-budget-worst-case-calc` | Σ worst-case capacity if every slot filled to max bound simultaneously | `REQ-TOOL-010` |
+| `REQ-TOOL-budget-checked-arith` | all capacity math checked; overflow ⇒ `CapacityOverflow`, never a wrapped small value | `REQ-TOOL-003` |
+| `REQ-TOOL-budget-hard-error` | worst-case > configured budget ⇒ hard error; locked > lockable budget ⇒ hard error | `REQ-TOOL-005` |
+| `REQ-TOOL-budget-ram-warning` | > physical RAM but ≤ budget ⇒ strong warning, not invalid | `REQ-TOOL-008` |
+| `REQ-TOOL-budget-nominal-informational` | nominal estimate informational only | `REQ-TOOL-006` |
+| `REQ-TOOL-budget-per-process-locked` | each precommit node's own mapped locked set fits the lockable budget | `REQ-TOOL-007` |
+| `REQ-TOOL-budget-router-buffers` | router-owned lane buffers counted against the compute budget | `REQ-TOOL-009` |
+| `REQ-CORE-precommit-refuse-activation` | pre-fault+lock fails ⇒ refuse active state, never continue pageable | `REQ-CORE-090` |
+| `REQ-CORE-precommit-static-checks` | verifier checks backend locking capability + lockable budget coverage | `REQ-CORE-091` |
 
 ## Data Structures
 
@@ -93,10 +93,10 @@ fn verify_memory(deploy: &DeploymentConfig, model: &WorkspaceModel) -> Result<Re
 
 // ---- Activation (runtime, per precommit node mapping) ----
 fn activate_precommitted(mapping: &Mapping, budget: &MemoryBudget) -> Result<(), Status> {
- pre_fault(mapping)?; // write-touch every page: for page in mapping.pages() { page[0] = page[0]; }
- if !lock_backend.lock(mapping) { // mlock (Linux) / VirtualLock (Windows)
+ if !lock_backend.lock_and_populate(mapping) { // mlock / VirtualLock; no payload reads or writes
  return Err(LockFailed); // I-MB5: caller refuses active state
  }
+ lock_backend.verify_resident(mapping)?; // mincore / QueryWorkingSetEx
  Ok(())
 }
 ```
@@ -107,8 +107,8 @@ fn activate_precommitted(mapping: &Mapping, budget: &MemoryBudget) -> Result<(),
 
 1. Verifier passed statically (backend capability + lockable budget coverage + per-process locked set — I-MB2/I-MB7).
 2. Map segment (shm-backend).
-3. `pre_fault` every page (touch-read/write each page once).
-4. Lock the full working set; any failure ⇒ `LockFailed` ⇒ node refuses active state (I-MB5) — never degrades to pageable.
+3. Use the backend's eager lock/populate operation; never touch payload bytes merely to fault pages.
+4. Verify every page resident; any failure ⇒ `LockFailed` and refuse active state.
 5. DRM never decommits or tracks pages afterward (platform-managed backing; architecture §Platform-Managed Paging).
 
 *Reference cross-check protocol (I-MB1):*

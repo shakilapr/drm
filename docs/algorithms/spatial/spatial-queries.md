@@ -6,20 +6,20 @@ Scope: spatial query surface — **compiled transform plans** per (target, refer
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-SPATIAL-transform-plans` | per-(target, reference) precompiled plan; runtime executes the plan, never walks the graph | — |
-| `REQ-SPATIAL-query-latest` | `latest(target, reference)` — newest valid state in memory | — |
-| `REQ-SPATIAL-query-at` | `at(target, reference, t)` — linear translation + SLERP rotation; never silently extrapolates | — |
-| `REQ-SPATIAL-query-predict` | `predict(target, reference, max_horizon)` — explicit forward extrapolation only | — |
-| `REQ-SPATIAL-query-delayed-view` | `delayed_view(offset)` — fixed-duration trailing view | — |
-| `REQ-SPATIAL-status-object` | result carries status ∈ {VALID, STALE, DISCONTINUOUS, CLOCK_UNRESOLVED, OUT_OF_HISTORY, EXTRAPOLATED} + sample age + clock uncertainty | — |
-| `REQ-SPATIAL-cache-versioned` | per-process cache over declared reads; version check ⇒ cached result or plan re-execution | — |
-| `REQ-SPATIAL-time-history` | rings allocated only on upstream dynamic edges with declared requirements (`history = "2s"`) | — |
-| `REQ-SPATIAL-interp-guard` | never interpolate across a discontinuity; queries spanning a jump return DISCONTINUOUS | — |
-| `REQ-SPATIAL-reparent-temporal` | reparent at t₁ never alters history before t₁; earlier queries traverse the original hierarchy | — |
-| `REQ-SPATIAL-reparent-modes` | Preserve World / Preserve Local / Snap | — |
-| `REQ-SPATIAL-reparent-atomic` | hierarchy mutations atomic — readers never observe partially updated trees | — |
-| `REQ-SPATIAL-calibration-slots` | Effective = Nominal × Correction; shared calibration slot with effective timestamp; live cache invalidation, no recompilation, no restart | — |
-| `REQ-SPATIAL-generational-handles` | runtime overlay handles generational; single-writer edges | — |
+| `REQ-SPATIAL-transform-plans` | per-(target, reference) precompiled plan; runtime executes the plan, never walks the graph | `REQ-SPATIAL-034` |
+| `REQ-SPATIAL-query-latest` | `latest(target, reference)` — newest valid state in memory | `REQ-SPATIAL-024` |
+| `REQ-SPATIAL-query-at` | `at(target, reference, t)` — linear translation + SLERP rotation; never silently extrapolates | `REQ-SPATIAL-022` |
+| `REQ-SPATIAL-query-predict` | `predict(target, reference, max_horizon)` — explicit forward extrapolation only | `REQ-SPATIAL-025` |
+| `REQ-SPATIAL-query-delayed-view` | `delayed_view(offset)` — fixed-duration trailing view | `REQ-SPATIAL-023` |
+| `REQ-SPATIAL-status-object` | result carries status ∈ {VALID, STALE, DISCONTINUOUS, CLOCK_UNRESOLVED, OUT_OF_HISTORY, EXTRAPOLATED} + sample age + clock uncertainty | `REQ-SPATIAL-032` |
+| `REQ-SPATIAL-cache-versioned` | per-process cache over declared reads; version check ⇒ cached result or plan re-execution | `REQ-SPATIAL-002` |
+| `REQ-SPATIAL-time-history` | rings allocated only on upstream dynamic edges with declared requirements (`history = "2s"`) | `REQ-SPATIAL-033` |
+| `REQ-SPATIAL-interp-guard` | never interpolate across a discontinuity; queries spanning a jump return DISCONTINUOUS | `REQ-SPATIAL-016` |
+| `REQ-SPATIAL-reparent-temporal` | reparent at t₁ never alters history before t₁; earlier queries traverse the original hierarchy | `REQ-SPATIAL-029` |
+| `REQ-SPATIAL-reparent-modes` | Preserve World / Preserve Local / Snap | `REQ-SPATIAL-028` |
+| `REQ-SPATIAL-reparent-atomic` | hierarchy mutations atomic — readers never observe partially updated trees | `REQ-SPATIAL-027` |
+| `REQ-SPATIAL-calibration-slots` | Effective = Nominal × Correction; shared calibration slot with effective timestamp; live cache invalidation, no recompilation, no restart | `REQ-SPATIAL-003` |
+| `REQ-SPATIAL-generational-handles` | runtime overlay handles generational; single-writer edges | `REQ-SPATIAL-011` |
 
 ## Data Structures
 

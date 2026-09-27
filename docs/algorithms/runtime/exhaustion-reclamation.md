@@ -1,17 +1,17 @@
 # Pool Exhaustion & Dead-Reader Reclamation Algorithms
 
-Scope: publisher behavior when the payload pool is exhausted (drop + counter, never block), and the slow-path reclamation of hazard slots owned by dead process incarnations. Implements architecture.md §Safe Handling of Pool Exhaustion, §Crash Recovery via OS Process Inspection. Owner: E1 (crate `drm-core::hazard::reclaim`). Phases 15–16. Depends on [hazard-protocol.md](hazard-protocol.md), [shm-backend.md](shm-backend.md) (identity), [channel-metadata.md](channel-metadata.md) (registration record).
+Scope: publisher behavior when the payload pool is exhausted (drop + counter, never block), and the slow-path reclamation of hazard slots owned by dead process incarnations. Implements architecture.md §Safe Handling of Pool Exhaustion, §Crash Recovery via OS Process Inspection. Owner: E1 (crate `drm-core::hazard::reclaim`). Phases 15–16. Depends on [hazard-protocol.md](hazard-protocol.md), [shm-backend.md](shm-backend.md), and [consumer-registration.md](consumer-registration.md).
 
 ## REQ Bindings
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-exhaustion-never-block` | publisher drops + `pool_exhausted++`; never waits for a reader | — |
-| `REQ-CORE-exhaustion-latest-preserved` | current latest sample remains valid | — |
-| `REQ-CORE-exhaustion-resume` | publishing resumes instantly when capacity returns | — |
-| `REQ-CORE-reclaim-slow-path-only` | reclamation runs only when needed: exhausted → inspect → prove → reclaim | — |
-| `REQ-CORE-reclaim-incarnation-proof` | reclaim only after exact process incarnation proven dead | — |
-| `REQ-CORE-reclaim-pid-reuse-safe` | PID reuse at worst delays reclamation; never mis-reclaims a live reader | — |
+| `REQ-CORE-exhaustion-never-block` | publisher drops + `pool_exhausted++`; never waits for a reader | `REQ-CORE-022` |
+| `REQ-CORE-exhaustion-latest-preserved` | current latest sample remains valid | `REQ-CORE-021` |
+| `REQ-CORE-exhaustion-resume` | publishing resumes instantly when capacity returns | `REQ-CORE-023` |
+| `REQ-CORE-reclaim-slow-path-only` | reclamation runs only when needed: exhausted → inspect → prove → reclaim | `REQ-CORE-058` |
+| `REQ-CORE-reclaim-incarnation-proof` | reclaim only after exact process incarnation proven dead | `REQ-CORE-056` |
+| `REQ-CORE-reclaim-pid-reuse-safe` | PID reuse at worst delays reclamation; never mis-reclaims a live reader | `REQ-CORE-057` |
 
 ## Data Structures
 
@@ -23,7 +23,7 @@ Scope: publisher behavior when the payload pool is exhausted (drop + counter, ne
 
 ## Invariants
 
-- **I-E1 NeverWaits**: with every slot protected, `publish()` returns (drop) in bounded time; no blocking, no spinning. Test: `exhaustion_never_waits` (timing assertion < 1 ms).
+- **I-E1 NeverWaits**: with every slot protected, publish performs one pool scan and one consumer scan; no blocking, spinning, or retry loop. Test: `exhaustion_never_waits`.
 - **I-E2 LatestValid**: the current latest sample remains readable and uncorrupted through exhaustion. Test: `exhaustion_latest_valid`.
 - **I-E3 CounterExact**: `pool_exhausted` increments exactly once per dropped publish; no over/under count under races. Test: `exhaustion_counter_exact`.
 - **I-E4 ResumeOnSelectable**: after any release/reclaim that leaves at least one selectable slot, the next publish succeeds (no grace period). Releasing protection on a slot still referenced by retained history creates no selectable slot and does not by itself unblock publishing. Test: `exhaustion_resume`.
@@ -33,13 +33,6 @@ Scope: publisher behavior when the payload pool is exhausted (drop + counter, ne
 ## Functions
 
 ```rust
-// Publisher path (hazard-protocol.md §select_slot returned None)
-fn publish_drop(ch: &Channel, payload: &[u8]) -> Status {
- ch.ccb.pool_exhausted.fetch_add(1, Relaxed); // I-E3: exactly once per drop
- Status::PoolExhausted // caller policy: drop/retry/alarm — publisher never blocks (I-E1)
-}
-// The latest committed sample is untouched (I-E2): drop path writes nothing.
-
 // Called only by channel-publish after one failed selection.
 fn try_reclaim(ch: &Channel, i: usize) -> bool {
  let rec = &ch.ccb.consumers[i];
@@ -47,9 +40,9 @@ fn try_reclaim(ch: &Channel, i: usize) -> bool {
  let word = rec.hazard.load(SeqCst);
  let (generation, slot) = unpack(word);
  if slot == NONE || generation != rec.registration_generation.load(Acquire) { return false; }
- let identity = snapshot_identity(rec)?;
+ let Some(identity) = snapshot_identity(rec) else { return false; };
  if rec.state.load(Acquire) != Active || rec.hazard.load(SeqCst) != word { return false; }
- if !identity_alive(&identity) {
+ if identity_dead_proven(&identity) {
   return rec.hazard.compare_exchange(word, pack(generation, NONE), SeqCst, SeqCst).is_ok();
  }
  false
@@ -59,12 +52,7 @@ fn scan_exhausted(ch: &Channel) {
  for i in 0..ch.consumer_count { try_reclaim(ch, i); } // statically bounded
 }
 
-fn identity_alive(id: &ProcessIdentity) -> bool {
- // shm-backend §Functions is_alive: pid + start-ticks comparison.
- // PID reuse with different start ticks ⇒ dead-for-us ⇒ reclaimable (delays only).
- // Match ⇒ live ⇒ never reclaim (I-E5).
- shm_backend::is_alive(id)
-}
+fn identity_dead_proven(id: &ProcessIdentity) -> bool { shm_backend::identity_dead_proven(id) }
 ```
 
 ## Protocols
@@ -73,7 +61,7 @@ fn identity_alive(id: &ProcessIdentity) -> bool {
 
 1. **Trigger**: pool exhaustion event (publisher drop) — reclamation never runs speculatively; no background polling.
 2. **Inspect**: iterate consumer hazard records; identify owners of protected slots.
-3. **Prove**: for each owner, `identity_alive(record.identity)` — pidfd termination polling (Linux, `pidfd_open` + poll; `kill(pid,0)` retained only as a fallback where pidfd is unavailable) / signaled handle (Windows, [windows-backends.md](windows-backends.md)); start-ticks guards PID reuse.
+3. **Prove**: `identity_dead_proven` returns true only for termination, absence, or start-identity mismatch. Inspection errors mean no proof and no reclaim.
 4. **Reclaim**: proven-dead ⇒ SeqCst CAS `protected[i]` to `NONE` (I-E6); slot returns to pool; next publish resumes once a slot is selectable (I-E4).
 5. **Delay bound**: PID reuse may conservatively delay reclamation until the replacement PID exits; it can never reclaim a live reader (I-E5).
 
@@ -92,7 +80,7 @@ fn identity_alive(id: &ProcessIdentity) -> bool {
 
 | Case | Expected |
 |---|---|
-| `exhaustion_never_waits` (hold all slots) | < 1 ms drop (I-E1) |
+| `exhaustion_never_waits` (hold all slots) | bounded scan counts; zero waits/syscalls loops |
 | `exhaustion_latest_valid` | I-E2 |
 | `exhaustion_counter_exact` (concurrent drops) | I-E3 |
 | `exhaustion_resume` | I-E4 |

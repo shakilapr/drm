@@ -6,19 +6,19 @@ Scope: `drm-spatial` foundations — distinct semantic types, compile-time fixed
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-SPATIAL-typed-quantities` | Point3/Direction3/Vector3/Pose3/Transform3/Twist3 distinct | — |
-| `REQ-SPATIAL-compile-spaces` | `space: camera/front` ⇒ `Point3<CameraFront>`; payload carries values only | — |
-| `REQ-SPATIAL-dynamic-spaces` | `SpatialPoint3` carries numeric `SpatialID`; `Stamped<T>` composition | — |
-| `REQ-SPATIAL-forest` | forests, disconnected trees, path-not-found status | — |
-| `REQ-SPATIAL-conventions` | right-handed, SI, +X fwd/+Y left/+Z up; explicit boundary conversions | — |
-| `REQ-SPATIAL-geodetic` | WGS84→ECEF→tangent-plane→ENU→SE(3) chain | — |
-| `REQ-SPATIAL-two-timestamps` | sample time + receive time on every transform sample | — |
-| `REQ-SPATIAL-clock-domains` | four domains (host monotonic, device hardware, global PTP/GNSS, simulation/replay); mappings carry offset+drift+uncertainty; unresolved ⇒ status, never silent compare | — |
-| `REQ-SPATIAL-dual-hierarchy` | compiled base (`spaces/`) + runtime overlay (`space.create`) with `SpatialHandle{index,generation}` | — |
-| `REQ-SPATIAL-spatial-contracts` | `[spatial] write/read` in drm.toml; single-writer per dynamic edge enforced pre-deployment | — |
-| `REQ-SPATIAL-static-dynamic-inference` | node declares write ⇒ dynamic; transform given + no writer ⇒ static | — |
-| `REQ-SPATIAL-time-history` | history rings on dynamic edges sized by declared consumer requirements (`history = "2s"`) | — |
-| `REQ-SPATIAL-mcu-constants` | MCU receives pre-calculated static constants at build; straight-line multiply at runtime | — |
+| `REQ-SPATIAL-typed-quantities` | Point3/Direction3/Vector3/Pose3/Transform3/Twist3 distinct | `REQ-SPATIAL-036` |
+| `REQ-SPATIAL-compile-spaces` | `space: camera/front` ⇒ `Point3<CameraFront>`; payload carries values only | `REQ-SPATIAL-005` |
+| `REQ-SPATIAL-dynamic-spaces` | `SpatialPoint3` carries numeric `SpatialID`; `Stamped<T>` composition | `REQ-SPATIAL-009` |
+| `REQ-SPATIAL-forest` | forests, disconnected trees, path-not-found status | `REQ-SPATIAL-010` |
+| `REQ-SPATIAL-conventions` | right-handed, SI, +X fwd/+Y left/+Z up; explicit boundary conversions | `REQ-SPATIAL-007` |
+| `REQ-SPATIAL-geodetic` | WGS84→ECEF→tangent-plane→ENU→SE(3) chain | `REQ-SPATIAL-012` |
+| `REQ-SPATIAL-two-timestamps` | sample time + receive time on every transform sample | `REQ-SPATIAL-035` |
+| `REQ-SPATIAL-clock-domains` | four domains (host monotonic, device hardware, global PTP/GNSS, simulation/replay); mappings carry offset+drift+uncertainty; unresolved ⇒ status, never silent compare | `REQ-SPATIAL-004` |
+| `REQ-SPATIAL-dual-hierarchy` | compiled base (`spaces/`) + runtime overlay (`space.create`) with `SpatialHandle{index,generation}` | `REQ-SPATIAL-008` |
+| `REQ-SPATIAL-spatial-contracts` | `[spatial] write/read` in drm.toml; single-writer per dynamic edge enforced pre-deployment | `REQ-SPATIAL-030` |
+| `REQ-SPATIAL-static-dynamic-inference` | node declares write ⇒ dynamic; transform given + no writer ⇒ static | `REQ-SPATIAL-031` |
+| `REQ-SPATIAL-time-history` | rings allocated only on upstream dynamic edges with declared requirements (`history = "2s"`) | `REQ-SPATIAL-033` |
+| `REQ-SPATIAL-mcu-constants` | MCU receives pre-calculated static constants at build; straight-line multiply at runtime | `REQ-SPATIAL-017` |
 
 ## Data Structures
 

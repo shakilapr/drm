@@ -9,11 +9,11 @@ Owner: E1 (`drm-core::channel`). Depends on all runtime storage protocols.
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-publish-transaction` | publisher slot selection and commit | — |
-| `REQ-CORE-publish-linearization` | release commit makes one sample visible | — |
-| `REQ-CORE-publish-error-effects` | failed publish never changes visible history | — |
-| `REQ-CORE-publish-zero-alloc` | steady-state data path reuses fixed storage | — |
-| `REQ-CORE-publish-counter-bounds` | sequence and generation never wrap | — |
+| `REQ-CORE-publish-transaction` | publisher slot selection and commit | `REQ-CORE-052` |
+| `REQ-CORE-publish-linearization` | release commit makes one sample visible | `REQ-CORE-051` |
+| `REQ-CORE-publish-error-effects` | failed publish never changes visible history | `REQ-CORE-050` |
+| `REQ-CORE-publish-zero-alloc` | steady-state data path reuses fixed storage | `REQ-CORE-053` |
+| `REQ-CORE-publish-counter-bounds` | sequence and generation never wrap | `REQ-CORE-049` |
 
 ## Data Structures
 
@@ -22,7 +22,10 @@ pub struct PublishScratch {
  referenced: FixedBitSet, // capacity = pool_size; allocated at activation
 }
 
-pub struct PublishGuard<'a>(&'a AtomicBool); // Drop releases `busy`
+pub struct PublishGuard<'a> {
+ busy: &'a AtomicBool,
+ scratch: &'a mut FixedBitSet, // exclusive because `busy` is held
+} // Drop release-stores `busy = false`
 ```
 
 ## Invariants
@@ -43,36 +46,32 @@ pub struct PublishGuard<'a>(&'a AtomicBool); // Drop releases `busy`
 ```rust
 fn publish(ch: &Channel, src: &[u8]) -> Result<u64, Status> {
  validate_payload_shape(ch, src)?;                 // InvalidArg; no shared write
- let guard = ch.try_publish_guard()?;              // Busy; non-blocking
+ let mut guard = ch.try_publish_guard()?;          // Busy; non-blocking
  let seq = ch.write_seq.load(Acquire);
  let next = seq.checked_add(1).ok_or(SequenceExhausted)?;
  overflow::allow_commit(ch, seq)?;                 // QueueFull / InvalidConfig
 
- let mut selected = hazard::select_slot(ch, &mut guard.scratch); // bounded SC scan
- if selected.is_none() {
+ let Some(slot) = hazard::select_slot(ch, &mut guard.scratch) else {
   ch.pool_exhausted.fetch_add(1, Relaxed);
   reclaim::scan_exhausted(ch);                     // bounded; no wait or retry loop
-  selected = hazard::select_slot(ch, &mut guard.scratch);
- }
- let slot = selected.ok_or(PoolExhausted)?;         // incoming sample is dropped
+  return Err(PoolExhausted);                        // incoming sample is always dropped
+ };
  let generation = ch.slot_generation(slot)
   .load(Relaxed).checked_add(1).ok_or(GenerationExhausted)?;
  let ring_stamp = ch.ring.preflight_commit(seq)?;   // RingStampExhausted
 
  pool::write_checked(ch, slot, src)?;               // fixed destination; no allocation
  ch.slot_generation(slot).store(generation, Relaxed);
- ring::commit(ch, seq, slot, generation, ring_stamp); // linearization: stable cell publication
- ch.write_seq.store(next, Release);                 // announces the committed sequence
- ch.mark_current_sample(seq, Release);
+ ring::commit(ch, seq, slot, generation, ring_stamp); // prepare stable cell
+ ch.write_seq.store(next, Release);                 // visibility linearization point
  drop(guard);
  Ok(seq)
 }
 ```
 
-`PoolExhausted` increments once for the failed incoming sample, even if the bounded reclamation scan
-runs. Reclamation may make the immediate second selection succeed; this does not decrement the
-counter because exhaustion occurred. No payload byte is written before a slot and both counters are
-known valid.
+`PoolExhausted` increments once for the dropped incoming sample. Its bounded reclamation scan may
+free capacity, but never retries that sample; the next publish sees the capacity immediately. No
+payload byte is written before a slot and both counters are known valid.
 
 ## Protocols
 
@@ -80,10 +79,10 @@ known valid.
 2. Acquire `busy` with one compare-exchange; failure returns `Busy`.
 3. Check sequence capacity and `reject` retirement gates.
 4. Build the referenced-slot bitmap in activation-owned scratch and scan hazards with SeqCst loads.
-5. On no slot, increment exhaustion once, perform one bounded dead-owner scan, and scan once more.
+5. On no slot, increment exhaustion once, perform one bounded dead-owner scan, and drop this sample.
 6. Check generation capacity, then write payload and length.
-7. Publish the versioned ring cell; this is the sample visibility linearization point.
-8. Release-advance `write_seq`, update freshness, and release `busy` on every exit.
+7. Publish the versioned ring cell, then release-store `write_seq`; the latter linearizes visibility.
+8. Release `busy` on every exit.
 
 ## Edge Cases & Errors
 
@@ -93,7 +92,7 @@ known valid.
 | 2 | another publish active | `Busy` | none |
 | 3 | sequence cannot advance | `SequenceExhausted` | none |
 | 4 | required consumer gates retirement | `QueueFull` | none |
-| 5 | no reusable slot after bounded reclaim | `PoolExhausted` | counter +1 only |
+| 5 | no reusable slot; bounded reclaim runs after the drop decision | `PoolExhausted` | counter +1 only |
 | 6 | selected slot generation/ring stamp exhausted | counter-exhaustion status | none |
 | 7 | success | — | one committed sample |
 

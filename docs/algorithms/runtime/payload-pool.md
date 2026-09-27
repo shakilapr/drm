@@ -6,14 +6,14 @@ Scope: per-topic fixed-capacity payload slot pools — dynamic-count layout at s
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-pool-fixed-offsets` | §Fixed-Capacity Slot Pools — offsets static constants | — |
-| `REQ-CORE-pool-dynamic-count` | pool size is deployment config; layout is `{base, stride, count}` | — |
-| `REQ-CORE-pool-isolation` | §Structural Isolation — topics never compete for capacity | — |
-| `REQ-CORE-pool-invariant-min` | `pool_size >= R + 1` mandatory; `drm verify` fails otherwise | — |
-| `REQ-CORE-pool-dropfree` | `pool_size >= R + H + 1` ⇒ publisher progress with H borrowers | — |
-| `REQ-CORE-pool-size-reject` | publish beyond structural max rejected **before any write** | — |
-| `REQ-CORE-pool-one-writer` | one in-progress write per topic (non-blocking `Busy`) | — |
-| `REQ-CORE-pool-default-latest` | `@history: latest` defaults to a pool of 3 slots | — |
+| `REQ-CORE-pool-fixed-offsets` | §Fixed-Capacity Slot Pools — offsets static constants | `REQ-CORE-044` |
+| `REQ-CORE-pool-dynamic-count` | pool size is deployment config; layout is `{base, stride, count}` | `REQ-CORE-043` |
+| `REQ-CORE-pool-isolation` | §Structural Isolation — topics never compete for capacity | `REQ-CORE-046` |
+| `REQ-CORE-pool-invariant-min` | `pool_size >= R + 1` mandatory; `drm verify` fails otherwise | `REQ-CORE-045` |
+| `REQ-CORE-pool-dropfree` | `pool_size >= R + H + 1` ⇒ publisher progress with H borrowers | `REQ-CORE-042` |
+| `REQ-CORE-pool-size-reject` | publish beyond structural max rejected **before any write** | `REQ-CORE-048` |
+| `REQ-CORE-pool-one-writer` | one in-progress write per topic (non-blocking `Busy`) | `REQ-CORE-047` |
+| `REQ-CORE-pool-default-latest` | `@history: latest` defaults to a pool of 3 slots | `REQ-CORE-041` |
 
 ## Data Structures
 
@@ -36,10 +36,11 @@ pub struct PayloadPool {
  busy: AtomicBool, // one in-progress write (hazard-protocol I-HZ6)
  scratch: FixedBitSet, // activation-owned publisher scratch; count bits
 }
-fn slot_offset(layout: &PoolLayout, i: u64) -> Result<u64, Status> {
+fn slot_offset(layout: &PoolLayout, i: u64) -> Result<usize, Status> {
  if i >= layout.count { return Err(InvalidArg); }
- layout.stride.checked_mul(i).and_then(|n| layout.base.checked_add(n))
-  .ok_or(InvalidConfig)
+ let offset = layout.stride.checked_mul(i).and_then(|n| layout.base.checked_add(n))
+  .ok_or(InvalidConfig)?;
+ usize::try_from(offset).map_err(|_| InvalidConfig)
 }
 ```
 
@@ -55,12 +56,11 @@ fn slot_offset(layout: &PoolLayout, i: u64) -> Result<u64, Status> {
 ## Functions
 
 ```rust
-fn publish_sized(pool: &PayloadPool, payload: &[u8]) -> Result<SlotSel, Status> {
+fn write_checked(pool: &PayloadPool, slot: u64, payload: &[u8]) -> Result<SlotSel, Status> {
  if payload.len() as u64 > pool.layout.capacity { // I-P3 — before any write
  return Err(InvalidArg);
  }
- let slot = hazard::select_slot(pool, &mut pool.scratch)?;
- let off = slot_offset(&pool.layout, slot) as usize;
+ let off = slot_offset(&pool.layout, slot)?;
  if pool.layout.variable { write_u32(buf, off, payload.len() as u32)?; } // len header (canon-codec)
  copy_to(buf[off + hdr ..], payload)?;
  Ok(SlotSel { slot, len: payload.len() })

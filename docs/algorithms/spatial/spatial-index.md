@@ -6,16 +6,16 @@ Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fi
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-SPATIAL-index-declaration` | `index.drm`: `anchor`, `cell_size`, `max_objects` — capacity declared before deployment, never tuned at runtime | — |
-| `REQ-SPATIAL-hash-grid` | integer cell coordinates hashed into a fixed-capacity open-addressing table; steady-state zero heap allocation | — |
-| `REQ-SPATIAL-motion-slack` | fat-cell envelope per object; re-bucket only on envelope exit; idle/slow objects cost zero per sample | — |
-| `REQ-SPATIAL-compiled-bvh` | static environment compiles to BVH at build time (spatial analogue of static collapse) | — |
-| `REQ-SPATIAL-bvh-live-calibration` | recalibration swaps affected subtrees live via calibration slots — no recompilation, no restarts | — |
-| `REQ-SPATIAL-index-derived-cache` | index is a derived cache; each node indexes only its declared `[spatial] read`; updates ride version counters | — |
-| `REQ-SPATIAL-proximity-frame-typed` | queries declare a frame and typed geometry; naked coordinates never enter the index API | — |
-| `REQ-SPATIAL-proximity-complete` | candidate set is a deliberate superset — callers exact-check; misses forbidden | — |
-| `REQ-SPATIAL-memory-verified` | worst-case index memory (buckets + slots at `max_objects`) verified exactly like channel buffers | — |
-| `REQ-SPATIAL-rejected-structures` | octrees, k-d trees, sweep-and-prune excluded | — |
+| `REQ-SPATIAL-index-declaration` | `index.drm`: `anchor`, `cell_size`, `max_objects` — capacity declared before deployment, never tuned at runtime | `REQ-SPATIAL-014` |
+| `REQ-SPATIAL-hash-grid` | integer cell coordinates hashed into a fixed-capacity open-addressing table; steady-state zero heap allocation | `REQ-SPATIAL-013` |
+| `REQ-SPATIAL-motion-slack` | fat-cell envelope per object; re-bucket only on envelope exit; idle/slow objects cost zero per sample | `REQ-SPATIAL-019` |
+| `REQ-SPATIAL-compiled-bvh` | static environment compiles to BVH at build time (spatial analogue of static collapse) | `REQ-SPATIAL-006` |
+| `REQ-SPATIAL-bvh-live-calibration` | recalibration swaps affected subtrees live via calibration slots — no recompilation, no restarts | `REQ-SPATIAL-001` |
+| `REQ-SPATIAL-index-derived-cache` | index is a derived cache; each node indexes only its declared `[spatial] read`; updates ride version counters | `REQ-SPATIAL-015` |
+| `REQ-SPATIAL-proximity-frame-typed` | queries declare a frame and typed geometry; naked coordinates never enter the index API | `REQ-SPATIAL-021` |
+| `REQ-SPATIAL-proximity-complete` | candidate set is a deliberate superset — callers exact-check; misses forbidden | `REQ-SPATIAL-020` |
+| `REQ-SPATIAL-memory-verified` | worst-case index memory (buckets + slots at `max_objects`) verified exactly like channel buffers | `REQ-SPATIAL-018` |
+| `REQ-SPATIAL-rejected-structures` | octrees, k-d trees, sweep-and-prune excluded | `REQ-SPATIAL-026` |
 
 ## Data Structures
 

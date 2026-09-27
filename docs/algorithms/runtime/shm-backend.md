@@ -6,19 +6,19 @@ Scope: Linux OS shared-memory backend — exclusive-create (`O_CREAT|O_EXCL`), o
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-shm-create-exclusive` | §Segment Creation — `O_CREAT \| O_EXCL`, exactly one creator | — |
-| `REQ-CORE-shm-consumer-never-create` | consumers wait and open existing | — |
-| `REQ-CORE-shm-writer-lock` | §Writer Authority — OS lock auto-releases on death | — |
-| `REQ-CORE-shm-active-lock` | §Safe Cleanup — one deployment active.lock; shared by nodes, exclusive by clean | — |
-| `REQ-CORE-shm-cleanup-unreferenced` | exclusive active lock ⇒ no holders ⇒ unlink namespace | — |
-| `REQ-CORE-identity-incarnation` | §Crash Recovery — pid + process start identity | — |
-| `REQ-CORE-identity-pid-reuse` | PID reuse at worst delays reclamation, never corrupts | — |
+| `REQ-CORE-shm-create-exclusive` | §Segment Creation — `O_CREAT \| O_EXCL`, exactly one creator | `REQ-CORE-072` |
+| `REQ-CORE-shm-consumer-never-create` | consumers wait and open existing | `REQ-CORE-071` |
+| `REQ-CORE-shm-writer-lock` | §Writer Authority — OS lock auto-releases on death | `REQ-CORE-073` |
+| `REQ-CORE-shm-active-lock` | §Safe Cleanup — one deployment active.lock; shared by nodes, exclusive by clean | `REQ-CORE-069` |
+| `REQ-CORE-shm-cleanup-unreferenced` | exclusive active lock ⇒ no holders ⇒ unlink namespace | `REQ-CORE-070` |
+| `REQ-CORE-identity-incarnation` | §Crash Recovery — pid + process start identity | `REQ-CORE-036` |
+| `REQ-CORE-identity-pid-reuse` | PID reuse at worst delays reclamation, never corrupts | `REQ-CORE-037` |
 
 ## Data Structures
 
 ```rust
 pub struct SegmentName(Arc<str>); // "drm/<deployment_id>/<topic>" (deployment-identity.md scoping)
-pub struct Mapping { ptr: NonNull<u8>, len: usize } // RAII: Drop ⇒ munmap
+pub struct Mapping { ptr: NonNull<u8>, len: usize } // RAII: Drop ⇒ munmap; fd closes after mmap
 
 pub enum ShmError {
  NotFound, AlreadyExists, PermissionDenied, Io(std::io::Error), QuotaExceeded, SizeMismatch,
@@ -37,6 +37,9 @@ pub struct LockPaths(PathBuf); // runtime lock dir: /run/drm/<deployment_id> (NO
 impl LockPaths {
  fn active(&self) -> PathBuf { self.0.join("active.lock") } // one per deployment
  fn publisher(&self, topic: &str) -> PathBuf { self.0.join(format!("{topic}.publisher.lock")) }
+ fn consumer(&self, topic: &str, id: u32) -> PathBuf {
+  self.0.join(format!("{topic}.{id}.consumer.lock"))
+ }
 }
 
 pub trait LockBackend {
@@ -58,31 +61,42 @@ pub enum CleanReport { Cleaned, ActiveUntouched }
 - **I2 OpenNeverCreates**: `open_existing` on a nonexistent name ⇒ `NotFound`; no creation side effect. Test: `open_semantics`.
 - **I3 SizeValidated**: `open_existing` with `expect_size` mismatching `fstat` size ⇒ `SizeMismatch` (no partial state). Test: `open_semantics` (mismatch case).
 - **I4 LockDiesWithProcess**: publisher/cleanup lock held by a killed process is acquirable immediately after death (kernel releases fd locks). Test: `lock_release_on_death`.
-- **I5 IncarnationStable**: identity of a live process is stable across reads; identity of exited process fails `is_alive`; PID reuse ⇒ different start identity ⇒ dead-for-us. Tests: `process_identity`, `process_identity_reuse`.
+- **I5 IncarnationStable**: identity of a live process is stable; `identity_dead_proven` is false for live or uninspectable processes and true only when the recorded incarnation is gone. Tests: `process_identity`, `process_identity_reuse`.
 - **I6 QuotaExplicit**: `/dev/shm` exhaustion ⇒ `QuotaExceeded`, no partial segment. Test: `quota_edge`.
+- **I7 CreateRollback**: every failure after exclusive creation closes the fd and unlinks the incomplete name. Test: `create_failure_matrix`.
+- **I8 ActiveHold**: every running node holds one shared deployment lock for its lifetime. Test: `active_hold_lifecycle`.
 
 ## Functions
 
 ```rust
 fn create_exclusive(name: &SegmentName, size: usize) -> Result<Mapping, ShmError> {
- let fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0o600)?; // EEXIST ⇒ AlreadyExists (I1)
- ftruncate(fd, size)?; // ENOSPC ⇒ QuotaExceeded (I6)
- let ptr = mmap(fd, size, PROT_READ | PROT_WRITE, MAP_SHARED)?;
- Ok(Mapping { ptr, len: size }) // Drop ⇒ munmap
+ let fd = OwnedFd::new(shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0o600)?);
+ let mut rollback = UnlinkOnDrop::new(name); // armed until complete mapping exists
+ ftruncate(&fd, size)?;
+ posix_fallocate(&fd, 0, size).map_err(map_quota)?; // reserve tmpfs extent; no later SIGBUS
+ let ptr = mmap(&fd, size, PROT_READ | PROT_WRITE, MAP_SHARED)?;
+ rollback.disarm();
+ Ok(Mapping { ptr, len: size }) // fd closes here; Mapping Drop munmaps
 }
 
 fn open_existing(name: &SegmentName, expect_size: usize) -> Result<Mapping, ShmError> {
- let fd = shm_open(name, O_RDWR)?; // ENOENT ⇒ NotFound (I2); never creates
- let st = fstat(fd)?;
+ let fd = OwnedFd::new(shm_open(name, O_RDWR)?); // consumers write only their control record
+ let st = fstat(&fd)?;
  if st.st_size != expect_size { return Err(SizeMismatch); } // I3 — never trust, always check
- Ok(Mapping { ptr: mmap(fd, ...)?, len: expect_size })
+ let ptr = mmap(&fd, expect_size, PROT_READ | PROT_WRITE, MAP_SHARED, 0)?;
+ Ok(Mapping { ptr, len: expect_size }) // fd closes
+}
+
+fn enter_deployment(paths: &LockPaths) -> Result<ActiveHold, ShmError> {
+ lock_backend.try_shared(&paths.active()).map(ActiveHold) // retained by node root object
 }
 
 fn remove_namespace(paths: &LockPaths, names: &[SegmentName]) -> Result<CleanReport, ShmError> {
  // Exclusive active.lock succeeds ⇒ no node holds a shared hold ⇒ namespace is unowned (architecture §Safe Cleanup).
  let _excl = match lock_backend.try_exclusive(&paths.active()) {
  Ok(h) => h,
- Err(_) => return Ok(CleanReport::ActiveUntouched), // any shared holder — leave untouched
+ Err(WouldBlock) => return Ok(CleanReport::ActiveUntouched),
+ Err(e) => return Err(e),
  };
  for name in names { shm_unlink(name)?; } // remove every topic segment in the namespace
  Ok(CleanReport::Cleaned)
@@ -94,15 +108,18 @@ fn current_identity() -> ProcessIdentity {
  ProcessIdentity { pid, start_ticks: start }
 }
 
-fn is_alive(id: &ProcessIdentity) -> bool {
- // Primary: pidfd (pidfd_open + poll) — immune to PID reuse, no signal delivery (architecture §Crash Recovery).
- if let Ok(pfd) = pidfd_open(id.pid) { return poll_terminated(pfd) == false; }
+fn identity_dead_proven(id: &ProcessIdentity) -> bool {
+ if let Ok(pfd) = pidfd_open(id.pid) {
+  let Ok(start) = current_start_ticks(id.pid) else { return false; }; // inspection error: no proof
+  if start != id.start_ticks { return true; } // stored incarnation is gone
+  return poll_terminated(pfd) == true;
+ }
  // Fallback (older kernels): kill(0) + start-ticks guard.
  match kill(id.pid, 0) {
- Ok(()) => current_start_ticks(id.pid) == Ok(id.start_ticks), // PID reuse ⇒ mismatch ⇒ dead-for-us (I5)
- Err(ESRCH) => false,
- Err(EPERM) => true, // alive-but-foreign: conservative alive
- Err(e) => Err(e)?,
+ Ok(()) => current_start_ticks(id.pid).map(|s| s != id.start_ticks).unwrap_or(false),
+ Err(ESRCH) => true,
+ Err(EPERM) => false,
+ Err(_) => false,
  }
 }
 ```
@@ -114,6 +131,10 @@ fn is_alive(id: &ProcessIdentity) -> bool {
 1. Publisher: `try_exclusive(paths.publisher(topic))` = `/run/drm/<deployment_id>/<topic>.publisher.lock`; failure ⇒ another live publisher exists ⇒ refuse.
 2. Hold for process lifetime; `Drop`/death ⇒ kernel releases (I4) — restarted publisher re-acquires without heartbeat or takeover.
 
+*Node activation:* acquire one shared `active.lock` before opening any topic and retain it in the node
+root object until every mapping, publisher lock, and consumer registration is closed. Partial startup
+unwinds mappings first and the active hold last.
+
 *Cleanup probe (`drm clean`):*
 
 1. `try_exclusive(paths.active())` = `/run/drm/<deployment_id>/active.lock`; success ⇒ no live holders.
@@ -123,7 +144,7 @@ fn is_alive(id: &ProcessIdentity) -> bool {
 *Consumer registration identity (exhaustion-reclamation.md consumes):*
 
 1. At consumer attach, write `ProcessIdentity` into the consumer's hazard-slot registration record (channel-metadata.md layout).
-2. Reclamation later uses `is_alive(identity)` — PID reuse at worst delays reclamation (mismatch start ticks), never mis-reclaims a live reader (I5).
+2. Reclamation later uses `identity_dead_proven(identity)`; inspection failure is conservative and never reclaims.
 
 ## Edge Cases & Errors
 
@@ -134,6 +155,7 @@ fn is_alive(id: &ProcessIdentity) -> bool {
 | NFS/flock semantics | out of scope; documented exclusion in `lock.rs` |
 | `/proc` parse anomalies (comm with spaces) | defensive parser + fixture-file tests (no live-proc-only tests) |
 | Segment exists with wrong size | `SizeMismatch` on open (I3) |
+| failure after exclusive create | close + unlink by rollback guard (I7) |
 
 ## Test Matrix
 
@@ -147,3 +169,5 @@ fn is_alive(id: &ProcessIdentity) -> bool {
 | `quota_edge` | I6 |
 | `no_fd_leak` (10k cycles) | fd count stable |
 | `shm_kill` (8 scenarios × 100) | recovery each time |
+| `create_failure_matrix` | I7 at truncate/reserve/map/init injection points |
+| `active_hold_lifecycle` | I8 |

@@ -6,19 +6,19 @@ Scope: reader cursors, the four access operations (`borrow_latest`, `copy_latest
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-cursor-latest` | `latest()` — newest retained sequence, no backlog | — |
-| `REQ-CORE-cursor-next` | `next()` — advances to next unread in ring | — |
-| `REQ-CORE-gap-exact` | lapped reader ⇒ `GAP { missed: N }` exact | — |
-| `REQ-CORE-gap-resume-oldest` | after `Gap`, resume at oldest retained — never skip retained samples | — |
-| `REQ-CORE-cursor-independence` | readers at different speeds never affect each other | — |
-| `REQ-CORE-borrow-copy` | borrow vs copy is an API choice per call | — |
-| `REQ-CORE-cursor-epoch-verified` | epoch re-read after acquisition; restart invalidates the read | — |
+| `REQ-CORE-cursor-latest` | `latest()` — newest retained sequence, no backlog | `REQ-CORE-012` |
+| `REQ-CORE-cursor-next` | `next()` — advances to next unread in ring | `REQ-CORE-013` |
+| `REQ-CORE-gap-exact` | lapped reader ⇒ `GAP { missed: N }` exact | `REQ-CORE-028` |
+| `REQ-CORE-gap-resume-oldest` | after `Gap`, resume at oldest retained — never skip retained samples | `REQ-CORE-029` |
+| `REQ-CORE-cursor-independence` | readers at different speeds never affect each other | `REQ-CORE-011` |
+| `REQ-CORE-borrow-copy` | borrow vs copy is an API choice per call | `REQ-CORE-003` |
+| `REQ-CORE-cursor-epoch-verified` | epoch re-read after acquisition; restart invalidates the read | `REQ-CORE-010` |
 
 ## Data Structures
 
 ```rust
 // Reader cursor — LOCAL to each consumer process (never shared, never in SHM)
-pub struct ReaderCursor { last_read: Option<u64> } // last sequence consumed; None = fresh
+pub struct ReaderCursor { last_read: Option<u64> } // required reattach seeds this from ack_seq - 1
 
 pub enum ReadOutcome<B> {
  Sample(B), // borrowed or copied payload view
@@ -87,10 +87,15 @@ fn next<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Statu
  }
  self.last_read = Some(wanted);
  // I-C7: required consumer acks after completion — Copy now; Borrow on guard drop.
- if own == MemOwn::Copy && ch.is_required_consumer(self.consumer_id()) { ch.ack_max(wanted + 1)?; }
+ if own == MemOwn::Copy && ch.is_required_consumer(self.consumer_id()) {
+  ch.ack_completed(wanted)?;
+ }
+ if own == MemOwn::Borrow && ch.is_required_consumer(self.consumer_id()) {
+  payload.arm_ack_on_drop(wanted);
+ }
  return Ok(Sample(payload));
  }
- Err(AgedOut) => continue, // publisher advanced; recompute ws
+ Err(AgedOut | Retry) => continue, // publisher advanced; recompute snapshot
  Err(e) => return Err(e),
  }
  }
@@ -99,9 +104,13 @@ fn next<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Statu
 fn latest<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Status> {
  loop {
  let epoch0 = ch.epoch().load(Acquire);
- let Some((s, e)) = ch.newest().map_err(|_| Status::Retry)? else {
-  if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
-  return Ok(Empty);
+ let (s, e) = match ch.newest() {
+  Ok(Some(pair)) => pair,
+  Ok(None) => {
+   if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
+   return Ok(Empty);
+  }
+  Err(Retry) => continue,
  };
  match ch.try_acquire_entry(s, e, own) {
  Ok(payload) => {
@@ -128,7 +137,9 @@ consumer, `next()` publishes the shared `ack_seq` watermark after the read compl
 immediately after the copy, for `Borrow` only after the hazard is released. The publisher therefore
 never retires a sequence a required consumer has not finished with. This is separate from the local
 cursor and the hazard slot. The borrow guard contains the acknowledgement record and performs hazard
-release before monotonic acknowledgement on `Drop`.
+release before monotonic acknowledgement on `Drop`. Acquisition creates the guard with
+acknowledgement disarmed; the cursor arms it only after the post-acquisition epoch check accepts the
+sample. Retry, restart discard, or failed copy therefore cannot acknowledge delivery.
 
 *Epoch-crossed read (I-C6):* acquire → re-read epoch → mismatch ⇒ drop payload, `reset()`, retry. This makes restart handling intrinsic to the read path rather than a separate poll.
 
@@ -137,7 +148,8 @@ release before monotonic acknowledgement on `Drop`.
 | Case | Result |
 |---|---|
 | Fresh consumer, empty channel | `Empty` |
-| Fresh consumer, non-empty channel (`next`) | returns oldest retained (not newest) — sequential semantics |
+| Fresh non-required consumer, non-empty channel (`next`) | returns oldest retained |
+| Reattached required consumer | resumes at persisted `ack_seq` |
 | Fully caught-up (`next`) | `Empty` (not Gap — nothing aged out) |
 | Lapped (`next`) | `Gap { missed: k }`, then next call continues at oldest retained |
 | `ws < R` (fewer published than depth) | `oldest = 0`; no unsigned underflow |

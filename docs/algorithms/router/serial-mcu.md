@@ -6,33 +6,31 @@ Scope: serial-link transport framing and the constrained-device (MCU) runtime pa
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-ROUTE-serial-bounded-frames` | one DRM sample = one bounded serial frame | — |
-| `REQ-ROUTE-serial-best-effort` | serial = best-effort; `reliable` over serial rejected at verify | — |
-| `REQ-ROUTE-serial-crc` | CRC when link lacks hardware checksums | — |
-| `REQ-CORE-mcu-zero-heap` | MCU data path: no heap, no recursion, bounded loops | — |
-| `REQ-CORE-mcu-opaque-payload` | third-party device packets via `bytes[<=N]` opaque mapping | — |
-| `REQ-OPS-mcu-interop` | serial framing interoperates byte-for-byte with host | — |
+| `REQ-ROUTE-serial-bounded-frames` | one DRM sample = one bounded serial frame | `REQ-ROUTE-025` |
+| `REQ-ROUTE-serial-best-effort` | serial = best-effort; `reliable` over serial rejected at verify | `REQ-ROUTE-024` |
+| `REQ-ROUTE-serial-crc` | CRC when link lacks hardware checksums | `REQ-ROUTE-026` |
+| `REQ-CORE-mcu-zero-heap` | MCU data path: no heap, no recursion, bounded loops | `REQ-CORE-087` |
+| `REQ-CORE-mcu-opaque-payload` | third-party device packets via `bytes[<=N]` opaque mapping | `REQ-CORE-086` |
+| `REQ-OPS-mcu-interop` | serial framing interoperates byte-for-byte with host | `REQ-OPS-004` |
 
 ## Data Structures
 
 ```rust
 pub struct SerialFrame {
- channel: u8, // multiplexed channel id (topic handle low byte on serial links)
- len: u16, // payload length ≤ max_frame_bytes (link config)
- payload_crc: u32, // CRC32C over payload
- payload: Bytes,
+ header: WireHeader, // router-core fixed little-endian header; channel is generated u32 wire ID
+ payload: BoundedBytes,
 }
-// Wire encoding: [DLE] [STX] channel len_hi len_lo [payload…crc32c…] [DLE] [ETX]
-// Payload escaping: 0x10 (DLE) and 0x03 (ETX) inside payload → DLE-stuffed (choice recorded options table).
 pub struct SerialLinkConfig { baud: u32, max_frame_bytes: u16 } // declared per link in drm.toml
+// Wire: COBS{header, payload, optional e2e CRC32C, serial CRC32C} 0x00.
+// max_encoded = decoded_len + ceil(decoded_len / 254) + 1 delimiter.
 ```
 
 ## Invariants
 
 - **I-SR1 OneSampleOneFrame**: a serial frame carries exactly one DRM sample; never split (router-core I-RT2 serial row). Test: `serial_frame_atomicity`.
 - **I-SR2 BoundEnforced**: frames larger than `max_frame_bytes` rejected at build (verify V-RT) and refused at encode (defense-in-depth). Test: `serial_oversize`.
-- **I-SR3 CrcDetects**: single-bit and burst corruption in payload or header ⇒ CRC mismatch ⇒ frame dropped + counter (best-effort semantics). Test: `serial_corruption` (fault injection).
-- **I-SR4 EscapeReversible**: arbitrary payload bytes (incl. DLE/ETX collisions) survive encode→decode byte-exact. Test: `serial_escape` property (random bytes ×10k).
+- **I-SR3 CrcDetects**: CRC32C covers the decoded header, payload, and optional end-to-end trailer; mismatch ⇒ frame dropped + counter. Test: `serial_corruption`.
+- **I-SR4 EscapeReversible**: arbitrary bytes, including zero, survive COBS encode→decode byte-exact. Test: `serial_escape` property (random bytes ×10k).
 - **I-SR5 McuNoHeap**: MCU steady-state publish/read path allocates nothing — enforced by linker-section audit, not review ([serial-mcu] build rule). Test: `mcu_zero_heap_audit` (no malloc-family symbols reachable from data path).
 - **I-SR6 ByteForByteInterop**: host encoder output decodes identically by MCU decoder and vice versa. Test: `mcu_host_interop` (cross-decode matrix).
 
@@ -40,19 +38,19 @@ pub struct SerialLinkConfig { baud: u32, max_frame_bytes: u16 } // declared per 
 
 ```rust
 // Host/router side (drm-router::serial)
-fn frame_encode(cfg: &SerialLinkConfig, ch: u8, payload: &[u8]) -> Result<Vec<u8>, Status> {
- if payload.len() > cfg.max_frame_bytes { return Err(InvalidArg); } // I-SR2
- let crc = crc32c(payload); // lanes crc32c
- let mut out = vec_with_capacity(6 + payload.len() + 2 * escapes(payload)); // bounded, host-side only
- push_escaped(&mut out, header(ch, payload.len()));
- push_escaped(&mut out, payload);
- push_escaped(&mut out, crc.to_le_bytes());
- Ok(out)
+fn frame_encode(cfg: &SerialLinkConfig, frame: &WireFrame, out: &mut [u8]) -> Result<usize, Status> {
+ let decoded_len = checked_decoded_len(frame)?;
+ if decoded_len > cfg.max_frame_bytes as usize { return Err(InvalidArg); }
+ let need = decoded_len.checked_add(decoded_len.div_ceil(254)).and_then(|n| n.checked_add(1)).ok_or(InvalidArg)?;
+ if out.len() < need { return Err(BufferTooSmall); } // before any write
+ let crc = crc32c(encoded_header_and_payload(frame));
+ cobs_encode_with_crc_and_delimiter(frame, crc, out)
 }
 
 fn frame_decode(cfg: &SerialLinkConfig, buf: &mut ReadBuf) -> Result<Option<SerialFrame>, Status> {
- // Streaming decoder: scans for DLE-STX, accumulates bounded frame, verifies CRC, un-escapes.
- // CRC mismatch ⇒ drop frame + observability counter (best-effort — I-SR3), resync to next DLE-STX.
+ // Fixed-state streaming decoder accumulates at most max_encoded bytes until 0x00.
+ // It COBS-decodes into caller-owned storage, checks exact length, then CRC.
+ // Any failure drops the frame and resynchronizes at the next 0x00.
  // Timeout with partial frame ⇒ drop partial + counter.
 }
 
@@ -84,7 +82,7 @@ fn frame_decode(cfg: &SerialLinkConfig, buf: &mut ReadBuf) -> Result<Option<Seri
 | Frame larger than bound on wire (foreign sender) | rejected at decode (resync) |
 | MCU backpressure (host faster than MCU) | MCU drops oldest inbound frame + counter (serial = best-effort; shaping upstream per lanes-shaping.md) |
 | `reliable` contract on serial route | verify error (V-REL) |
-| Channel id exhaustion (256 serial channels) | verify rejects at deployment generation |
+| Wire ID allocation exhausted (`u32`) | deployment generation fails; runtime topic handles remain unrelated |
 
 ## Test Matrix
 
@@ -96,4 +94,4 @@ fn frame_decode(cfg: &SerialLinkConfig, buf: &mut ReadBuf) -> Result<Option<Seri
 | `serial_escape` property ×10k | I-SR4 |
 | `mcu_zero_heap_audit` (linker) | I-SR5 |
 | `mcu_host_interop` (cross-decode matrix) | I-SR6 |
-| MCU steady-state suite on target | timing bounds green |
+| MCU steady-state suite on target | loop/stack bounds and allocation audit pass |

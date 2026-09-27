@@ -1,26 +1,27 @@
 # Lanes & Shaping Algorithms
 
-Scope: ordered-stream traffic classes — per-peer realtime and bulk lanes (never socket-per-topic), pre-stream per-class priority queues, unit-correct token-bucket shaping of DRM's own traffic. Implements architecture.md §Ordered-Stream Traffic Classes, §Priority Scheduling, §Traffic Shaping and Bandwidth Budgeting. Owner: E3 (crate `drm-router::{lane, shaping}`). Phase 30 (design from drafts; implementation ). Depends on [router-core.md](router-core.md).
+Scope: ordered-stream traffic classes — per-peer realtime and bulk lanes (never socket-per-topic), pre-stream per-class priority queues, route export limits, and unit-correct shaping of DRM traffic. Implements architecture.md §Ordered-Stream Traffic Classes, §Priority Scheduling, §Traffic Shaping and Bandwidth Budgeting. Owner: E3 (crate `drm-router::{lane, shaping}`). Phase 30. Depends on [router-core.md](router-core.md).
 
 ## REQ Bindings
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-ROUTE-lanes-per-peer` | realtime lane + bulk lane per peer; never a socket per topic | — |
-| `REQ-ROUTE-lane-no-cross-class` | latency-critical reliable traffic never queues behind bulk on the same ordered lane | — |
-| `REQ-ROUTE-priority-queues-only` | priority applied in pre-stream class queues, before stream entry | — |
-| `REQ-ROUTE-priority-order` | safety → control → status dequeue order into the realtime stream | — |
-| `REQ-ROUTE-token-bucket` | configured token-bucket limits bound DRM's contribution to link load | — |
-| `REQ-ROUTE-bucket-units` | bits/bytes units explicit; fractional credit preserved | — |
-| `REQ-ROUTE-shaping-drm-only` | traffic from other applications is outside DRM's control (documented) | — |
+| `REQ-ROUTE-lanes-per-peer` | realtime lane + bulk lane per peer; never a socket per topic | `REQ-ROUTE-013` |
+| `REQ-ROUTE-lane-no-cross-class` | latency-critical reliable traffic never queues behind bulk on the same ordered lane | `REQ-ROUTE-012` |
+| `REQ-ROUTE-priority-queues-only` | priority applied in pre-stream class queues, before stream entry | `REQ-ROUTE-021` |
+| `REQ-ROUTE-priority-order` | safety → control → status dequeue order into the realtime stream | `REQ-ROUTE-020` |
+| `REQ-ROUTE-token-bucket` | configured token-bucket limits bound DRM's contribution to link load | `REQ-ROUTE-030` |
+| `REQ-ROUTE-export-limit` | route-level `export_limit = "10Hz"` admits at most one sample per generated period | `REQ-ROUTE-008` |
+| `REQ-ROUTE-bucket-units` | bits/bytes units explicit; fractional credit preserved | `REQ-ROUTE-002` |
+| `REQ-ROUTE-shaping-drm-only` | traffic from other applications is outside DRM's control (documented) | `REQ-ROUTE-028` |
 
 ## Data Structures
 
 ```rust
 pub struct PeerLanes {
  // Pre-stream priority queues feeding the realtime ordered stream (index = class order).
- realtime_classes: [VecDeque<WireFrame>; 3], // 0 safety, 1 control, 2 status
- bulk: VecDeque<WireFrame>, // bulk ordered stream
+ realtime_classes: [FixedRing<OwnedFrameSlot>; 3], // storage allocated at activation
+ bulk: FixedRing<OwnedFrameSlot>,
  // best-effort (UDP/serial) bypasses lanes — single datagram path in router-core.md
 }
 pub struct LaneCaps { realtime: [usize; 3], bulk: usize } // static, from deployment generation
@@ -28,10 +29,10 @@ pub struct LaneCaps { realtime: [usize; 3], bulk: usize } // static, from deploy
 pub struct TokenBucket {
  rate_bits_per_sec: u64,
  burst_bytes: u64,
- credit_bit_ns: u128, // fixed-point bits·ns accumulator (no fractional loss)
- tokens_bytes: u64,
+ credit_bit_ns: u128, // 0..=burst_bytes·8e9
  last_ns: u64, // monotonic clock only
 }
+pub struct ExportLimiter { period_ns: u64, next_allowed_ns: u64 }
 ```
 
 Priority classes (dequeue order into the realtime ordered stream — applied **before** stream entry):
@@ -52,6 +53,7 @@ Priority classes (dequeue order into the realtime ordered stream — applied **b
 - **I-LS5 CapsBounded**: caps static; overflow is per reliability — best-effort bulk drops oldest + counter, reliable bulk applies ingress backpressure (never silent drop); the realtime classes never silently drop. Test: `lane_caps`.
 - **I-LS6 PriorityExact**: the realtime stream drains all safety frames before control, and control before status; a queued status frame never precedes an arriving safety frame. Test: `lane_class_priority`.
 - **I-LS7 UnitCorrect**: refill converts `rate_bits_per_sec × ns` to bytes via an exact fixed-point accumulator; no unit mismatch and no permanent fractional loss. Test: `token_bucket_fractional`.
+- **I-LS8 ExportLimit**: per `(topic, link)` limiter admits at most one frame per declared period; rejected frames are counted and never queued. Test: `export_limit`.
 
 ## Functions
 
@@ -74,19 +76,22 @@ fn drain_realtime(lanes: &mut PeerLanes, out: &mut impl FnMut(WireFrame)) {
 
 fn token_bucket_refill(b: &mut TokenBucket, now_ns: u64) {
  let dt = now_ns.saturating_sub(b.last_ns) as u128;
- b.credit_bit_ns += b.rate_bits_per_sec as u128 * dt; // bits·ns accumulated exactly
-
- let one_byte_bit_ns = 8u128 * 1_000_000_000u128; // I-LS7: exact bits→bytes
- let gained = b.credit_bit_ns / one_byte_bit_ns;
- b.credit_bit_ns %= one_byte_bit_ns; // preserve fractional credit
-
- b.tokens_bytes = b.burst_bytes.min(b.tokens_bytes.saturating_add(gained as u64));
+ let capacity = (b.burst_bytes as u128).saturating_mul(8_000_000_000);
+ let added = (b.rate_bits_per_sec as u128).saturating_mul(dt).min(capacity);
+ b.credit_bit_ns = b.credit_bit_ns.saturating_add(added).min(capacity);
  b.last_ns = now_ns;
 }
 
 fn try_consume(b: &mut TokenBucket, cost_bytes: u64, now_ns: u64) -> bool {
  token_bucket_refill(b, now_ns);
- if b.tokens_bytes >= cost_bytes { b.tokens_bytes -= cost_bytes; true } else { false }
+ let cost = (cost_bytes as u128).saturating_mul(8_000_000_000);
+ if b.credit_bit_ns >= cost { b.credit_bit_ns -= cost; true } else { false }
+}
+
+fn export_admit(l: &mut ExportLimiter, now_ns: u64) -> bool {
+ if now_ns < l.next_allowed_ns { return false; }
+ l.next_allowed_ns = now_ns.saturating_add(l.period_ns);
+ true
 }
 ```
 
@@ -94,8 +99,8 @@ fn try_consume(b: &mut TokenBucket, cost_bytes: u64, now_ns: u64) -> bool {
 
 *Egress pipeline (per peer, per tick — router-core §egress feeds this):*
 
-1. Classify frame (static per-topic class from workspace model).
-2. Enqueue into the peer's class queue (safety/control/status) or bulk queue — priority already encoded by queue choice; no dynamic reordering inside a class (ordered stream).
+1. Apply the generated per-route export limiter; a denied frame increments `export_limited`.
+2. Classify and enqueue into the peer's fixed-capacity class or bulk queue.
 3. Real-time drain: `drain_realtime` emits safety, then control, then status into the realtime ordered stream.
 4. Before socket write: token-bucket admission (`try_consume(frame.bytes)`); denied frames wait in their queue (bulk/realtime backpressure) rather than being reordered across classes.
 5. Socket write drains realtime stream first, then bulk.
@@ -126,5 +131,6 @@ fn try_consume(b: &mut TokenBucket, cost_bytes: u64, now_ns: u64) -> bool {
 | `lane_fifo` (property) | I-LS2 |
 | `shaping_property` (10k traces) | I-LS3: 0 violations |
 | `token_bucket_fractional` (low rate, coarse refills) | I-LS7: no permanent starvation |
+| `export_limit` (clock boundary matrix) | I-LS8 exact period |
 | `lane_caps` (best-effort vs reliable bulk) | I-LS5 policies exact |
 | two-host physical matrix (M11) | limits hold within tolerance on real links |

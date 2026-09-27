@@ -58,5 +58,5 @@ Inside a computer domain, DRM provides direct, zero-copy shared-memory IPC. Acro
 
 ## Documentation
 
-- [Core Architecture Specification](file:///e:/doc/drm/docs/architecture.md): Full system specification, memory model, shared history, boundary router, and build-time verification.
-- [Spatial Architecture Specification](file:///e:/doc/drm/docs/spatial_architecture.md): Coordinate frames, geometric transforms, clock domains, and static transform collapse.
+- [Core Architecture Specification](docs/architecture.md): Full system specification, memory model, shared history, boundary router, and build-time verification.
+- [Spatial Architecture Specification](docs/spatial_architecture.md): Coordinate frames, geometric transforms, clock domains, and static transform collapse.

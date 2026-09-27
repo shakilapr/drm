@@ -6,13 +6,13 @@ Scope: first-party bindings over `drm-ffi` — per-language borrow discipline, g
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-BIND-cpp-raii-release` | C++17/20 RAII; release on every scope exit incl. exceptions; safe moved-from | — |
-| `REQ-BIND-cpp-byte-backed` | generated types are byte-backed views, not native struct reinterpret-casts | — |
-| `REQ-BIND-cpp-node-scoped` | generated API exposes only manifest-declared topics (compile-time) | — |
-| `REQ-BIND-rust-safe-lifetimes` | safe Rust cannot use payload after release; thread-safety compile-time | — |
-| `REQ-BIND-python-owned-default` | `latest()/next()/numpy()` owned copies; no shared-memory view escapes a scope | — |
-| `REQ-BIND-python-contract-error` | undeclared topic ⇒ `ContractError` | — |
-| `REQ-BIND-consumer-id-per-borrower` | each concurrent borrower owns a distinct hazard/consumer id | — |
+| `REQ-BIND-cpp-raii-release` | C++17/20 RAII; release on every scope exit incl. exceptions; safe moved-from | `REQ-BIND-013` |
+| `REQ-BIND-cpp-byte-backed` | generated types are byte-backed views, not native struct reinterpret-casts | `REQ-BIND-011` |
+| `REQ-BIND-cpp-node-scoped` | generated API exposes only manifest-declared topics (compile-time) | `REQ-BIND-012` |
+| `REQ-BIND-rust-safe-lifetimes` | safe Rust cannot use payload after release; thread-safety compile-time | `REQ-BIND-016` |
+| `REQ-BIND-python-owned-default` | `latest()/next()/numpy()` owned copies; no shared-memory view escapes a scope | `REQ-BIND-015` |
+| `REQ-BIND-python-contract-error` | undeclared topic ⇒ `ContractError` | `REQ-BIND-014` |
+| `REQ-BIND-consumer-id-per-borrower` | each concurrent borrower owns a distinct hazard/consumer id | `REQ-BIND-010` |
 
 ## Data Structures
 
@@ -66,6 +66,7 @@ class BorrowView:
 - **I-B6 PythonScopePinned**: forced GC / exceptions inside `with` cannot pin a hazard slot beyond scope; `buffer()` after exit is invalid; `numpy()`/`bytes()` are copies and safe to retain. Test: forced-GC suite + slot-free assertion.
 - **I-B7 ContractError**: undeclared topic access raises `ContractError` at first use. Test: negative suite.
 - **I-B8 ConsumerIdPerBorrower**: each concurrently borrowing thread owns a distinct consumer/hazard id; concurrent borrows from one process never share a hazard slot. Test: `consumer_id_alloc`.
+- **I-B9 AppLogNonblocking**: `drm.log(level, message)` writes into the observability ring through `drm_log(level, msg_ptr, len)` — one bounded `try_push`, best-effort drop, no wait and no data-plane access; exposed in all four bindings. Phase 2 upgrades call sites to compiled trace IDs. Test: `app_log_nonblocking` (operation-count assertion) + drop counter + per-binding smoke.
 
 ## Functions
 

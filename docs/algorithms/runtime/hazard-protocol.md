@@ -6,14 +6,14 @@ Scope: lockless consumer acquisition with a sequentially consistent control hand
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-hazard-protected-word` | `protected[consumer_id] = slot \| NONE`, one aligned atomic word per consumer | — |
-| `REQ-CORE-hazard-sc-handshake` | protect / recheck / retire+scan / reclaim use SeqCst; payload stays Release/Acquire | — |
-| `REQ-CORE-hazard-acquisition` | §Lockless Consumer Acquisition Protocol steps 1–6 | — |
-| `REQ-CORE-hazard-generation-aba` | 64-bit generation in the ring entry prevents ABA on slot wrap | — |
-| `REQ-CORE-hazard-single-borrow` | at most one outstanding borrow per consumer endpoint; second ⇒ `Busy` | — |
-| `REQ-CORE-publisher-slot-selection` | publisher retires + scans under SeqCst; picks slot not history-referenced nor hazard-protected | — |
-| `REQ-CORE-hazard-multi-reader` | multiple consumers sharing one latest-sample slot are safe | — |
-| `REQ-CORE-borrow-never-overwritten` | actively borrowed slot never overwritten | — |
+| `REQ-CORE-hazard-protected-word` | `protected[consumer_id] = slot \| NONE`, one aligned atomic word per consumer | `REQ-CORE-033` |
+| `REQ-CORE-hazard-sc-handshake` | protect / recheck / retire+scan / reclaim use SeqCst; payload stays Release/Acquire | `REQ-CORE-034` |
+| `REQ-CORE-hazard-acquisition` | §Lockless Consumer Acquisition Protocol steps 1–6 | `REQ-CORE-030` |
+| `REQ-CORE-hazard-generation-aba` | 64-bit generation in the ring entry prevents ABA on slot wrap | `REQ-CORE-031` |
+| `REQ-CORE-hazard-single-borrow` | at most one outstanding borrow per consumer endpoint; second ⇒ `Busy` | `REQ-CORE-035` |
+| `REQ-CORE-publisher-slot-selection` | publisher retires + scans under SeqCst; picks slot not history-referenced nor hazard-protected | `REQ-CORE-055` |
+| `REQ-CORE-hazard-multi-reader` | multiple consumers sharing one latest-sample slot are safe | `REQ-CORE-032` |
+| `REQ-CORE-borrow-never-overwritten` | actively borrowed slot never overwritten | `REQ-CORE-004` |
 
 ## Data Structures
 
@@ -34,7 +34,7 @@ pub struct PoolState {
 
 ## Invariants
 
-- **I-HZ1 NeverOverwritten**: while `protected[i] = s` (non-NONE), publisher reuse of slot `s` is impossible. Test: `hazard_never_overwritten` (Loom + storm).
+- **I-HZ1 NeverOverwritten**: while a generation-bearing hazard word names slot `s`, publisher reuse of `s` is impossible. Test: `hazard_never_overwritten` (Loom + storm).
 - **I-HZ2 NoABA**: a stale borrow can never validate as fresh; ABA rejection uses the **64-bit** generation carried in the self-describing ring entry, verified on the SC re-read. Test: `hazard_aba` (Loom with deliberately tiny generation width; plus long-run wrap).
 - **I-HZ3 RacePointCoverage**: every race point of the acquisition protocol has a named forcing test. Test: `hazard_race_matrix` + `hazard_loom`.
 - **I-HZ4 MultiReaderShare**: ≥ 2 consumer endpoints borrowing the same latest sample each protect that one slot via their own hazard word; publisher never corrupts it. Test: `hazard_multi_reader`.
@@ -52,7 +52,14 @@ fn acquire(ch: &Channel, target_seq: u64, reg: &Registration) -> Result<Borrow, 
  if reg.hazard.compare_exchange(empty, pack(reg.generation, e1.slot), SeqCst, SeqCst).is_err() {
   return Err(Status::Busy);
  }
- let e2 = ch.ring().lookup_sc(target_seq)?; // 3. SC re-read
+ let e2 = match ch.ring().lookup_sc(target_seq) { // 3. SC re-read
+  Ok(entry) => entry,
+  Err(err) => {
+   reg.hazard.compare_exchange(pack(reg.generation, e1.slot), empty, SeqCst, SeqCst)
+    .map_err(|_| Status::InvalidData)?;
+   return Err(err.into());
+  }
+ };
  if e1 != e2 { // 4. publisher rolled during acquisition
  reg.hazard.compare_exchange(pack(reg.generation, e1.slot), empty, SeqCst, SeqCst)
   .map_err(|_| Status::InvalidData)?;
@@ -65,12 +72,12 @@ fn acquire(ch: &Channel, target_seq: u64, reg: &Registration) -> Result<Borrow, 
 // try_acquire(seq, own) — cursor-delivery.md entry point:
 // MemOwn::Borrow → acquire(seq) above (transient view, hazard held until Drop).
 // MemOwn::Copy → acquire(seq), copy into caller memory, release immediately.
-// Errors surface as Status::{AgedOut, Retry, Busy, ...}.
+// Internal outcomes: AgedOut or Retry. Public failure: Busy or InvalidData.
 
 // ---- Publisher retirement + slot selection (same SeqCst handshake) ----
 fn select_slot(ch: &Channel, scratch: &mut FixedBitSet) -> Option<usize> {
  history_referenced_slots_sc(ch, scratch); // busy guard makes writer-side history stable
- for s in 0..POOL {
+ for s in 0..ch.pool_size() {
  if scratch.contains(s) { continue; }
  if hazard_protected_on_sc(s) { continue; }
  return Some(s);
@@ -82,6 +89,11 @@ fn select_slot(ch: &Channel, scratch: &mut FixedBitSet) -> Option<usize> {
 The full publisher transaction, including preflight checks and commit ordering, is defined only in
 [channel-publish.md](channel-publish.md). Hazard code supplies bounded slot selection; it does not
 write payload or advance history.
+
+`history_referenced_slots_sc` clears activation-owned scratch, snapshots `write_seq` and
+`first_valid_seq`, and visits at most `R` versioned ring cells. Because the caller holds `busy`, no
+publisher can change the ring during this scan. Every accepted entry in the addressable window marks
+its slot. Pool indices are `< u32::MAX`; `u32::MAX` is the sole `NONE` encoding.
 
 ## Protocols
 
@@ -97,6 +109,11 @@ write payload or advance history.
 | R6 | publisher reuses slot exactly at consumer re-read | `race_r6_reuse_during_reread` |
 
 *Loom gate (`hazard_loom`, mandatory):* model the full publish / retire+scan / acquire / release / reclaim protocol with deliberately tiny constants (2 slots, 1–2 positions, 2-bit generation) and enumerate all interleavings; assert I-HZ1/I-HZ2/I-HZ5/I-HZ7 hold. Stress testing alone cannot exercise weak-memory interleavings.
+
+*Retire/scan proof:* if a reader's first snapshot names slot `s`, either its protection CAS precedes
+the publisher's SC scan and the publisher skips `s`, or the scan precedes protection. In the latter
+case, the earlier commit that removed `s` from history is already SC-ordered before the scan, so the
+reader's second versioned snapshot differs and it rejects before reading payload bytes.
 
 *Storm suite (`hazard_storm`):* 1 publisher × H readers × random depths × hours-long randomized run with a shadow thread asserting I-HZ1 continuously, on x86-64 and ARM64.
 

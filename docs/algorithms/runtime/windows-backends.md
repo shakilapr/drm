@@ -1,16 +1,16 @@
 # Windows Runtime Backend Algorithms
 
-Scope: Windows implementations of the platform seams — shared-memory sections (pagefile-backed), file locks, incarnation-safe process identity, precommit locking — with the platform-divergence rules pinned. Implements architecture.md §Platform-Managed Paging, §Hard Real-Time Precommitment, §Crash Recovery (Windows variants), §Safe Cleanup. Owner: E1 (crate `drm-core::shm::windows`). Phase 31. Mirrors [shm-backend.md](shm-backend.md) invariants I1–I6.
+Scope: Windows implementations of the platform seams — shared-memory sections (pagefile-backed), file locks, incarnation-safe process identity, precommit locking — with the platform-divergence rules pinned. Implements architecture.md §Platform-Managed Paging, §Hard Real-Time Precommitment, §Crash Recovery (Windows variants), §Safe Cleanup. Owner: E1 (crate `drm-core::shm::windows`). Phase 31. Mirrors [shm-backend.md](shm-backend.md) invariants I1–I8.
 
 ## REQ Bindings
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-win-shm-sections` | pagefile-backed sections; fixed virtual layouts | — |
-| `REQ-CORE-win-platform-paging` | OS decides reservation/commit/residency; DRM does no per-page commit tracking or decommit | — |
-| `REQ-CORE-win-locks` | `LockFileEx` per-topic publisher + one per-deployment active lock; kernel release on death | — |
-| `REQ-CORE-win-identity` | process handle signaled state + start identity | — |
-| `REQ-CORE-win-precommit` | `VirtualLock`; refuse activation on failure | — |
+| `REQ-CORE-win-shm-sections` | pagefile-backed sections; fixed virtual layouts | `REQ-CORE-078` |
+| `REQ-CORE-win-platform-paging` | OS decides reservation/commit/residency; DRM does no per-page commit tracking or decommit | `REQ-CORE-076` |
+| `REQ-CORE-win-locks` | `LockFileEx` per-topic publisher + one per-deployment active lock; kernel release on death | `REQ-CORE-075` |
+| `REQ-CORE-win-identity` | process handle signaled state + start identity | `REQ-CORE-074` |
+| `REQ-CORE-win-precommit` | `VirtualLock`; refuse activation on failure | `REQ-CORE-077` |
 
 ## Data Structures
 
@@ -18,12 +18,13 @@ Scope: Windows implementations of the platform seams — shared-memory sections 
 // Named section: Local\<deployment_id>\<topic> (namespace scoping per deployment-identity.md)
 fn create_exclusive(name, size) -> Result<Mapping> {
  // CreateFileMappingW(INVALID_HANDLE_VALUE, PAGE_READWRITE, size) — pagefile-backed
- // ERROR_ALREADY_EXISTS ⇒ AlreadyExists (I1 parity with O_EXCL)
- // MapViewOfFile(FILE_MAP_ALL_ACCESS) — fixed offsets from PoolLayout (canon-codec I6)
+ // ERROR_ALREADY_EXISTS ⇒ close returned handle, report AlreadyExists (I1 parity with O_EXCL)
+ // MapViewOfFile failure closes the section handle; successful Mapping owns view + handle.
 }
 fn open_existing(name, expect_size) -> Result<Mapping> {
  // OpenFileMappingW(FILE_MAP_ALL_ACCESS) → ERROR_FILE_NOT_FOUND ⇒ NotFound (I2)
- // VirtualQuery size check ⇒ SizeMismatch (I3)
+ // MapViewOfFile with expect_size rejects smaller sections; descriptor.segment_size and
+ // layout_hash reject larger or incompatible sections during attachment.
 }
 ```
 
@@ -37,9 +38,11 @@ fn open_existing(name, expect_size) -> Result<Mapping> {
 - **I-W1 SingleCreator**: `ERROR_ALREADY_EXISTS` ⇒ exactly-one creator semantics. Test: `win_race_create` (8 procs × 100).
 - **I-W2 OpenNeverCreates**: `OpenFileMappingW` miss ⇒ `NotFound`. Test: `win_open_semantics`.
 - **I-W3 LockDiesWithProcess**: `LockFileEx` held by killed process released by kernel. Test: `win_lock_release_on_death`.
-- **I-W4 CleanupGuarded**: exclusive cleanup lock + no shared holds ⇒ unlink via section-handle close (`DRM_CLEAN` equivalent: all handles closed ⇒ section destroyed). Test: `win_cleanup`.
-- **I-W5 IncarnationSafe**: identity = (pid, process creation time via `GetProcessTimes`); `is_alive` = handle signaled check + creation-time equality ⇒ PID reuse safe. Test: `win_process_identity`, `win_pid_reuse`.
+- **I-W4 CleanupGuarded**: pagefile sections have no unlink operation and disappear with their last handle; exclusive cleanup safely removes deployment lock files only after all DRM node handles are gone. Test: `win_cleanup`.
+- **I-W5 IncarnationSafe**: identity = PID plus creation time; dead proof requires absence, signal, or creation-time mismatch. Inspection failure is not proof. Test: `win_process_identity`, `win_pid_reuse`.
 - **I-W6 PrecommitRefusal**: `VirtualLock` failure ⇒ refuse active state. Test: `win_precommit_refusal`.
+- **I-W7 CreateRollback**: conflict or view failure closes every returned handle/view. Test: `win_create_failure_matrix`.
+- **I-W8 ActiveHold**: every running node retains one shared active-file lock until all mappings close. Test: `win_active_hold_lifecycle`.
 
 ## Functions
 
@@ -50,24 +53,33 @@ fn process_identity_current() -> ProcessIdentity {
  ProcessIdentity { pid, start: create_t }
 }
 
-fn is_alive(id: &ProcessIdentity) -> bool {
- let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, id.pid).ok()?; // None ⇒ dead
- if GetProcessTimes(h).create != id.start { return false; } // PID reuse ⇒ different incarnation ⇒ dead-for-us
- WaitForSingleObject(h, 0) == WAIT_TIMEOUT // signaled ⇒ terminated ⇒ false
+fn identity_dead_proven(id: &ProcessIdentity) -> bool {
+ let h = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, id.pid) {
+  Ok(h) => OwnedHandle(h),
+  Err(ERROR_INVALID_PARAMETER) => return true, // no such PID
+  Err(_) => return false, // access/inspection failure gives no proof
+ };
+ let Ok(create) = GetProcessTimes(h).map(|t| t.create) else { return false; };
+ if create != id.start { return true; }
+ WaitForSingleObject(h, 0) == WAIT_OBJECT_0
 }
 
 fn precommit(mapping: &Mapping) -> Result<(), Status> {
- touch_all_pages(mapping)?; // pre-fault: commit charge realized
  if !VirtualLock(mapping.base, mapping.len) { return Err(LockFailed); } // I-W6: refuse activation upstream
+ if !query_working_set_all_resident(mapping) { return Err(LockFailed); }
  Ok(())
 }
 ```
 
 ## Protocols
 
-*Cleanup (`drm clean` parity):* exclusive `LockFileEx` on `<lock_dir>\<deployment_id>\active.lock` (lock dir: `%ProgramData%\drm\`). Success ⇒ no shared holder ⇒ close/unmap + `DeleteFileW` on file-backed sections (pagefile sections die with last handle — report `Cleaned` when handle count reaches zero). Failure ⇒ `ActiveUntouched`. Publisher locks live in the same lock dir (`<topic>.publisher.lock`); there is no separate cleanup lock.
+*Cleanup (`drm clean` parity):* exclusive `LockFileEx` on
+`<lock_dir>\<deployment_id>\active.lock` (lock dir: `%ProgramData%\drm\`). Success means every DRM
+node has closed its non-inheritable section handles, so named pagefile sections already ceased to
+exist. Cleanup deletes only the deployment's lock files/directories and reports `Cleaned`. Failure
+returns `ActiveUntouched`. Publisher locks use non-inheritable file handles and a fixed byte range.
 
-*Dead-incarnation proof (hazard reclamation parity):* identical slow-path contract as [exhaustion-reclamation.md](exhaustion-reclamation.md) — reclaim only after `is_alive` proves the exact incarnation dead; PID reuse delays only.
+*Dead-incarnation proof:* identical contract as [exhaustion-reclamation.md](exhaustion-reclamation.md): reclaim only when `identity_dead_proven` returns true; access or query failure preserves the hazard.
 
 ## Edge Cases & Errors
 
@@ -89,4 +101,6 @@ fn precommit(mapping: &Mapping) -> Result<(), Status> {
 | `win_cleanup` | I-W4 |
 | `win_process_identity` / `_pid_reuse` | I-W5 |
 | `win_precommit_refusal` | I-W6 |
+| `win_create_failure_matrix` | I-W7; handle count stable |
+| `win_active_hold_lifecycle` | I-W8 |
 | full Linux conformance subset on Windows runner | nightly green |

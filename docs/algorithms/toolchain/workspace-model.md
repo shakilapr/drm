@@ -6,14 +6,14 @@ Scope: construction of the in-memory `WorkspaceModel` from manifests and `.drm` 
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-model-relationships` | §Primary Domain Relationships — publishes/consumes/placed_on/links | — |
-| `REQ-TOOL-model-determinism` | §In-Memory — parse whole model in ms; deterministic | — |
-| `REQ-TOOL-model-external-endpoints` | §External Endpoints — third-party devices are graph vertices | — |
-| `REQ-TOOL-model-timing-metadata` | publisher `expected_rate`, consumer `deadline` carried in the model | — |
-| `REQ-TOOL-model-routing-overrides` | `[routing]` prefer/deny/force carried in the model | — |
-| `REQ-TOOL-contract-single-source` | §Node Communication Contracts — manifest is single source of truth | — |
-| `REQ-TOOL-fingerprint-isolation` | §Node Interface Identity — unrelated schema edit ⇒ unaffected fingerprint unchanged | — |
-| `REQ-TOOL-no-build-cycles` | communication loops never create build cycles | — |
+| `REQ-TOOL-model-relationships` | §Primary Domain Relationships — publishes/consumes/placed_on/links | `REQ-TOOL-047` |
+| `REQ-TOOL-model-determinism` | §In-Memory — parse whole model in ms; deterministic | `REQ-TOOL-045` |
+| `REQ-TOOL-model-external-endpoints` | §External Endpoints — third-party devices are graph vertices | `REQ-TOOL-046` |
+| `REQ-TOOL-model-timing-metadata` | publisher `expected_rate`, consumer `deadline` carried in the model | `REQ-TOOL-049` |
+| `REQ-TOOL-model-routing-overrides` | `[routing]` prefer/deny/force carried in the model | `REQ-TOOL-048` |
+| `REQ-TOOL-contract-single-source` | §Node Communication Contracts — manifest is single source of truth | `REQ-TOOL-013` |
+| `REQ-TOOL-fingerprint-isolation` | §Node Interface Identity — unrelated schema edit ⇒ unaffected fingerprint unchanged | `REQ-TOOL-023` |
+| `REQ-TOOL-no-build-cycles` | communication loops never create build cycles | `REQ-TOOL-050` |
 
 ## Data Structures
 
@@ -69,8 +69,8 @@ Model construction is **total-reload**: every parse rebuilds the full model (no 
 - **I-D5 ReproducibleModel**: `render_model(parse(tree))` round-trips byte-identically (feeds property test).
 - **I-D6 SpatialInference**: static/dynamic edge classification is deterministic — node declares `[spatial] write` ⇒ dynamic; `transform` given + no writer ⇒ static; both ⇒ conflict error; neither ⇒ dangling-frame error (spatial-core I-S10). Test: `spatial_inference`.
 - **I-D7 SpatialSingleWriter**: two nodes writing one dynamic spatial edge ⇒ compiler conflict before deployment (spatial-core I-S11). Test: `spatial_single_writer`.
-- **I-D6 ExternalVertices**: `[external.*]` endpoints with `link` + `consume`/`produce` are first-class graph vertices; unknown link or topic ⇒ error. Test: `model_external`.
-- **I-D7 TimingOverrides**: publisher `expected_rate`, consumer `deadline`, and `[routing]` overrides are parsed into the model and preserved by render. Test: `model_timing_overrides`.
+- **I-D8 ExternalVertices**: `[external.*]` endpoints with `link` + `consume`/`produce` are first-class graph vertices; unknown link or topic ⇒ error. Test: `model_external`.
+- **I-D9 TimingOverrides**: publisher `expected_rate`, consumer `deadline`, and `[routing]` overrides are parsed into the model and preserved by render. Test: `model_timing_overrides`.
 
 ## Functions
 
@@ -94,8 +94,8 @@ fn build(tree: &FileTree) -> Result<WorkspaceModel, Vec<ModelError>> {
  parse_spaces(tree)?.apply(&mut m.spatial)?; // spaces/**.drm frames; static/dynamic inference (I-D6);
  // [spatial] write/read contract wiring; single-writer spatial edge check (I-D7);
  // index.drm declarations (anchor, cell_size, max_objects) — capacity feeds memory budget (I-MB9)
- parse_externals(tree)? .apply(&mut m)?; // [external.*] vertices; unknown link/topic ⇒ error (I-D6)
- parse_routing(tree)? .apply(&mut m)?; // [routing] prefer/deny/force; unknown ⇒ error (I-D7)
+ parse_externals(tree)?.apply(&mut m)?; // [external.*] vertices; unknown link/topic ⇒ error (I-D8)
+ parse_routing(tree)?.apply(&mut m)?; // [routing] prefer/deny/force; unknown ⇒ error (I-D9)
  Ok(m)
 }
 
@@ -140,8 +140,8 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
 | conflict fixtures (dup topic, dup node, dangling placement, unknown link) | rejected with location |
 | communication-loop fixture | builds, no cycle error |
 | fingerprint isolation | I-D4 |
-| external endpoint fixtures | I-D6 (unknown link/topic rejected) |
-| timing/route override fixtures | I-D7 |
+| external endpoint fixtures | I-D8 (unknown link/topic rejected) |
+| timing/route override fixtures | I-D9 |
 | round-trip ×5 000 | I-D5 |
 | spatial inference matrix (write-only / transform-only / both / neither) | I-D6 |
 | two-writers-one-edge fixture | I-D7 conflict |

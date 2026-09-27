@@ -6,11 +6,11 @@ Scope: canonical topic identity → stable generated runtime handles; numeric-ID
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-handle-canonical-identity` | topic path = single source of truth | — |
-| `REQ-TOOL-handle-runtime-integer` | compact integer for dispatch/indexing, never transmitted as identity | — |
-| `REQ-TOOL-handle-build-stability` | normal builds preserve assigned handles | — |
-| `REQ-TOOL-handle-add-no-renumber` | adding unrelated topics never renumbers existing | — |
-| `REQ-TOOL-handle-compact-explicit` | only `drm ids compact` recalculates; coordinated rebuild required | — |
+| `REQ-TOOL-handle-canonical-identity` | topic path = single source of truth | `REQ-TOOL-037` |
+| `REQ-TOOL-handle-runtime-integer` | compact integer for dispatch/indexing, never transmitted as identity | `REQ-TOOL-039` |
+| `REQ-TOOL-handle-build-stability` | normal builds preserve assigned handles | `REQ-TOOL-036` |
+| `REQ-TOOL-handle-add-no-renumber` | adding unrelated topics never renumbers existing | `REQ-TOOL-035` |
+| `REQ-TOOL-handle-compact-explicit` | only `drm ids compact` recalculates; coordinated rebuild required | `REQ-TOOL-038` |
 
 ## Data Structures
 

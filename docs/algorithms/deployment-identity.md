@@ -6,12 +6,12 @@ Scope: the three-identity model — node contract fingerprints (compiled), deplo
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-fingerprint-inputs` | fingerprint = hash(ABI version, own topic schemas/layouts, declared interfaces) | — |
-| `REQ-CORE-deploy-id-runtime-only` | 128-bit random ID in `deployment.json`; never compiled into binaries | — |
-| `REQ-CORE-namespace-scoping` | `drm/<deployment_id>/<topic>` paths | — |
-| `REQ-CORE-startup-guard` | compiled fingerprint ≠ deployment fingerprint ⇒ refuse to start | — |
-| `REQ-CORE-no-cross-deployment` | new deployment ⇒ new namespace; never adopt/migrate | — |
-| `REQ-CORE-clean-active-guard` | `drm clean` unlinks only when the exclusive deployment active lock proves no nodes | — |
+| `REQ-CORE-fingerprint-inputs` | fingerprint = hash(ABI version, own topic schemas/layouts, declared interfaces) | `REQ-CORE-085` |
+| `REQ-CORE-deploy-id-runtime-only` | 128-bit random ID in `deployment.json`; never compiled into binaries | `REQ-CORE-084` |
+| `REQ-CORE-namespace-scoping` | deployment-scoped backend-safe opaque names | `REQ-CORE-088` |
+| `REQ-CORE-startup-guard` | compiled fingerprint ≠ deployment fingerprint ⇒ refuse to start | `REQ-CORE-092` |
+| `REQ-CORE-no-cross-deployment` | new deployment ⇒ new namespace; never adopt/migrate | `REQ-CORE-089` |
+| `REQ-CORE-clean-active-guard` | `drm clean` unlinks only when the exclusive deployment active lock proves no nodes | `REQ-CORE-080` |
 
 ## Data Structures
 
@@ -59,11 +59,11 @@ fn node_startup(ctx: &AttachContext, deploy: &DeploymentConfig, node: NodeName) 
 }
 
 // ---- Segment open (per topic, secondary check) ----
-fn segment_open(sess: &Session, topic: &TopicPath, expect: &TopicExpectation) -> Result<Mapping, Status> {
- let name = SegmentName(format!("drm/{}/{}", sess.deploy_id, topic)); // I-DP2 scoping
+fn segment_open(sess: &Session, topic: &TopicPath, expect: &TopicExpectation) -> Result<ChannelView, Status> {
+ // POSIX shm names permit only the leading slash. The descriptor retains the canonical topic.
+ let name = backend_segment_name(sess.deploy_id, hash_topic(topic)); // /drm.<id>.<topic-hash>
  let m = shm.open_existing(&name, expect.size)?; // never create (consumers)
- channel_metadata::validate_on_attach(map_descriptor(&m), expect)?; // schema+layout secondary check
- Ok(m)
+ channel_metadata::validate_on_attach(&m, expect) // exact descriptor check; returns validated view
 }
 
 // ---- drm clean ----
@@ -71,9 +71,10 @@ fn clean(deploy: &DeploymentConfig) -> Result<CleanReport, Status> {
  // Exclusive active lock succeeds ⇒ no node holds a shared hold ⇒ namespace is unowned (I-DP5).
  let _exclusive = match lock_backend.try_exclusive(&deploy.lock_paths().active()) {
  Ok(h) => h,
- Err(_) => return Ok(CleanReport::ActiveUntouched), // shared hold exists ⇒ live nodes
+ Err(WouldBlock) => return Ok(CleanReport::ActiveUntouched), // shared hold exists ⇒ live nodes
+ Err(e) => return Err(e),
  };
- for name in enumerate_namespaces(deploy) { shm_unlink(name)?; } // remove every topic segment
+ for name in names_from_deployment_metadata(deploy) { shm_unlink(name)?; }
  Ok(CleanReport::Cleaned)
 }
 ```
@@ -84,7 +85,7 @@ fn clean(deploy: &DeploymentConfig) -> Result<CleanReport, Status> {
 
 1. `DeploymentId::random()` (CSPRNG).
 2. Emit `deployment.json` with fingerprint expectations (from workspace-model contract fingerprints), routing tables, budgets.
-3. All SHM paths derive from the ID; new deployment ⇒ fresh namespace (I-DP2); no live migration ever.
+3. Backend-safe opaque SHM names derive from the ID plus canonical-topic hash; the exact topic remains in the immutable descriptor. New deployment ⇒ fresh namespace (I-DP2); no live migration ever.
 
 *Node startup sequence:* guard (fingerprint) → shared active hold → per-topic `segment_open` (secondary validation) → run.
 

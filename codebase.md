@@ -159,7 +159,7 @@ Artifact rules:
 | R4 | **Errors**: one status taxonomy in `drm-types`, mirrored 1:1 by stable C ABI codes. Data paths return errors — never panic, `unwrap`, or `expect`. Init/teardown may `expect` with an invariant-stating message. |
 | R5 | **Data-path discipline**: steady-state publish/consume performs no allocation, no logging, no blocking locks, no unbounded syscalls. Atomics carry explicitly documented acquire/release ordering. Diagnostics flow only through the observability plane (`drm-trace`, channel counters, `drm-diag`). |
 | R6 | **Generated code**: never hand-edited. Emitted with a `@generated` banner naming the generator version; CI regenerates and fails on diff; unchanged outputs preserve timestamps to avoid rebuild cascades. |
-| R7 | **Naming**: crates `drm-*`; modules/fields `snake_case`; types `UpperCamel`; topics `domain/name` (kebab); REQ IDs `REQ-<AREA>-<NNN>` with areas `CORE \| TOOL \| ROUTE \| SPATIAL \| BIND \| STUDIO`. |
+| R7 | **Naming**: crates `drm-*`; modules/fields `snake_case`; types `UpperCamel`; topics `domain/name` (kebab); REQ IDs `REQ-<AREA>-<NNN>` with areas `CORE \| TOOL \| ROUTE \| SPATIAL \| BIND \| STUDIO \| OPS \| QAL`. |
 | R8 | **Platform isolation**: OS-specific code exists only in `drm-core::shm` backends and router transport adapters; no scattered `#[cfg(windows)]`; backend traits frozen in W1 (work-plan risk register). |
 | R9 | **API surface**: `missing_docs` denied; public items document their REQ contract; internals are `pub(crate)` or `#[doc(hidden)]`. |
 | R10 | **Files**: UTF-8, LF, final newline; code ≤100 columns; enforced by `.editorconfig` and formatters. |

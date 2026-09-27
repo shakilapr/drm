@@ -6,26 +6,32 @@ Scope: channel descriptor block (channel-level metadata) as a naturally aligned 
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-desc-byte-exact` | §Channel Metadata — stored once per segment | — |
-| `REQ-CORE-desc-aligned` | control state naturally aligned; no packed atomics; offset asserts | — |
-| `REQ-CORE-desc-topic-identity` | descriptor carries channel identifier + topic name | — |
-| `REQ-CORE-attach-validate-once` | compared once at attach; steady-state zero checks | — |
-| `REQ-CORE-epoch-increment` | §Publisher Epoch — restart ⇒ epoch+1, consumers reset | — |
-| `REQ-CORE-first-valid` | restart advances `first_valid_seq`; prior run never addressable | — |
-| `REQ-CORE-fingerprint-guard` | node fingerprint checked against deployment before mapping | — |
-| `REQ-CORE-segment-validation` | §Individual Segment Validation — secondary schema/layout check | — |
-| `REQ-CORE-desc-exact-layout` | exact offsets, counts, and segment size checked with overflow-safe math | — |
+| `REQ-CORE-desc-byte-exact` | §Channel Metadata — stored once per segment | `REQ-CORE-015` |
+| `REQ-CORE-desc-aligned` | control state naturally aligned; no packed atomics; offset asserts | `REQ-CORE-014` |
+| `REQ-CORE-desc-topic-identity` | descriptor carries channel identifier + topic name | `REQ-CORE-017` |
+| `REQ-CORE-attach-validate-once` | compared once at attach; steady-state zero checks | `REQ-CORE-002` |
+| `REQ-CORE-epoch-increment` | §Publisher Epoch — restart ⇒ epoch+1, consumers reset | `REQ-CORE-019` |
+| `REQ-CORE-first-valid` | restart advances `first_valid_seq`; prior run never addressable | `REQ-CORE-026` |
+| `REQ-CORE-fingerprint-guard` | node fingerprint checked against deployment before mapping | `REQ-CORE-025` |
+| `REQ-CORE-segment-validation` | §Individual Segment Validation — secondary schema/layout check | `REQ-CORE-068` |
+| `REQ-CORE-desc-exact-layout` | exact offsets, counts, and segment size checked with overflow-safe math | `REQ-CORE-016` |
 
 ## Data Structures
 
 ```rust
-// Immutable descriptor. Dynamic arrays are located by checked offsets, never native pointers.
+#[repr(C, align(8))]
+pub struct SegmentPrefix { // fixed 16-byte bootstrap at offset zero
+ magic: [u8; 4],
+ layout_version: u32,
+ segment_state: AtomicU32, // Zero/Init/Ready
+ descriptor_size: u32,
+}
+
+// Immutable descriptor follows SegmentPrefix. Dynamic arrays use checked offsets, never pointers.
 #[repr(C, align(8))]
 pub struct ChannelDescriptor {
- magic: [u8; 4], // "DRMC"
- layout_version: u32, // descriptor layout version; unknown ⇒ refuse
- descriptor_size: u32,
  flags: u32,
+ _pad_header: u32,
  schema_hash: [u8; 16], // 128-bit canonical schema content hash (workspace-model contract inputs)
  layout_hash: [u8; 16], // exact descriptor + CCB + canonical payload layout
  topic_handle: u32, // compact runtime handle (identity; handle-system.md)
@@ -37,6 +43,8 @@ pub struct ChannelDescriptor {
  pool_size: u64, // slots (payload-pool.md; invariant pool_size ≥ R+1)
  consumer_count: u32,
  required_count: u32,
+ diagnostic_count: u32,
+ _pad_counts: u32,
  ccb_offset: u64,
  ring_offset: u64,
  consumer_offset: u64,
@@ -49,15 +57,13 @@ pub struct ChannelDescriptor {
 // Fixed bootstrap/control prefix. Dynamic ring and consumer records follow at descriptor offsets.
 #[repr(C, align(8))]
 pub struct ChannelControlBlock {
- segment_state: AtomicU32, // Zero/Init/Ready; fixed offset valid before descriptor publication
  publisher_epoch: AtomicU32,
+ _pad_epoch: u32,
  first_valid_seq: AtomicU64, // sole physical owner
  write_seq: AtomicU64,       // next sequence
  pool_exhausted: AtomicU64,
- current_seq: AtomicU64,
- stream_state: AtomicU32,
  publish_busy: AtomicBool,
- _pad: [u8; 3],
+ _pad: [u8; 7],
 }
 // Compile-time asserts:
 // const _: () = assert!(align_of::<ChannelDescriptor>() == 8);
@@ -70,9 +76,9 @@ pub struct ChannelControlBlock {
 - **I-M1 ByteExact**: descriptor bytes match the golden table field-for-field (including padding). Test: `descriptor_golden` (byte-inspection harness), `descriptor_offset_asserts` (compile-time + runtime).
 - **I-M2 AttachOnce**: schema/fingerprint validation happens exactly once per attachment; 1e6 steady-state reads ⇒ 0 re-checks. Test: `attach_once`.
 - **I-M3 EpochReset**: consumer observing `epoch' > epoch` resets cursor state; pre-restart samples are never interpreted as post-restart data. Test: `epoch_restart` (publisher-lifecycle.md).
-- **I-M4 GuardRefusal**: binary whose compiled fingerprint ≠ descriptor fingerprint ⇒ refuse to start. Test: `fingerprint_guard` (Phase 18).
+- **I-M4 GuardRefusal**: binary whose compiled node fingerprint differs from its deployment record refuses before opening any segment. Test: `fingerprint_guard`.
 - **I-M5 AlignedAtomics**: every atomic field is naturally aligned; no packed atomic is addressable. Test: `descriptor_offset_asserts`.
-- **I-M6 SegmentReady**: attachment refuses a descriptor whose `segment_state != Ready`; a fresh segment is never used before publisher-lifecycle.md sets READY. Test: `attach_init_refused` (recovery covered by publisher-lifecycle I-L8).
+- **I-M6 SegmentReady**: attachment returns `NotReady` while the fixed prefix state is not `Ready`; no other bytes are interpreted. Test: `attach_init_refused`.
 - **I-M7 ExactLayout**: attachment accepts only exact immutable fields, zero reserved bytes, valid checked ranges, and non-overlapping aligned regions within `segment_size`. Test: `attach_layout_matrix`.
 
 ## Functions
@@ -80,11 +86,13 @@ pub struct ChannelControlBlock {
 ```rust
 // Attach validation — once, at open (publisher or consumer)
 fn validate_on_attach(map: &Mapping, expect: &Expectation) -> Result<ChannelView, Status> {
- let ccb = map.bootstrap_ccb()?; // fixed checked offset; mapping size was validated by backend
- if ccb.segment_state.load(Acquire) != Ready { return Err(NotReady); }
+ let prefix = map.prefix()?; // fixed offset zero; mapping has at least 16 bytes
+ if prefix.segment_state.load(Acquire) != Ready { return Err(NotReady); }
  let desc = map.checked_descriptor()?;
- if desc.magic != *b"DRMC" { return Err(InvalidData); }
- if !SUPPORTED_LAYOUT_VERSIONS.contains(&desc.layout_version) { return Err(WrongAbi); }
+ if prefix.magic != *b"DRMC" { return Err(InvalidData); }
+ if !SUPPORTED_LAYOUT_VERSIONS.contains(&prefix.layout_version) { return Err(WrongAbi); }
+ if prefix.descriptor_size as usize != size_of::<ChannelDescriptor>() { return Err(WrongAbi); }
+ let ccb = map.checked_ccb(desc.ccb_offset)?;
  if desc.schema_hash != expect.schema_hash { return Err(InvalidData); } // secondary per-segment check
  if desc.layout_hash != expect.layout_hash { return Err(WrongAbi); }
  if desc.topic_handle != expect.topic_handle { return Err(InvalidData); } // identity matches
@@ -95,8 +103,18 @@ fn validate_on_attach(map: &Mapping, expect: &Expectation) -> Result<ChannelView
   || desc.overflow_policy != expect.overflow_policy
   || desc.consumer_count != expect.consumer_count
   || desc.required_count != expect.required_count
-  || desc.segment_size != map.len() as u64 { return Err(WrongAbi); }
- if desc.pool_size < desc.history_depth + 1 { return Err(InvalidConfig); } // payload-pool invariant
+  || desc.diagnostic_count != expect.diagnostic_count
+ || desc.segment_size != map.len() as u64 { return Err(WrongAbi); }
+ let reserved = desc.required_count.checked_add(desc.diagnostic_count).ok_or(InvalidConfig)?;
+ if desc.history_depth == 0 || reserved > desc.consumer_count {
+  return Err(InvalidConfig);
+ }
+ let min_pool = desc.history_depth.checked_add(1).ok_or(InvalidConfig)?;
+ if desc.pool_size < min_pool { return Err(InvalidConfig); }
+ if desc.pool_size >= u32::MAX as u64 { return Err(InvalidConfig); } // reserves slot NONE
+ if desc.flags.contains(VARIABLE) && desc.payload_capacity > u32::MAX as u64 {
+  return Err(InvalidConfig); // canonical variable-length header is u32
+ }
  validate_aligned_nonoverlapping_ranges(desc, map.len())?; // checked add/mul only
  if desc.reserved.iter().any(|b| *b != 0) { return Err(WrongAbi); }
  require_lock_free_shared_atomics()?;

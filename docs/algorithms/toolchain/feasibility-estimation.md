@@ -6,11 +6,11 @@ Scope: declared-feasibility reports — nominal link utilization from `expected_
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-estimate-utilization` | nominal utilization from expected_rate × packet sizes | — |
-| `REQ-TOOL-estimate-per-edge` | frame size computed per route edge (transport-specific overhead) | — |
-| `REQ-TOOL-estimate-reject-impossible` | declared traffic > 100% link ⇒ build error (integer bps) | — |
-| `REQ-TOOL-estimate-headroom` | headroom reported as engineering estimate | — |
-| `REQ-TOOL-estimate-not-guarantee` | estimates never presented as guarantees; runtime measured by drm-diag | — |
+| `REQ-TOOL-estimate-utilization` | nominal utilization from expected_rate × packet sizes | `REQ-TOOL-022` |
+| `REQ-TOOL-estimate-per-edge` | frame size computed per route edge (transport-specific overhead) | `REQ-TOOL-020` |
+| `REQ-TOOL-estimate-reject-impossible` | declared traffic > 100% link ⇒ build error (integer bps) | `REQ-TOOL-021` |
+| `REQ-TOOL-estimate-headroom` | headroom reported as engineering estimate | `REQ-TOOL-018` |
+| `REQ-TOOL-estimate-not-guarantee` | estimates never presented as guarantees; runtime measured by drm-diag | `REQ-TOOL-019` |
 
 ## Data Structures
 
@@ -50,8 +50,9 @@ fn estimate(model: &WorkspaceModel, plans: &RoutePlans) -> Vec<LinkEstimate> {
  }
  }
  per_link.into_iter().map(|(link, rows)| {
- let nominal: u128 = rows.iter().map(|r| r.bps).sum(); // I-F3 (u128)
+ let nominal = rows.iter().try_fold(0u128, |sum, row| sum.checked_add(row.bps)).ok_or(Overflow)?;
  let cap = model.link(link).bandwidth_bps as u128;
+ if cap == 0 { hard_error(InvalidCapacity { link }); }
  if nominal > cap { hard_error(OverCapacity { link, nominal, cap }); } // I-F2: integer compare
  let util = (nominal as f64 / cap as f64) * 100.0; // display only
  LinkEstimate { link, nominal_bps: nominal, capacity_bps: cap,
@@ -61,7 +62,7 @@ fn estimate(model: &WorkspaceModel, plans: &RoutePlans) -> Vec<LinkEstimate> {
 
 fn encoded_bits(model: &WorkspaceModel, topic: &TopicPath, link: LinkId) -> u128 {
  (canon_size(model.schema(topic)) as u128 // payload bound (worst-case declared)
- + transport_metadata_overhead(transport_kind(link)) as u128) // this edge's framing overhead
+ + transport_worst_case_overhead(transport_kind(link), integrity_profile(topic)) as u128)
  * 8
 }
 ```

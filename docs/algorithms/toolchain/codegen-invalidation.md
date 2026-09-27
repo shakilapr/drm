@@ -6,13 +6,13 @@ Scope: language binding generators (C/C++/Rust/Python) — stable shared output 
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-gen-stable-paths` | `.drm/gen/<lang>/<topic>/<file>` shared per topic+language | — |
-| `REQ-TOOL-gen-fingerprint` | `hash(canonical_schema, topic_identity, generator_version, options)` | — |
-| `REQ-TOOL-gen-expected-outputs` | plan carries full expected tree, distinct from dirty units | — |
-| `REQ-TOOL-gen-node-api-unit` | node-scoped API invalidated by declaration changes alone | — |
-| `REQ-TOOL-gen-atomic-replace` | platform atomic replace; canceled run leaves no partial file | — |
-| `REQ-TOOL-gen-timestamp-preserved` | identical output ⇒ no rewrite ⇒ no rebuild cascade | — |
-| `REQ-TOOL-gen-direct-reconciliation` | deleted declaration ⇒ output removed; no orphan CAS | — |
+| `REQ-TOOL-gen-stable-paths` | `.drm/gen/<lang>/<topic>/<file>` shared per topic+language | `REQ-TOOL-029` |
+| `REQ-TOOL-gen-fingerprint` | `hash(canonical_schema, topic_identity, generator_version, options)` | `REQ-TOOL-027` |
+| `REQ-TOOL-gen-expected-outputs` | plan carries full expected tree, distinct from dirty units | `REQ-TOOL-026` |
+| `REQ-TOOL-gen-node-api-unit` | node-scoped API invalidated by declaration changes alone | `REQ-TOOL-028` |
+| `REQ-TOOL-gen-atomic-replace` | platform atomic replace; canceled run leaves no partial file | `REQ-TOOL-024` |
+| `REQ-TOOL-gen-timestamp-preserved` | identical output ⇒ no rewrite ⇒ no rebuild cascade | `REQ-TOOL-030` |
+| `REQ-TOOL-gen-direct-reconciliation` | deleted declaration ⇒ output removed; no orphan CAS | `REQ-TOOL-025` |
 
 ## Data Structures
 
@@ -78,16 +78,21 @@ fn plan(model: &WorkspaceModel, prev: &FingerprintDb) -> GenPlan {
 }
 
 fn execute(plan: &GenPlan, prev: &mut FingerprintDb) -> Result<(), Status> {
+ let _guard = workspace_codegen_lock()?; // cross-process exclusive lock
+ let mut next = prev.clone();
  for u in &plan.dirty_units {
- let tmp = u.out_path.with_extension("tmp");
+ let tmp = unique_temp_sibling(&u.out_path)?;
  write(tmp, &u.body)?; // full content first
+ fsync_file(&tmp)?;
  atomic_replace(&tmp, &u.out_path)?; // I-G7: platform atomic replace
- prev.record(u.fingerprint);
+ next.record(u.key(), u.fingerprint);
  }
  // Reconcile against the COMPLETE expected set, never the dirty set (I-G3/I-G5)
  for orphan in existing_generated().difference(&plan.expected_outputs) {
  remove(orphan)?;
  }
+ save_fingerprint_db_atomic(&next)?; // commit metadata only after outputs and reconciliation
+ *prev = next;
  Ok(())
 }
 
@@ -104,7 +109,7 @@ fn node_header(node: &NodeEntry, model: &WorkspaceModel) -> String
 2. `plan` → complete `expected_outputs` + `dirty_units` (topics and node APIs).
 3. `execute` atomically replaces dirty units via `atomic_replace()`; unchanged units retain mtimes (I-G2).
 4. Reconcile `existing_generated \ expected_outputs` (I-G5).
-5. Save fingerprint DB.
+5. Atomically save the new fingerprint DB last. Failure leaves the prior DB, so the next run rechecks outputs.
 
 ## Edge Cases & Errors
 

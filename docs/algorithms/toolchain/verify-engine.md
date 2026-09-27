@@ -6,14 +6,14 @@ Scope: `drm verify` — the complete catalogue of deterministic configuration ch
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-verify-schemas` | schemas valid and consistent across packages | — |
-| `REQ-TOOL-verify-single-writer` | every consumed topic has exactly one publisher | — |
-| `REQ-TOOL-verify-placement` | placements/computes/links valid, no conflicting identifiers | — |
-| `REQ-TOOL-verify-route-fit` | routes exist; encoded frames fit `max_datagram_payload` | — |
-| `REQ-TOOL-verify-reliability` | `reliable` only on reliable-capability transports | — |
-| `REQ-TOOL-verify-budgets` | channels fit deployment memory budget; precommit fits lockable budget | — |
-| `REQ-TOOL-verify-compatibility` | consumer requirements on shared topics mutually compatible | — |
-| `REQ-TOOL-verify-estimates-boundary` | estimates never reported as guarantees (never prove timing) | — |
+| `REQ-TOOL-verify-schemas` | schemas valid and consistent across packages | `REQ-TOOL-063` |
+| `REQ-TOOL-verify-single-writer` | every consumed topic has exactly one publisher | `REQ-TOOL-064` |
+| `REQ-TOOL-verify-placement` | placements/computes/links valid, no conflicting identifiers | `REQ-TOOL-060` |
+| `REQ-TOOL-verify-route-fit` | routes exist; encoded frames fit `max_datagram_payload` | `REQ-TOOL-062` |
+| `REQ-TOOL-verify-reliability` | `reliable` only on reliable-capability transports | `REQ-TOOL-061` |
+| `REQ-TOOL-verify-budgets` | channels fit deployment memory budget; precommit fits lockable budget | `REQ-TOOL-057` |
+| `REQ-TOOL-verify-compatibility` | consumer requirements on shared topics mutually compatible | `REQ-TOOL-058` |
+| `REQ-TOOL-verify-estimates-boundary` | estimates never reported as guarantees (never prove timing) | `REQ-TOOL-059` |
 
 ## Data Structures
 
@@ -63,6 +63,7 @@ fn verify(model: &WorkspaceModel, deploy: &DeploymentConfig) -> VerifyReport {
  memory_budget::verify_memory(model, deploy).into_report(&mut r); // V-MEM (memory-budget.md)
  check_compatibility(model, &mut r); // V-CMP
  check_identity(model, &mut r); // V-ID
+ check_spatial(model, &mut r); // V-SPAT (spatial-core/workspace-model I-D6/I-D7; spatial-index I-X9)
  r.estimates = feasibility::estimate(model, &routes); // feasibility-estimation.md (Phase 27)
  r
 }
@@ -86,6 +87,8 @@ fn fail(check: CheckId, msg: impl Display, reqs: &[ReqId]) -> VerifyError {
 |---|---|
 | Parse errors | reported before checks; no partial results presented as verified |
 | `reject` policy with no required sequential consumer | `V-CMP` failure (overflow-policies.md degenerate case) |
+| `multiplexer` convergence (two sources → one command topic) | valid — sources publish distinct topics; multiplexer node owns the canonical topic (single-writer preserved) |
+| spatial two-writer edge; index capacity over budget | `V-SPAT` failures |
 | Route ambiguity | `V-RT` failure naming the topic and the two paths |
 | Contradictory overrides (force∧deny, multiple force) | `V-RT` `ConflictingRouteOverride` |
 | Budget warning band | warning only (memory-budget I-MB3) |
@@ -96,6 +99,7 @@ fn fail(check: CheckId, msg: impl Display, reqs: &[ReqId]) -> VerifyError {
 | Case | Expected |
 |---|---|
 | negative fixture per check ID (≥ 20 fixtures) | exact check ID + message + REQ citation |
+| spatial contract fixtures (I-D6/I-D7 + index capacity) | `V-SPAT` exact |
 | positive full-workspace fixture | zero fact failures |
 | determinism ×100 | identical report |
 | multiple independent failures | I-V5: all reported, none suppressed |

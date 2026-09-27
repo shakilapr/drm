@@ -6,18 +6,18 @@ Scope: automatic derivation of a per-topic **forwarding tree** (route plan) from
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-ROUTE-derive-auto` | single viable path ⇒ automatic; same-compute ⇒ local-only | — |
-| `REQ-ROUTE-forwarding-tree` | one topic ⇒ a forwarding tree, not one route (fan-out + local delivery) | — |
-| `REQ-ROUTE-derive-ambiguity` | ≥ 2 paths without policy ⇒ verify error, never silent choice | — |
-| `REQ-ROUTE-derive-errors` | derivation returns `{plans, errors}`; never short-circuits verification | — |
-| `REQ-ROUTE-override-conflict` | contradictory explicit overrides ⇒ `ConflictingRouteOverride` | — |
-| `REQ-ROUTE-override-prefer` | prefer selects among viable paths | — |
-| `REQ-ROUTE-override-deny` | deny removes candidate links before selection | — |
-| `REQ-ROUTE-override-force` | force pins the route; conflicts with deny ⇒ error | — |
-| `REQ-ROUTE-external-endpoints` | external endpoints participate in the same graph | — |
-| `REQ-ROUTE-acyclic-reexport` | imported topics are never re-exported back over the ingress link | — |
-| `REQ-ROUTE-poly-paths` | path classification is polynomial; no simple-path enumeration | — |
-| `REQ-ROUTE-determinism` | same input ⇒ same plans | — |
+| `REQ-ROUTE-derive-auto` | single viable path ⇒ automatic; same-compute ⇒ local-only | `REQ-ROUTE-004` |
+| `REQ-ROUTE-forwarding-tree` | one topic ⇒ a forwarding tree, not one route (fan-out + local delivery) | `REQ-ROUTE-010` |
+| `REQ-ROUTE-derive-ambiguity` | ≥ 2 paths without policy ⇒ verify error, never silent choice | `REQ-ROUTE-003` |
+| `REQ-ROUTE-derive-errors` | derivation returns `{plans, errors}`; never short-circuits verification | `REQ-ROUTE-005` |
+| `REQ-ROUTE-override-conflict` | contradictory explicit overrides ⇒ `ConflictingRouteOverride` | `REQ-ROUTE-014` |
+| `REQ-ROUTE-override-prefer` | prefer selects among viable paths | `REQ-ROUTE-017` |
+| `REQ-ROUTE-override-deny` | deny removes candidate links before selection | `REQ-ROUTE-015` |
+| `REQ-ROUTE-override-force` | force pins the route; conflicts with deny ⇒ error | `REQ-ROUTE-016` |
+| `REQ-ROUTE-external-endpoints` | external endpoints participate in the same graph | `REQ-ROUTE-009` |
+| `REQ-ROUTE-acyclic-reexport` | imported topics are never re-exported back over the ingress link | `REQ-ROUTE-001` |
+| `REQ-ROUTE-poly-paths` | path classification is polynomial; no simple-path enumeration | `REQ-ROUTE-019` |
+| `REQ-ROUTE-determinism` | same input ⇒ same plans | `REQ-ROUTE-006` |
 
 ## Data Structures
 

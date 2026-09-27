@@ -6,12 +6,12 @@ Scope: Phase 34 whole-system qualification — requirement traceability matrix (
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-QAL-traceability-100` | every REQ maps to impl + test + passing result | — |
-| `REQ-QAL-no-unimplemented` | requirement with no implementation = 0 | — |
-| `REQ-QAL-no-untested` | requirement with no test = 0 | — |
-| `REQ-QAL-soak-clean` | long-duration soak zero corruption/deadlock | — |
-| `REQ-QAL-deterministic-builds` | deterministic builds pass | — |
-| `REQ-QAL-docs-ci` | documentation/examples execute in CI | — |
+| `REQ-QAL-traceability-100` | every REQ maps to impl + test + passing result | `REQ-QAL-006` |
+| `REQ-QAL-no-unimplemented` | requirement with no implementation = 0 | `REQ-QAL-003` |
+| `REQ-QAL-no-untested` | requirement with no test = 0 | `REQ-QAL-004` |
+| `REQ-QAL-soak-clean` | long-duration soak zero corruption/deadlock | `REQ-QAL-005` |
+| `REQ-QAL-deterministic-builds` | deterministic builds pass | `REQ-QAL-001` |
+| `REQ-QAL-docs-ci` | documentation/examples execute in CI | `REQ-QAL-002` |
 
 ## Data Structures
 

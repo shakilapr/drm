@@ -6,16 +6,16 @@ Scope: lexing, parsing, validation and canonical rendering of `.drm` topic-defin
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-grammar-ebnf` | §Topic Definitions — file path defines topic name | — |
-| `REQ-TOOL-grammar-types` | §Structural Bounds — prims, `T[N]`, `T[<=N]`, `string[N]`, `bytes[<=N]`, enums | — |
-| `REQ-TOOL-grammar-attrs` | §Topic attributes — `@history`, `@pool_size`, `@overflow`; attrs precede fields | — |
-| `REQ-TOOL-grammar-encoding` | §Structural Bounds — explicit `@encoding` quantization for constrained buses | — |
-| `REQ-TOOL-parse-bytes` | parser entry takes raw bytes and validates UTF-8 internally | — |
-| `REQ-TOOL-render-semantic` | canonical render preserves the full semantic AST (incl. annotations) | — |
-| `REQ-TOOL-diag-location-reason` | Phase 2 gate — invalid schema fails with location + reason | — |
-| `REQ-TOOL-parser-no-panic` | Phase 2 gate — fuzz input never crashes/hangs | — |
-| `REQ-TOOL-render-deterministic` | Phase 2 gate — parser round-trip deterministic | — |
-| `REQ-TOOL-topic-path-ascii` | canonical topic paths are lowercase ASCII (cross-platform identity) | — |
+| `REQ-TOOL-grammar-ebnf` | §Topic Definitions — file path defines topic name | `REQ-TOOL-032` |
+| `REQ-TOOL-grammar-types` | §Structural Bounds — prims, `T[N]`, `T[<=N]`, `string[N]`, `bytes[<=N]`, enums | `REQ-TOOL-034` |
+| `REQ-TOOL-grammar-attrs` | §Topic attributes — `@history`, `@pool_size`, `@overflow`; attrs precede fields | `REQ-TOOL-031` |
+| `REQ-TOOL-grammar-encoding` | §Structural Bounds — explicit `@encoding` quantization for constrained buses | `REQ-TOOL-033` |
+| `REQ-TOOL-parse-bytes` | parser entry takes raw bytes and validates UTF-8 internally | `REQ-TOOL-052` |
+| `REQ-TOOL-render-semantic` | canonical render preserves the full semantic AST (incl. annotations) | `REQ-TOOL-055` |
+| `REQ-TOOL-diag-location-reason` | Phase 2 gate — invalid schema fails with location + reason | `REQ-TOOL-017` |
+| `REQ-TOOL-parser-no-panic` | Phase 2 gate — fuzz input never crashes/hangs | `REQ-TOOL-053` |
+| `REQ-TOOL-render-deterministic` | Phase 2 gate — parser round-trip deterministic | `REQ-TOOL-054` |
+| `REQ-TOOL-topic-path-ascii` | canonical topic paths are lowercase ASCII (cross-platform identity) | `REQ-TOOL-056` |
 
 ## Grammar (EBNF, normative for parser and renderer)
 

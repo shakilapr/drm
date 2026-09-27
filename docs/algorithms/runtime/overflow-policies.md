@@ -6,12 +6,12 @@ Scope: topic-level history overflow — `overwrite` continuous rolling with exac
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-overflow-overwrite` | ring rolls; oldest retired; lapped ⇒ exact GAP | — |
-| `REQ-CORE-overflow-reject` | required sequential consumer gates; publish fails `QueueFull`, never blocks | — |
-| `REQ-CORE-required-consumers` | required sequential consumers registry per topic | — |
-| `REQ-CORE-required-ack-seq` | shared `ack_seq` watermark, init 0 — sequence 0 representable | — |
-| `REQ-CORE-ack-wiring` | `copy_next` acks after copy; `borrow_next` acks after release; separate from cursor/hazard | — |
-| `REQ-CORE-explicit-errors` | explicit error over secretly stalling | — |
+| `REQ-CORE-overflow-overwrite` | ring rolls; oldest retired; lapped ⇒ exact GAP | `REQ-CORE-039` |
+| `REQ-CORE-overflow-reject` | required sequential consumer gates; publish fails `QueueFull`, never blocks | `REQ-CORE-040` |
+| `REQ-CORE-required-consumers` | required sequential consumers registry per topic | `REQ-CORE-060` |
+| `REQ-CORE-required-ack-seq` | shared `ack_seq` watermark, init 0 — sequence 0 representable | `REQ-CORE-059` |
+| `REQ-CORE-ack-wiring` | `copy_next` acks after copy; `borrow_next` acks after release; separate from cursor/hazard | `REQ-CORE-001` |
+| `REQ-CORE-explicit-errors` | explicit error over secretly stalling | `REQ-CORE-024` |
 
 ## Data Structures
 
@@ -32,7 +32,7 @@ pub enum OverflowPolicy { Overwrite, Reject } // from ChannelDescriptor (channel
 ## Invariants
 
 - **I-OV1 OverwriteGaps**: under `overwrite`, lapped sequential reader receives exact `missed` count (cursor-delivery I-C2). Test: `overflow_overwrite_gaps`.
-- **I-OV2 RejectNoBlock**: under `reject` with full ring and an un-advanced required consumer, `publish()` returns `QueueFull` in bounded time (< 1 ms wall clock) — no blocking, no spinning waits. Test: `overflow_reject_noblock`.
+- **I-OV2 RejectNoBlock**: a full `reject` ring checks at most the fixed required-consumer count and returns `QueueFull` without waits, syscalls, or retry loops. Test: `overflow_reject_noblock`.
 - **I-OV3 GatingExact**: `publish()` succeeds exactly when every required sequential consumer has `ack_seq > retire_seq` (the sequence about to be retired). Test: `overflow_gating`, `overflow_next_needed_sentinel` (first retirement, consumers at 0).
 - **I-OV4 LatestUnaffected**: `latest()` readers always proceed under both policies (rejection only gates sequential retention). Test: `overflow_latest_proceeds`.
 - **I-OV5 ZeroRequiredInvalid**: a `reject` topic with zero required sequential consumers is rejected at verify (`V-CMP`); at runtime a nonzero required count is a channel invariant, and a violated (zero) count returns `InvalidConfig` rather than silently overwriting or permanently returning `QueueFull`. Test: `overflow_zero_required`.
@@ -40,9 +40,8 @@ pub enum OverflowPolicy { Overwrite, Reject } // from ChannelDescriptor (channel
 ## Functions
 
 ```rust
-fn publish(ch: &Channel, payload: &[u8]) -> Result<u64, Status> {
+fn allow_commit(ch: &Channel, ws: u64) -> Result<(), Status> {
  let (policy, R) = (ch.policy(), ch.depth());
- let ws = ch.ring().write_seq(); // next sequence
  let fv = ch.ccb.first_valid_seq.load(Acquire);
  if policy == Reject {
  let reqs = ch.required_sequentials();
@@ -54,8 +53,7 @@ fn publish(ch: &Channel, payload: &[u8]) -> Result<u64, Status> {
  }
  }
  }
- // advance: slot selection (payload-pool/hazard-protocol), commit (ring-history.md)
- ...
+ Ok(()) // channel-publish.md owns every later step
 }
 
 fn may_retire(req: &RequiredSequential, retire_seq: u64) -> bool {
@@ -102,7 +100,7 @@ blocking sequence.
 
 | Case | Expected |
 |---|---|
-| `overflow_reject_noblock` | `QueueFull` < 1 ms; thread never parked |
+| `overflow_reject_noblock` | ≤ required-count loads; zero waits/syscalls/retries |
 | `overflow_gating` | succeeds iff all required consumers advanced |
 | `overflow_next_needed_sentinel` | sequence 0 handled correctly from init |
 | `overflow_zero_required` | verify error + runtime `InvalidConfig` |
