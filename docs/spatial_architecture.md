@@ -92,6 +92,52 @@ DRM splits spatial frames into two distinct layers:
 1. **Compiled Base**: Robot bodies, sensor racks, and joint chains declared in `spaces/`. Their static offsets are precomputed at build time for straight-line fast-path execution.
 2. **Runtime Overlay**: Dynamic world objects, detected obstacles, human tracking markers, and temporary tools created while the robot runs (`space.create("object/42")`). Runtime frames are allocated with generational handles (`SpatialHandle { index, generation }`) so that deleting an object invalidates old references immediately without recycling bugs.
 
+## Runtime Spatial Index
+
+Graph queries resolve *transforms between frames*. Runtime overlay objects introduce a second question: *which tracked objects lie within a radius or region?* DRM Spatial answers proximity queries through two indexes that mirror the dual hierarchy:
+
+- **Sparse Hash Grid (Dynamic Objects)**: Runtime overlay objects are indexed in a uniform grid anchored to a declared frame (`map` or `odom`). Cell size is declared statically, never tuned at runtime.
+- **Compiled Static BVH (Static Environment)**: Static environment frames with extents (walls, shelves, keep-out zones) compile into an axis-aligned bounding-volume hierarchy at build time.
+
+Octrees, k-d trees, and sweep-and-prune are rejected: octrees add split/merge machinery for density the grid already absorbs; k-d trees serve static point sets only; sweep-and-prune serves collision broad-phase engines, not frame graphs.
+
+### Hash Grid for Dynamic Objects
+
+Cells are addressed by integer coordinates hashed into a fixed-capacity open-addressing table. Steady-state indexing and queries perform zero heap allocation; all capacity is declared before deployment:
+
+```yaml
+# packages/perception/spaces/index.drm
+index:
+  anchor: map
+  cell_size: 0.5        # meters
+  max_objects: 4096
+```
+
+Indexed objects carry their existing generational handles (`SpatialHandle { index, generation }`); deleting an object invalidates outstanding handles immediately, inheriting runtime overlay lifetime rules without new machinery.
+
+Re-bucketing uses a declared motion slack — a fat cell envelope per object, adapted from physics-engine fat AABBs. An object re-enters the grid only when it exits its slack envelope; idle and slow-moving objects cost zero work per sample.
+
+### Compiled Static BVH
+
+Static environment geometry compiles into a bounding-volume hierarchy at build time — the spatial analogue of Build-Time Static Collapse. Recalibration swaps affected subtrees live through calibration slots without recompilation or node restarts.
+
+### Ownership and Update Discipline
+
+> **The spatial index is a derived cache, not authoritative state. Authoritative object state remains the versioned dynamic edges; each consumer indexes only its declared spatial reads.**
+
+A node builds indexes exactly over the spaces it declares in `[spatial] read`. Updates ride existing version counters: when a cached dynamic edge advances, affected buckets refresh; unchanged versions touch nothing. No polling, no cross-node index protocol, no central registry.
+
+### Proximity Query Semantics
+
+Queries declare a frame and typed geometry; naked coordinates never enter the index API:
+
+```cpp
+auto hits = space.nearby("map", wrist_pt, 2.0);   // radius query
+auto hits = space.region("map", region_aabb);     // region query
+```
+
+Results return candidate object handles with status metadata. The candidate set is a deliberate superset; callers perform exact distance checks on typed points through the standard conversion path. Proximity evaluates the latest cached state of each indexed space; per-candidate historical state resolves through `at()` with existing history rules. `drm verify` costs worst-case index memory (buckets plus slots at `max_objects`) exactly like channel buffers.
+
 ## Authoring Spaces (`spaces/`)
 
 Spatial identities are defined directly by their filesystem path. For example, `packages/robot/spaces/camera/front.drm` defines the frame `robot/camera/front`.
@@ -160,6 +206,8 @@ DRM provides explicit query operations:
 - **`predict(target, reference, max_horizon)`**: Explicit forward extrapolation. Historical queries (`at`) never silently extrapolate beyond the newest sample.
 - **`delayed_view(offset)`**: An intentionally delayed view trailing real-time by a fixed duration for smooth rendering and remote monitoring displays.
 
+These operations resolve state between named frames. Proximity queries (`nearby`, `region`) form the second query family, executing over the Runtime Spatial Index and returning candidate object handles; per-candidate state is then resolved through the operations above.
+
 History ring buffers are allocated only on upstream dynamic edges that need them, based on declared consumer requirements (such as `history = "2s"`). Static constants are never stored across timestamps. Coordinate conversions evaluate the spatial graph at the historical sample's timestamp rather than current time.
 
 ## Discontinuities and Teleports
@@ -198,6 +246,10 @@ if (camera_res.status == TransformStatus::Valid) {
 
 Point3<CameraFront> local_pt(1.0, 0.0, 0.5);
 auto world_pt = space.convert(local_pt, "map");
+
+for (auto hit : space.nearby("map", world_pt, 2.0)) {
+    auto obj = space.latest(hit.handle, "map");
+}
 ```
 
 In Python:
@@ -205,6 +257,9 @@ In Python:
 res = space.latest("world", "robot/camera/front")
 if res.is_valid():
     pos = res.transform.translation
+
+for hit in space.nearby("map", gripper_pt, radius=2.0):
+    obj = space.latest(hit.handle, "map")
 ```
 
 In C (microcontrollers):

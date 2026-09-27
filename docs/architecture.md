@@ -2,7 +2,7 @@
 
 DRM is a decentralized data middleware for robots. Its primary duty is to move data between programs—such as camera frames, LiDAR point clouds, sensor measurements, and motor commands—without relying on a central broker, master node, or runtime network discovery.
 
-Programs can be written in any language (C, C++, Rust, Python, TypeScript, Go, C#, Zig). Applications declare what topics they send and receive. DRM handles how that data is packaged, transported, and delivered.
+Applications may be written in any language capable of binding DRM's canonical C ABI. DRM's MVP provides first-party bindings for C, C++, Rust, and Python. Applications declare what topics they send and receive; DRM handles how that data is packaged, transported, and delivered.
 
 ## Core Principle
 
@@ -54,7 +54,7 @@ DRM implements this using a generalized bounded history pool, independent reader
 - **The Dual-Layer Architecture: Sequence History and Payload Pool**:
   - **Sequence History Ring**: A circular ring of depth $R$ storing compact sequence handles: `sequence -> {slot_index, generation}`.
   - **Default Triple-Buffering for Latest Data**: For `history: latest` bulk topics ($R = 1$), DRM defaults to a pool of 3 slots (one for the latest completed sample, one for the active publisher write, and one for an active reader borrow). In robotics workloads, multiple concurrent readers (e.g. perception, localization, UI) typically read the same latest frame simultaneously, sharing protection on that single slot.
-  - **Configurable Pool Size (`pool_size: N`)**: When downstream pipelines require holding multiple distinct historical frames concurrently without blocking the publisher, nodes can explicitly configure `pool_size = N` in the manifest. For control loops requiring absolute drop immunity under worst-case consumer delay with $H$ independent borrowers, the manifest configures $H + 2$ slots.
+  - **Configurable Pool Size (`pool_size: N`)**: When downstream pipelines require holding multiple distinct historical frames concurrently without blocking the publisher, nodes can explicitly configure `pool_size = N` in the manifest per the payload pool invariant below. Control loops requiring absolute drop immunity under worst-case consumer delay with $H$ independent borrowers configure $R + H + 1$ slots (for `history: latest`, $H + 2$).
 
 - **Safe Handling of Pool Exhaustion**:
   If readers hold borrows across all available slots and exhaust the pool, DRM preserves real-time guarantees:
@@ -80,7 +80,7 @@ DRM implements this using a generalized bounded history pool, independent reader
   The publisher owns slot reuse decisions without locks or reference counts. When publishing a new frame, it selects a free slot that is neither referenced by an active history entry nor protected by any consumer hazard slot (`no protected[consumer].slot == slot`). It writes the payload, increments the slot generation, updates the sequence history ring, and advances the write sequence with release ordering.
 
 - **Crash Recovery via OS Process Inspection**:
-  If a consumer process crashes while holding a borrow, that slot is not leaked permanently. DRM avoids arbitrary timeout guesses. Instead, dead processes are identified using native operating-system process validation (checking `kill(pid, 0)` or `pidfd` on Linux, and querying process handle signaled state on Windows). Once the OS confirms the process has terminated, its hazard slot is reset to `NONE` and returned to the pool.
+  If a consumer process crashes while holding a borrow, that slot is not leaked permanently. DRM avoids arbitrary timeout guesses and avoids constant polling; reclamation runs on a slow path only when needed: pool exhausted → inspect hazard owner → prove the process dead → reclaim the slot. Process identity uses incarnation-safe operating-system primitives: `pidfd_open()` on Linux (a pidfd refers to one specific process incarnation and polls for termination, immune to PID reuse), a process `HANDLE` with `SYNCHRONIZE` access on Windows (signaled when that process terminates), falling back to PID plus process-start verification where pidfd is unavailable. Once the OS confirms the process has terminated, its hazard slot is reset to `NONE` and returned to the pool.
 
 - **Orthogonal Sample Access (API Operations, Not Declared Modes)**:
   `view`, `snapshot`, and `stream` are not separate delivery modes. Topics define shared bounded history; consumers choose their reader position and memory ownership through standard API calls:
@@ -144,8 +144,14 @@ The governing rules of DRM memory are:
 Rather than managing a general-purpose heap or maintaining separate delivery engines for latest versus sequential data, DRM maps topic storage into a single unified architecture:
 
 - **Small Structured State**: For compact telemetry, motor commands, and control targets that fit within cache lines, storage is allocated as a single slot or small sequence ring where producers update pre-calculated byte offsets without allocation overhead.
-- **Bulk Latest Topics**: For camera frames, point clouds, and high-rate sensor observations (`history: latest`), DRM defaults to a small fixed pool of 3 slots (triple buffer). This provides one slot for the current latest sample, one slot for the in-progress publisher write, and one slot temporarily held by an active reader. Deployments requiring a mathematical guarantee that up to $H$ concurrent consumers holding different historical frames can never cause a drop may explicitly configure worst-case sizing ($H + 2$ slots).
+- **Bulk Latest Topics**: For camera frames, point clouds, and high-rate sensor observations (`history: latest`), DRM defaults to a small fixed pool of 3 slots (triple buffer). This provides one slot for the current latest sample, one slot for the in-progress publisher write, and one slot temporarily held by an active reader. Deployments requiring a mathematical guarantee that up to $H$ concurrent consumers holding different historical frames can never cause a drop may explicitly configure worst-case sizing per the payload pool invariant ($R + H + 1$ slots; for latest topics, $H + 2$).
 - **Sequential Topics and Events**: For ordered streams (`history: N`), DRM allocates a circular sequence handle ring of depth $R$ paired with a fixed payload slot pool. Long-term histories and lossless recording pipelines move immediately into application-managed storage buffers (`drm-record`). If a developer explicitly configures a large history on a multi-megabyte topic (such as 64 frames on an 8 MiB camera topic), `drm verify` reports the full memory cost (512 MiB) directly.
+
+Every storage class obeys one payload pool invariant:
+
+> **`pool_size >= R + 1`**: the pool must retain the $R$ declared history entries plus one slot for the publisher's in-progress write. A pool smaller than this cannot represent the declared retention semantics and fails `drm verify`.
+> **Drop-free guarantee**: publisher progress is guaranteed while up to $H$ consumers hold borrows of samples already aged out of the history ring when `pool_size >= R + H + 1`. For `history: latest` ($R = 1$, $H = 1$), this reproduces the default triple buffer of 3 slots.
+> **Drop-tolerant mode**: deployments accepting loss may configure smaller pools; exhaustion then drops the incoming sample under the pool-exhaustion rules above, and `drm verify` reports the worst-case drop behavior.
 
 Only topics assigned to active nodes on a given compute unit receive backing storage. Unused topics defined in packages consume zero memory at runtime.
 
@@ -161,17 +167,17 @@ Because channels do not compete for memory, DRM completely eliminates:
 
 Multiple fixed channel partitions may be mapped inside a single shared-memory region for operating system efficiency, but offsets are fixed during setup. Sharing an OS mapping does not require sharing a runtime allocator.
 
-### Fixed Slot Pools and Demand-Backed Paging
+### Fixed Slot Pools and Platform Memory Backing
 Bulk topics maintain fixed virtual address layouts, but operating systems need not fully commit physical memory until actually written:
 
-> **Bulk topics use fixed-capacity slot pools. On general-purpose 64-bit operating systems, physical pages are backed on demand as written, letting native OS paging manage memory rather than complex user-space tracking. Hard-real-time targets may explicitly precommit the full worst-case working set.**
+> **Bulk topics use fixed-capacity slot pools. The operating-system backend determines reservation, commitment, paging, and physical residency. DRM never performs per-page allocation or decommitment on the steady-state data path. Hard-real-time targets may explicitly request precommitted, locked memory.**
 
 - **Fixed-Capacity Slot Pools**:
   A topic declaration like `payload: bytes[<=8388608]` establishes the legal maximum payload bound and a fixed virtual address range for each slot. Slot offsets in shared memory (`offset(slot 0)`, `offset(slot 1)`, `offset(slot 2)`) remain static constants. This eliminates pointer relocation, linked chunks, and heap fragmentation.
-- **Demand-Backed Operating System Paging**:
-  On 64-bit operating systems (Linux `/dev/shm` backed by `tmpfs` and standard Windows pagefile-backed shared memory), physical RAM pages are committed by the OS kernel when written. If a camera produces a 3.2 MiB frame into an 8 MiB slot, only the pages touched are committed. DRM does not attempt complex user-space page decommitment or manual high-water mark tracking; it relies on the operating system's native virtual memory subsystem.
+- **Platform-Managed Paging Behavior**:
+  DRM allocates fixed-capacity shared-memory slots and exposes no paging semantics of its own. Reservation, commitment, paging, and physical residency are determined entirely by the operating-system backend (Linux `/dev/shm` on `tmpfs`; Windows pagefile-backed sections, which distinguish reservation, commit charge, and physical residency, and do not support decommitting individual pages of a mapping). DRM performs no per-page allocation, commit tracking, or decommitment on the steady-state data path; a partially filled slot consumes backing storage exactly as the platform decides.
 - **Hard Real-Time Precommitment**:
-  For safety-critical or bare-metal RTOS targets where page faults are forbidden, deployments may declare `precommit: true`. DRM pre-faults and memory-locks (`mlock` on Linux, `VirtualLock` on Windows) the full physical capacity at startup, guaranteeing zero runtime page faults.
+  For targets where page faults are forbidden, deployments may declare `precommit: true`. This requests the platform backend to pre-fault and memory-lock (`mlock` on Linux, `VirtualLock` on Windows) the required working set where supported. A target whose backend cannot guarantee precommitted memory fails `drm verify` rather than silently degrading.
 
 ### Application Allocators for Long-Lived Data
 Shared zero-copy slots are transient borrowed resources. When an application needs to retain samples beyond immediate processing—such as background recording to disk, user interface rendering, or historical training logs—it copies the data (`frame = camera.copy_latest()`) or transfers it to an application-managed buffer.
@@ -179,10 +185,14 @@ Shared zero-copy slots are transient borrowed resources. When an application nee
 Owned samples are managed entirely by the application runtime's native allocator (such as Python heap, NumPy, or C++ standard allocators). DRM shared memory is never used as a general heap or unbounded queue for user applications. The moment a recording pipeline requires persistent disk buffering, that queue belongs inside `drm-record`, keeping `drm-core` channels lean, bounded, and deterministic.
 
 ### Memory Budgets as Build-Time Verification
-Memory limits are verified at compile time rather than managed by a runtime resource scheduler:
+Memory verification is deterministic against a configured deployment budget, not against guesses about operating-system virtual-memory policy:
 
-- **Worst-Case Static Capacity Budget**: During `drm verify`, the DRM toolchain calculates the maximum physical capacity required if every slot in every active channel on a compute unit were filled to its maximum declared bound simultaneously. This worst-case budget is validated against the target machine's hardware memory ceiling before the robot runs.
-- **Advisory Nominal Usage**: DRM reports the estimated nominal working set based on declared payload expectations as an advisory planning metric.
+- **Deployment Memory Budget**: Each compute target declares a configured DRM memory budget in deployment configuration. All static checks compare against this declared budget.
+- **Worst-Case Static Capacity**: During `drm verify`, the DRM toolchain calculates the maximum physical capacity required if every slot in every active channel on a compute unit were filled to its maximum declared bound simultaneously, then:
+  - Hard real-time or `precommit` targets: required locked memory exceeding the declared real-time budget is a hard error.
+  - General targets: worst-case capacity exceeding the configured DRM memory budget is a hard error.
+  - Worst-case capacity exceeding physical RAM while within the configured budget: a strong warning, not inherently invalid — simultaneous maxima may be unreachable and backing may be pageable (Windows commit limits include pagefile capacity, not physical RAM alone).
+  - Estimated nominal working set: informational only.
 - **Runtime Measurement**: Actual resident set size (RSS), page commitment, and cache effects are measured and reported live by `drm-diag`, not guessed by static compilers.
 
 ## Core Language Ecosystem (MVP)
@@ -233,7 +243,7 @@ DRM eliminates universal envelopes by dividing metadata into three distinct laye
 - **Transport Metadata (Boundary Framing Across Physical Links)**:
   Wire-level framing is added only when a message crosses a physical boundary to another device:
   - **Multiplexed Channel ID**: Identifies the stream across shared physical media (such as UDP multicast or serial links).
-  - **Packet Framing**: Adds transport sequence numbers, packet lengths, and fragmentation offsets.
+  - **Packet Framing**: Adds transport sequence numbers and packet lengths. One DRM sample crosses a link as exactly one application frame — a single UDP datagram on best-effort routes, one length-framed record on stream transports, or one bounded serial frame. The router performs no DRM-level fragmentation or reassembly.
   - **Link and End-to-End Integrity**: Uses physical hardware checksums (such as Ethernet frame check sequences or packet CRCs) or optional end-to-end integrity profiles for safety-critical topics requiring end-to-end fault detection.
   When the boundary router receives external frames and imports them into a local shared-memory domain, wire headers are stripped and samples are deposited into local memory in their native format.
 
@@ -372,7 +382,7 @@ DRM operates primarily as a high-performance intra-computer data fabric on Linux
 - **Decoupling Wire Addresses from Topic Handles**:
   Transport-specific identifiers are independent of DRM topic handles. A DRM topic retains its canonical topic identity regardless of transport. Physical transport backends assign network streams or serial channels as part of deployment routing. DRM never conflates generic runtime handles with physical wire addresses, ensuring an arbitrary topic number never dictates network routing or priority.
   - **External Device Interoperability**: When interfacing with external hardware devices or existing protocols with fixed wire IDs (such as an embedded microcontroller streaming over serial or UDP), fixed transport addresses can be declared in deployment route configuration (`[route."motor/command".serial] channel = 2`). This explicitly denotes an external protocol requirement rather than an internal DRM topic identity.
-  - **Decoupled Framing and Packing**: A wire frame does not mandate a one-to-one relationship with a single DRM topic. The router backend can multiplex multiple small DRM topics into a single network packet, or fragment a larger topic payload across multiple sequenced network datagrams.
+  - **Decoupled Framing and Packing**: A wire frame does not mandate a one-to-one relationship with a single DRM topic. The router backend can multiplex multiple small DRM topics into a single network packet. Payloads exceeding a datagram route's bound are rejected at build time and belong on stream transports.
 
 - **Stability Across Normal Builds**:
   Standard builds (`drm build`, `drm dev`) preserve previously assigned numeric handles to maintain binary compatibility and prevent cascading rebuilds across nodes.
@@ -428,7 +438,7 @@ DRM Spatial is an integrated spatial-temporal library within DRM (`drm-spatial`)
 - Consumer nodes declare their history requirements, allocating ring buffers only where required.
 - Dynamic transforms cross physical links only when remote devices demand them.
 
-Core data communication remains DRM's primary immediate focus. For the complete specification, see the dedicated [DRM Spatial Module Architecture](file:///e:/doc/drm/docs/spatial_architecture.md).
+Core data communication remains DRM's primary immediate focus. For the complete specification, see the dedicated [DRM Spatial Module Architecture](spatial_architecture.md).
 
 ## Workspace Layout and Node Declarations
 
@@ -524,9 +534,9 @@ When data travels between separate physical devices, the **`drm-router`** daemon
 - **Framing and Transport Capabilities**:
   - **Single-Packet UDP for Real-Time Telemetry**: To avoid reimplementing custom network stacks, reassembly, or congestion control in the MVP, UDP topics are strictly sized to fit within a single physical network datagram ($\le$ link MTU, typically 1400–1500 bytes). UDP routes provide low-latency, best-effort delivery.
   - **TCP and Dedicated Streams for Large or Reliable Data**: Payloads larger than MTU (such as video frames, point clouds, or recorded logs) and topics requiring guaranteed, in-order delivery across physical devices use standard stream transports (TCP or dedicated bulk sockets) that provide battle-tested fragmentation, retransmission, and flow control.
-  - **Transport Reliability Enforcement**: Reliability is an adapter capability of the physical link. Local shared memory and TCP are reliable; UDP and serial are best-effort. If a node contract declares `reliable` delivery for a remote topic, `drm verify` ensures the route maps to a reliable transport adapter; attempting to assign `reliable` delivery over raw UDP without a reliable transport adapter fails at compile time.
+  - **Transport Reliability Enforcement**: Reliability is an adapter capability of the physical link. Local shared memory and TCP are reliable; UDP and serial are best-effort. `reliable` means the selected transport provides ordered loss recovery while the transport session remains valid; it never means durable, exactly-once, or delivery surviving reconnects or process restarts. If a node contract declares `reliable` delivery for a remote topic, `drm verify` ensures the route maps to a reliable transport adapter; attempting to assign `reliable` delivery over raw UDP without a reliable transport adapter fails at compile time.
 - **Priority Scheduling**: Prioritizes mission-critical safety and actuator commands ahead of telemetry and diagnostics.
-- **Traffic Shaping and Bandwidth Budgeting**: Enforces configured rate limits and token buckets on physical links to prevent unmanaged packet bursts from congesting network interfaces.
+- **Traffic Shaping and Bandwidth Budgeting**: Applies configured token-bucket limits and priorities to DRM-generated traffic on physical links, bounding DRM's contribution to link load and reducing bursts. Traffic from other applications, processes, and computers sharing the medium remains outside DRM's control.
 - **Two-Way Import**: When an external microcontroller or companion computer sends sensor data across a link, the local boundary router receives it and writes it directly into the local shared-memory domain. Local nodes consume it identically to any local topic without knowing it crossed a physical boundary.
 
 Physical link disconnections affect only topics traveling across that specific link. All local processes continue communicating across shared memory with zero interruption.
