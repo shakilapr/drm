@@ -99,7 +99,8 @@ drm/
 │   ├── architecture.md             # normative core specification
 │   ├── spatial_architecture.md     # normative spatial specification
 │   ├── ui-architecture.md          # normative Studio specification
-│   ├── work-plan/                  # milestone execution documents
+│   ├── work-plan/                  # milestone execution documents (weekly plans reference ../algorithms/)
+│   ├── algorithms/                 # canonical algorithm pseudocode, grouped per subsystem (runtime/toolchain/router/bindings/ops/studio/spatial/program)
 │   ├── req/                        # requirement registry (§6.2)
 │   └── adr/                        # decision records (§6.3)
 │
@@ -162,6 +163,7 @@ Artifact rules:
 | R8 | **Platform isolation**: OS-specific code exists only in `drm-core::shm` backends and router transport adapters; no scattered `#[cfg(windows)]`; backend traits frozen in W1 (work-plan risk register). |
 | R9 | **API surface**: `missing_docs` denied; public items document their REQ contract; internals are `pub(crate)` or `#[doc(hidden)]`. |
 | R10 | **Files**: UTF-8, LF, final newline; code ≤100 columns; enforced by `.editorconfig` and formatters. |
+| R11 | **Shared atomics**: shared-memory layouts use explicit fixed-width atomic fields, never aggregate or packed atomics. Activation proves required atomics lock-free. Protocol docs name linearization points and crash states. |
 
 ### 3.2 Rust (`crates/*`, `bindings/rust`)
 - Edition 2024; toolchain pinned via `rust-toolchain.toml`; formatting via rustfmt (`max_width = 100`).

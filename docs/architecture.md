@@ -53,8 +53,8 @@ DRM implements this using a generalized bounded history pool, independent reader
 
 - **The Dual-Layer Architecture: Sequence History and Payload Pool**:
   - **Sequence History Ring**: A circular ring of depth $R$ storing compact sequence handles: `sequence -> {slot_index, generation}`.
-  - **Default Triple-Buffering for Latest Data**: For `history: latest` bulk topics ($R = 1$), DRM defaults to a pool of 3 slots (one for the latest completed sample, one for the active publisher write, and one for an active reader borrow). In robotics workloads, multiple concurrent readers (e.g. perception, localization, UI) typically read the same latest frame simultaneously, sharing protection on that single slot.
-  - **Configurable Pool Size (`pool_size: N`)**: When downstream pipelines require holding multiple distinct historical frames concurrently without blocking the publisher, nodes can explicitly configure `pool_size = N` in the manifest per the payload pool invariant below. Control loops requiring absolute drop immunity under worst-case consumer delay with $H$ independent borrowers configure $R + H + 1$ slots (for `history: latest`, $H + 2$).
+  - **Default Triple-Buffering for Latest Data**: For `@history: latest` bulk topics ($R = 1$), DRM defaults to a pool of 3 slots (one for the latest completed sample, one for the active publisher write, and one for an active reader borrow). In robotics workloads, multiple concurrent readers (e.g. perception, localization, UI) typically read the same latest frame simultaneously, sharing protection on that single slot.
+  - **Configurable Pool Size (`@pool_size: N`)**: When downstream pipelines require holding multiple distinct historical frames concurrently without blocking the publisher, the topic definition can explicitly declare `@pool_size: N` per the payload pool invariant below. Control loops requiring absolute drop immunity under worst-case consumer delay with $H$ independent borrowers configure $R + H + 1$ slots (for `@history: latest`, $H + 2$).
 
 - **Safe Handling of Pool Exhaustion**:
   If readers hold borrows across all available slots and exhaust the pool, DRM preserves real-time guarantees:
@@ -64,20 +64,27 @@ DRM implements this using a generalized bounded history pool, independent reader
 
 - **Reader Cursor vs Hazard Slot**:
   - **Reader Cursor**: Tracks logical sequence progress (*Which sequence should I read next?*). Maintained locally by each consumer.
-  - **Hazard Slot**: Tracks physical slot protection (*Which physical payload slot am I currently reading and therefore must not be recycled?*). Each declared zero-copy consumer has dedicated slots in shared memory: `protected[consumer_id] = {slot, generation}` or `NONE`.
+  - **Hazard Slot**: Tracks physical slot protection (*Which physical payload slot am I currently reading and therefore must not be recycled?*). Each declared zero-copy consumer has one dedicated, naturally aligned hazard word in shared memory: `protected[consumer_id] = slot` or `NONE`. The word is a single atomic so protection can never be observed half-written; the slot generation used for ABA rejection lives in the atomically published ring entry, not in the hazard word. A consumer endpoint has at most one outstanding borrow (one hazard word in use at a time).
   - If a consumer continues borrowing a sample after its sequence has aged out of the $R$-depth history ring, that physical slot remains protected against reuse. The publisher continues advancing using the remaining free slots in the pool.
 
 - **Lockless Consumer Acquisition Protocol**:
   1. The consumer reads the desired sequence handle from the topic sequence ring: `entry1 = history[target_seq % R]`.
-  2. The consumer publishes its protection intent: `protected[my_id] = entry1`.
+  2. The consumer publishes its protection intent: `protected[my_id] = entry1.slot`.
   3. The consumer rereads the sequence handle: `entry2 = history[target_seq % R]`.
   4. If `entry1 != entry2` or `entry2.sequence != target_seq`, the publisher rolled the slot during acquisition. The consumer clears its protection (`protected[my_id] = NONE`) and handles the sequence change or retries.
   5. If `entry1 == entry2`, the slot is safely locked against reuse. The consumer processes the immutable payload directly from shared memory.
   6. Upon leaving the borrow scope, the consumer clears its protection: `protected[my_id] = NONE`.
   The generation counter prevents ABA hazards when slot numbers wrap around.
 
+  Steps 1–4 and the publisher's slot-retirement/reclamation scan use **sequentially consistent (SeqCst)** ordering for the control handshake, so the reader's protection publication and the publisher's retirement cannot mutually miss each other (a Release/Acquire pair does not forbid this publication/reclamation race). Ordinary payload writes and reads remain Release/Acquire: the payload is published with a release commit and read after an acquire. A consumer endpoint has **at most one outstanding borrow**; a second concurrent borrow on the same endpoint is rejected (`Busy`) rather than overwriting its own hazard slot. The slot generation counter is 64-bit.
+
+  Each ring entry is a naturally aligned versioned cell, not a language-specific aggregate atomic. Its sequence, slot, and 64-bit generation fields are atomic. A surrounding atomic stamp is odd while the single publisher updates the cell and even when stable. Readers accept a snapshot only when two stamp reads match and are even. SeqCst snapshot reads are used by the hazard handshake; ordinary lookup may use acquire ordering. Activation refuses platforms where the required 32-bit and 64-bit shared atomics are not lock-free.
+
 - **Publisher Slot Selection**:
-  The publisher owns slot reuse decisions without locks or reference counts. When publishing a new frame, it selects a free slot that is neither referenced by an active history entry nor protected by any consumer hazard slot (`no protected[consumer].slot == slot`). It writes the payload, increments the slot generation, updates the sequence history ring, and advances the write sequence with release ordering.
+  The publisher owns slot reuse decisions without locks or reference counts. After acquiring the per-topic non-blocking publish guard, the current history is stable because there is one writer. It selects a slot that is not referenced by that history and is not protected by any consumer hazard word. A slot leaves the referenced set when an earlier commit replaces its ring entry; before later reuse, the publisher scans every hazard word with SeqCst ordering. A reader that observed the old entry either published protection before that scan, causing the publisher to skip the slot, or publishes protection afterward and rejects the changed entry on its SeqCst reread before touching payload bytes. The publisher then writes the selected payload, increments its 64-bit generation, commits the versioned ring cell, and release-advances the write sequence.
+
+- **Consumer Registration and Reuse**:
+  Consumer records are fixed at activation and claimed without allocation. Each record has a registration state, monotonically increasing registration generation, incarnation-safe process identity, and a hazard word packing `{registration_generation, slot | NONE}`. Claiming or recycling a record passes through `CLAIMING`; identity and an empty hazard are published before `ACTIVE`. Clean close requires no outstanding borrow. Dead-owner takeover and hazard reclamation first prove the exact recorded process incarnation dead, then use compare-and-swap against the complete observed generation-bearing control word. A stale reclaimer can therefore never clear a replacement owner's hazard.
 
 - **Crash Recovery via OS Process Inspection**:
   If a consumer process crashes while holding a borrow, that slot is not leaked permanently. DRM avoids arbitrary timeout guesses and avoids constant polling; reclamation runs on a slow path only when needed: pool exhausted → inspect hazard owner → prove the owning process incarnation dead → reclaim the slot. Hazard owners carry an incarnation-safe process identity (`pid` plus process start identity) stored at consumer registration, so PID reuse at worst delays reclamation — it can never cause unsafe slot reuse. Once the platform backend proves the owning incarnation no longer exists (pidfd termination polling on Linux, signaled process handles on Windows), the hazard slot is reset to `NONE` and returned to the pool.
@@ -114,16 +121,18 @@ Decentralized shared-memory middlewares often fail when attempting to manage com
 - **3. Publisher Epoch (Runtime Shared State)**:
   Inside a deployment namespace, each topic segment maintains an atomic `publisher_epoch` counter in shared memory.
   - When a publisher starts or restarts within the same deployment, it reopens the compatible existing segment, verifies the header descriptor, and increments the epoch (for example, from 7 to 8).
+  - Before publishing its first new sample, the restarted publisher advances a shared `first_valid_seq` watermark past every sequence from the previous run. The addressable window is `max(write_seq - R, first_valid_seq)`, so samples of the previous run are never addressable as current even though sequence numbering continues monotonically for gap accounting.
   - Consumers observe the epoch change and reset local reader state, ensuring samples from the previous publisher run are never misinterpreted as observations from the new run.
 
 - **Single Publisher per Topic (Single-Writer, Multiple-Reader)**:
   - Within a DRM domain, every topic has exactly one publisher node. Multiple nodes publishing to the same canonical topic is disallowed and rejected at build time by `drm verify`.
   - Single-writer authority guarantees lockless sequence integrity, eliminates multi-writer arbitration in shared memory, ensures unambiguous data provenance, and makes routing fully deterministic.
+  - **One in-progress write per topic**: a single publisher node may use multiple threads, but only one publish may be in progress at a time. A non-blocking `Busy` guard rejects a concurrent publish (`Status::Busy`) rather than blocking or corrupting the in-progress slot. This is what makes the payload-pool invariant `pool_size >= R + H + 1` (one in-progress write) sound.
   - When an application requires converging multiple data sources (such as dual joysticks or alternate planning nodes), sources publish to distinct topics (`control/target_teleop`, `control/target_nav`). An explicit multiplexer node selects the active input and publishes the authoritative stream (`control/target`).
 
 - **Segment Creation and Writer Authority**:
   - The single topic publisher creates the shared-memory segment atomically (`O_CREAT | O_EXCL` or equivalent). Consumers wait and open existing segments; consumers never create topic memory.
-  - Write authority is enforced using an operating-system-backed exclusive lock (`/drm/<deployment>/<topic>.publisher.lock`). If the publishing process terminates, the operating system kernel automatically releases the lock, allowing a restarted publisher to acquire write authority without heartbeat arbitration or dead-process takeover protocols.
+  - Write authority is enforced using an operating-system-backed exclusive lock (`/run/drm/<deployment_id>/<topic>.publisher.lock`). If the publishing process terminates, the operating system kernel automatically releases the lock, allowing a restarted publisher to acquire write authority without heartbeat arbitration or dead-process takeover protocols.
 
 - **Data Freshness vs Stored Bytes**:
   When a publisher crashes, existing consumers can finish reading their currently borrowed samples safely, but DRM does not treat the last completed sample as indefinitely current. Streams transition to `STALE` or `OFFLINE` based on timing contracts. Upon restart, the stream state resets to `NO_CURRENT_SAMPLE` until the restarted publisher produces its first complete sample under the new epoch.
@@ -144,13 +153,13 @@ The governing rules of DRM memory are:
 Rather than managing a general-purpose heap or maintaining separate delivery engines for latest versus sequential data, DRM maps topic storage into a single unified architecture:
 
 - **Small Structured State**: For compact telemetry, motor commands, and control targets that fit within cache lines, storage is allocated as a single slot or small sequence ring where producers update pre-calculated byte offsets without allocation overhead.
-- **Bulk Latest Topics**: For camera frames, point clouds, and high-rate sensor observations (`history: latest`), DRM defaults to a small fixed pool of 3 slots (triple buffer). This provides one slot for the current latest sample, one slot for the in-progress publisher write, and one slot temporarily held by an active reader. Deployments requiring a mathematical guarantee that up to $H$ concurrent consumers holding different historical frames can never cause a drop may explicitly configure worst-case sizing per the payload pool invariant ($R + H + 1$ slots; for latest topics, $H + 2$).
-- **Sequential Topics and Events**: For ordered streams (`history: N`), DRM allocates a circular sequence handle ring of depth $R$ paired with a fixed payload slot pool. Long-term histories and lossless recording pipelines move immediately into application-managed storage buffers (`drm-record`). If a developer explicitly configures a large history on a multi-megabyte topic (such as 64 frames on an 8 MiB camera topic), `drm verify` reports the full memory cost (512 MiB) directly.
+- **Bulk Latest Topics**: For camera frames, point clouds, and high-rate sensor observations (`@history: latest`), DRM defaults to a small fixed pool of 3 slots (triple buffer). This provides one slot for the current latest sample, one slot for the in-progress publisher write, and one slot temporarily held by an active reader. Deployments requiring a mathematical guarantee that up to $H$ concurrent consumers holding different historical frames can never cause a drop may explicitly configure worst-case sizing per the payload pool invariant ($R + H + 1$ slots; for latest topics, $H + 2$).
+- **Sequential Topics and Events**: For ordered streams (`@history: N`), DRM allocates a circular sequence handle ring of depth $R$ paired with a fixed payload slot pool. Long-term histories and lossless recording pipelines move immediately into application-managed storage buffers (`drm-record`). If a developer explicitly configures a large history on a multi-megabyte topic (such as 64 frames on an 8 MiB camera topic), `drm verify` reports the full memory cost (512 MiB) directly.
 
 Every storage class obeys one payload pool invariant:
 
 > **`pool_size >= R + 1`**: the pool must retain the $R$ declared history entries plus one slot for the publisher's in-progress write. A pool smaller than this cannot represent the declared retention semantics and fails `drm verify`.
-> **Drop-free guarantee**: publisher progress is guaranteed while up to $H$ consumers hold borrows of samples already aged out of the history ring when `pool_size >= R + H + 1`. For `history: latest` ($R = 1$, $H = 1$), this reproduces the default triple buffer of 3 slots.
+> **Drop-free guarantee**: publisher progress is guaranteed while up to $H$ consumers hold borrows of samples already aged out of the history ring when `pool_size >= R + H + 1`. For `@history: latest` ($R = 1$, $H = 1$), this reproduces the default triple buffer of 3 slots.
 
 Only topics assigned to active nodes on a given compute unit receive backing storage. Unused topics defined in packages consume zero memory at runtime.
 
@@ -188,7 +197,7 @@ Memory verification is deterministic against a configured deployment budget, not
 
 - **Deployment Memory Budget**: Each compute target declares a configured DRM memory budget in deployment configuration. All static checks compare against this declared budget.
 - **Worst-Case Static Capacity**: During `drm verify`, the DRM toolchain calculates the maximum physical capacity required if every slot in every active channel on a compute unit were filled to its maximum declared bound simultaneously, then:
-  - Hard real-time or `precommit` targets: required locked memory exceeding the declared real-time budget is a hard error.
+  - Hard real-time or `precommit` targets: required locked memory exceeding the declared real-time budget is a hard error. Lockable accounting is per channel (the channel's `precommit` flag), not gated on a compute-level flag, and is checked both compute-wide and **per process** — each hard-real-time node must fit its own mapped, locked working set, not merely the aggregate shared capacity. Router-owned lane buffers are counted against the same compute budget. All capacity arithmetic is overflow-checked (`CapacityOverflow`), never allowed to wrap into a passing value.
   - General targets: worst-case capacity exceeding the configured DRM memory budget is a hard error.
   - Worst-case capacity exceeding physical RAM while within the configured budget: a strong warning, not inherently invalid — simultaneous maxima may be unreachable and backing may be pageable (Windows commit limits include pagefile capacity, not physical RAM alone).
   - Estimated nominal working set: informational only.
@@ -201,9 +210,9 @@ In systems like ROS 2, each language requires a dedicated client library (`rclcp
 DRM eliminates runtime serialization by generating thin, native bindings from a single canonical C-ABI specification (`drm.h`). For the initial MVP, DRM provides first-class support for four foundational robotics languages:
 
 - **C (ISO C99/C11)**: Pure, zero-allocation C structs and direct functions (`drm_publish_control_target`, `drm_read_control_target`). Built for microcontrollers, bare-metal chips, real-time operating systems (FreeRTOS, Zephyr), and safety-critical motor controllers.
-- **C++ (C++17/20)**: Type-safe templates, RAII memory managers, and zero-copy pointer views without runtime overhead.
+- **C++ (C++17/20)**: Type-safe templates, RAII memory managers, and zero-copy byte-backed accessor views (no reinterpret-cast of shared bytes) without runtime overhead.
 - **Rust**: Safe zero-copy reference wrappers, compile-time thread safety, and lock-free ring buffer access.
-- **Python**: Safe default access returns an owned copy (`frame = camera.copy_latest()`, or shorthand `camera.latest()`). Explicit zero-copy uses scoped borrows (`with camera.borrow_latest() as frame: detect(frame.numpy())`), providing direct NumPy buffer compatibility without allowing unmanaged references to hold shared memory slots indefinitely.
+- **Python**: All reads return owned copies (`frame = camera.copy_latest()`, or shorthand `camera.latest()`). `.numpy()` always produces an owned array, never a view onto shared memory, so no return value can escape a scope and retain a slot. Explicit in-place zero-copy borrows remain available for raw byte access within a scope (`with camera.borrow_latest() as frame: detect(frame.bytes())`); the borrowed bytes are valid only inside the block.
 
 All other languages interface directly through the canonical C-ABI header (`drm.h`) or community-maintained bindings. DRM defines a language-neutral canonical binary layout determining the bytes, and exposes runtime access through a stable C ABI determining how foreign languages call `drm-core`; any language with foreign function interface (FFI) or raw pointer access can connect to DRM without a custom runtime engine. Because dynamic language runtimes manage their own internal heap objects and garbage collection, DRM guarantees that its native payload data path performs no per-message heap allocation in steady state.
 
@@ -230,7 +239,8 @@ DRM eliminates universal envelopes by dividing metadata into three distinct laye
   - Fixed payload size or maximum capacity
   - Queue depth and delivery policy
   - Channel epoch
-  When a node attaches to a topic, it compares its expected schema hash against the channel descriptor once. After a successful attachment, steady-state messages are processed without checking schema hashes. If a topic definition changes or a publisher restarts, the channel epoch advances, triggering re-validation.
+  When a node attaches to a topic, it compares its complete expected descriptor and layout hash against the channel descriptor once. After successful attachment, steady-state messages do not repeat immutable compatibility checks. A topic definition change creates a new deployment namespace and requires a new attachment. A publisher restart changes only the publisher epoch; consumers reset cursor and freshness state, but do not revalidate immutable descriptor fields.
+  Concurrency-control state (epoch, sequence watermarks, counters) lives in a naturally aligned control block with static offsets. Atomic fields are never placed in a packed layout; the descriptor and control block use explicit alignment with compile-time offset assertions.
 
 - **Sample Metadata (Varies Per Sample or Drives Concurrency)**:
   Individual shared-memory samples contain only information that differs per sample or is required for lockless synchronization:
@@ -241,8 +251,8 @@ DRM eliminates universal envelopes by dividing metadata into three distinct laye
 
 - **Transport Metadata (Boundary Framing Across Physical Links)**:
   Wire-level framing is added only when a message crosses a physical boundary to another device:
-  - **Multiplexed Channel ID**: Identifies the stream across shared physical media (such as UDP multicast or serial links).
-  - **Packet Framing**: Adds transport sequence numbers and packet lengths. One DRM sample crosses a link as exactly one application frame — a single UDP datagram on best-effort routes, one length-framed record on stream transports, or one bounded serial frame. The router performs no DRM-level fragmentation or reassembly.
+  - **Multiplexed Channel ID**: Identifies the stream across shared physical media (such as UDP multicast or serial links); it is a transport identifier from the route binding, never the runtime topic handle.
+  - **Packet Framing**: Every frame carries `{wire_channel_id, stream_epoch, source_seq, payload_len}` — a transport stream identity, the source stream epoch, the source sequence, and the payload length. The epoch and source sequence let a best-effort receiver reject reordered/duplicated older frames and reset on a source restart, so an out-of-order datagram can never become the new "latest". One DRM sample crosses a link as exactly one application frame — a single UDP datagram on best-effort routes, one length-framed record on stream transports, or one COBS/HDLC-delimited, length-checked, CRC-protected serial frame (raw UART is not a reliable byte stream). The router performs no DRM-level fragmentation or reassembly.
   - **Link and End-to-End Integrity**: Uses physical hardware checksums (such as Ethernet frame check sequences or packet CRCs) or optional end-to-end integrity profiles for safety-critical topics requiring end-to-end fault detection.
   When the boundary router receives external frames and imports them into a local shared-memory domain, wire headers are stripped and samples are deposited into local memory in their native format.
 
@@ -261,8 +271,8 @@ DRM organizes delivery around five orthogonal questions:
 
 ### 1. Retention: What Does the Topic Retain?
 Topic definitions declare history retention depth directly:
-- `history: 1` (or `history: latest`): The topic retains only the most recently published sample.
-- `history: N` (such as `history: 32`): The topic retains the last $N$ publication sequences in a circular handle ring.
+- `@history: 1` (or `@history: latest`): The topic retains only the most recently published sample.
+- `@history: N` (such as `@history: 32`): The topic retains the last $N$ publication sequences in a circular handle ring.
 
 Queue semantics—such as consuming or popping items—do not exist at the middleware layer. The topic maintains a shared bounded sequence history. Sizing is known statically before execution.
 
@@ -395,26 +405,19 @@ DRM separates communication requirements from optional application validation:
 - **Structural Bounds**: Define the maximum legal limits of a topic payload:
   ```yaml
   name: string[32]
-  samples: f32[16]      # Fixed-size array
-  history: f32[<=16]    # Bounded variable array (up to 16 items)
+  samples: f32[16]       # Fixed-size array
+  readings: f32[<=16]    # Bounded variable array (up to 16 items)
   ```
   Structural bounds are used for schema validation, wire encoding limits, network link feasibility analysis, and hard-real-time pool sizing. A declared upper bound does not mandate that a general-purpose workstation must eagerly reserve the entire maximum theoretical capacity at process startup. On an MCU or hard-real-time node, bounds translate into fixed pre-allocated memory; on general-purpose host workstations, memory pools are allocated and reused based on configured budgets and active demand up to the declared bound.
-- **Semantic Annotations**: Optional metadata used for documentation, developer tooling, and UI generation:
+- **Semantic Annotations**: Optional metadata used for documentation, developer tooling, and UI generation, written inline in braces:
   ```yaml
-  speed:
-    type: f32
-    range: [0, 40]
-    unit: m/s
+  speed: f32 {range: [0, 40], unit: m/s}
   ```
   Semantic annotations do not alter default binary encoding. Standard types remain uncompressed (`f32` stays a 4-byte IEEE float) unless explicit quantization is specifically requested for a constrained bus under an `encoding:` rule.
 
-- **Enums**:
+- **Enums**: declared inline; the underlying runtime tag is `u8` (max 256 variants):
   ```yaml
-  mode:
-    enum:
-      - disabled
-      - manual
-      - autonomous
+  mode: enum { disabled, manual, autonomous }
   ```
 
 - **Two-Plane Architecture (Data Plane vs Observability Plane)**:
@@ -516,7 +519,9 @@ For each topic, DRM traces the graph from publisher placement to consumer placem
   deny."camera/front" = ["wifi"]
   force."diagnostics" = "ethernet"
   ```
+- **Forwarding Tree per Topic**: A topic with several consumers is not one route but a forwarding plan: the publisher's compute is the source, and each reached compute carries a rule `{ingress link, egress links, local delivery}`. This expresses 1→N fan-out, local and remote consumers on the same compute, and multi-hop forwarding in one structure. Path classification is polynomial (connectivity/bridge analysis), never simple-path enumeration.
 - **Ambiguity Detection**: If multiple valid physical routes exist without an explicit preference, `drm verify` reports an ambiguous route error at build time rather than silently choosing a path.
+- **Explicit Override Conflicts**: Contradictory explicit instructions (`force` and `deny` naming the same link, or multiple `force` routes for one topic) are a verify error (`ConflictingRouteOverride`). Explicit constraints are never resolved by precedence; the selection pipeline is config-validity → `deny` → `force` → `prefer` → automatic.
 - **External Endpoints**: When sending data to or receiving data from unmanaged third-party devices (such as an embedded microcontroller streaming over serial or an external telemetry tool), the remote device is modeled explicitly as an external endpoint:
   ```toml
   [external.dashboard]
@@ -533,6 +538,7 @@ When data travels between separate physical devices, the **`drm-router`** daemon
 - **Framing and Transport Capabilities**:
   - **Single-Packet UDP for Real-Time Telemetry**: To avoid reimplementing custom network stacks, reassembly, or congestion control in the MVP, UDP routes carry one DRM sample per datagram under a configured `max_datagram_payload` bound — the path MTU minus IP and UDP headers (closed-LAN deployments typically auto-suggest 1400; tunneled, VPN, or routed networks configure it explicitly). DRM performs no IP fragmentation and builds no path-MTU discovery subsystem. UDP routes provide low-latency, best-effort delivery.
   - **TCP and Dedicated Streams for Large or Reliable Data**: Payloads exceeding a datagram route's bound (such as video frames, point clouds, or recorded logs) and topics requiring guaranteed, in-order delivery across physical devices use standard stream transports (TCP or dedicated bulk sockets) that provide battle-tested fragmentation, retransmission, and flow control.
+  - **Serial Framing for Raw Links**: Raw serial (UART) is a byte stream with no framing, so it never reuses the TCP length-record algorithm. Serial frames use a delimiter plus COBS/HDLC-style encoding, an explicit length, and a CRC, so a dropped or corrupted byte resynchronizes at the next delimiter instead of desynchronizing the receiver indefinitely.
   - **Ordered-Stream Traffic Classes**: A reliable ordered stream cannot reorder bytes once queued; middleware priority applies only within router queues, before data enters the stream. Topics with materially different latency classes must never share one ordered transport stream: latency-critical reliable traffic (control, status, events) uses a realtime lane per peer, bulk reliable traffic (maps, frames, files) uses a separate bulk lane — lanes per peer, never a socket per topic. Bulk bytes can therefore never queue ahead of critical reliable control messages.
   - **Transport Reliability Enforcement**: Reliability is an adapter capability of the physical link. Local shared memory and TCP are reliable; UDP and serial are best-effort. `reliable` means the selected transport provides ordered loss recovery while the transport session remains valid; it never means durable, exactly-once, or delivery surviving reconnects or process restarts. If a node contract declares `reliable` delivery for a remote topic, `drm verify` ensures the route maps to a reliable transport adapter; attempting to assign `reliable` delivery over raw UDP without a reliable transport adapter fails at compile time.
 - **Priority Scheduling**: Prioritizes mission-critical safety and actuator commands ahead of telemetry and diagnostics.
@@ -708,17 +714,20 @@ target.publish()
 # Safe owned copy
 status = topics.robot.status.latest()
 
-# Scoped zero-copy borrow
+# Scoped in-place zero-copy borrow — borrowed bytes valid only inside the block
 with topics.sensor.camera.borrow_latest() as frame:
-    detect(frame.numpy())
+    detect(frame.bytes())
+
+# numpy() always returns an owned copy, never a shared-memory view
+frame = topics.robot.status.latest().numpy()
 ```
 
 In C++ (`controller`):
 ```cpp
-// Scoped zero-copy borrow
+// Scoped zero-copy borrow; generated types are byte-backed views with accessors (no struct cast)
 if (auto target = drm::control::target::borrow_latest()) {
-    float speed = target->speed;
-    float steering = target->steering;
+    float speed = target->speed();
+    float steering = target->steering();
 }
 
 // Or an owned copy
@@ -750,7 +759,7 @@ The generated API knows the canonical topic path, data type, binary layout, and 
 Because runtime has no master node or discovery registry, debugging tools (`drm echo`, `drm hz`, `drm log`) use the generated deployment metadata in `.drm/deploy/deployment.json` to inspect the running system:
 
 - Tools read topic definitions, binary structures, and shared memory names directly from deployment metadata.
-- Tools attach to shared memory as read-only observers without altering system behavior or adding network overhead.
+- Tools attach as non-publishing observers. Payload bytes are read-only by contract; the mapping permits writes only so the tool can claim its declared consumer record and update its own hazard word.
 - When inspecting bulk topics, diagnostic tools take a momentary borrow (`borrow_latest()`), copy the sample to private memory, and release the hazard slot immediately. They never hold prolonged shared memory borrows, ensuring developer tools cannot freeze production robot buffers.
 - Developers can view data rates, latency, and memory utilization live without deploying extra daemon processes.
 
