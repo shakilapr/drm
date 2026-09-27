@@ -49,7 +49,7 @@ pub struct Session { deploy_id: DeploymentId, active_guard: LockHandle }
 ```rust
 // ---- Startup (both roles) ----
 fn node_startup(ctx: &AttachContext, deploy: &DeploymentConfig, node: NodeName) -> Result<Session, Status> {
- let expected = deploy.fingerprint_expectations.get(node)
+ let expected = deploy.fingerprint_expectations.get(&node)
  .ok_or(NotFound)?;
  if ctx.compiled != *expected { return Err(WrongAbi); } // I-DP1: refuse immediately
  // Hold the shared active lock for the node's whole lifetime; the guard is stored in Session

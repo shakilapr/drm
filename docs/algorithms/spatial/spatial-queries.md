@@ -32,33 +32,38 @@ pub enum PlanStep {
     DynamicEdge { edge: EdgeId },               // runtime cache read (version-checked)
     Multiply,                                   // fold two top-of-stack transforms
 }
-pub struct TransformPlan { steps: Vec<PlanStep> }   // straight-line; zero graph traversal at runtime
+pub struct TransformPlan { steps: &'static [PlanStep], max_stack: u16 } // generated fixed artifact
+
+pub struct AtomicTransformSlot {
+    version: AtomicU64,                 // odd while writing, even when stable
+    fields: [AtomicU64; 7],             // f64 bits: translation + quaternion
+    sample_ns: AtomicU64,
+    flags: AtomicU32,
+}
 
 // Calibration slot (shared memory; updated live — spatial_architecture §Calibration Without Recompilation)
 pub struct CalibrationSlot {
-    version: AtomicU32,                // bump on update ⇒ dependent caches invalidate live
-    correction: Transform3,            // Correction factor
-    effective_ns: u64,                 // effective timestamp of the correction
+    value: AtomicTransformSlot,
+    history: Option<FixedTimeRing>,     // generated only for declared historical reads
 }
 
 // Versioned dynamic edge in shared memory (authoritative state)
 pub struct DynamicEdge {
-    version: AtomicU32,
-    xform: Transform3,
-    sample_ns: TimePoint,              // TimePoint { value_ns, clock_domain }
-    discontinuous: bool,               // discontinuity flag (teleport/relocalize/reparent boundary)
+    value: AtomicTransformSlot,
+    history: Option<FixedTimeRing>,
 }
 
 // Per-process cache over declared [spatial] reads
 pub struct PlanCache {
     plan: *const TransformPlan,        // compiled plan (static)
     cached: Transform3,
-    cached_version_stamp: u64,         // tuple of observed edge versions + calibration versions
+    observed_versions: [u64; MAX_PLAN_INPUTS], // exact generated vector; no hash collision
+    input_count: u16,
 }
 
 // Time-based history — allocated ONLY on dynamic edges with declared consumer requirements
 pub struct TimeHistory {
-    ring: RingBuf<Stamped<Transform3>>,     // capacity = ceil(duration × expected_rate)
+    ring: FixedRing<Stamped<Transform3>>,   // allocated at activation
     duration_ns: u64,                       // e.g. history = "2s" from consumer declarations
 }
 
@@ -77,10 +82,10 @@ pub enum ReparentMode { PreserveWorld, PreserveLocal, Snap }
 ## Invariants
 
 - **I-Q1 PlanExecution**: runtime query = execute the compiled plan (multiply steps + cache reads); graph traversal happens only at compile time. Test: `spatial_plan_execution` (no traversal instrumented).
-- **I-Q2 CacheVersionShortcircuit**: version stamp unchanged ⇒ cached transform returned with zero multiplications; any version/calibration change ⇒ plan re-executes. Test: `spatial_cache_shortcircuit`.
+- **I-Q2 CacheVersionShortcircuit**: exact input-version vector unchanged ⇒ cached transform with zero multiplications; any input change ⇒ re-execute. Test: `spatial_cache_shortcircuit`.
 - **I-Q3 LatestNewest**: `latest(target, reference)` returns the newest valid state currently held. Test: `spatial_query_latest`.
 - **I-Q4 AtExactOrInterpolated**: `at(t)` returns exact sample at t; otherwise linear translation + SLERP rotation between bracketing samples; **never silently extrapolates beyond the newest sample** (`OUT_OF_HISTORY`). Test: `spatial_query_at`.
-- **I-Q5 PredictExplicitOnly**: forward extrapolation exists only in `predict`, bounded by `max_horizon`; beyond ⇒ `EXTRAPOLATED` status. Test: `spatial_query_predict`.
+- **I-Q5 PredictExplicitOnly**: only `predict` extrapolates; within the declared horizon it returns `EXTRAPOLATED`, beyond it returns `OUT_OF_HISTORY`. Test: `spatial_query_predict`.
 - **I-Q6 DelayedViewBound**: `delayed_view(offset)` resolves `now − offset` through `at`; offset beyond retained history ⇒ `OUT_OF_HISTORY`. Test: `spatial_delayed_view`.
 - **I-Q7 DiscontinuityGuard**: samples can be flagged discontinuous; interpolation never spans a flagged boundary — queries spanning it return `DISCONTINUOUS`, never an invalid intermediate path. Test: `spatial_interp_guard`.
 - **I-Q8 ReparentTemporal**: reparent at t₁ leaves history before t₁ untouched; earlier queries traverse the original hierarchy (plan versions are time-scoped). Test: `spatial_reparent_temporal`.
@@ -89,6 +94,8 @@ pub enum ReparentMode { PreserveWorld, PreserveLocal, Snap }
 - **I-Q11 CalibrationLive**: calibration-slot update invalidates dependent caches live — no recompilation, no node restart; Effective = Nominal × Correction composed via the plan's `CalibrationSlot` step. Test: `spatial_calibration_live`.
 - **I-Q12 GenerationalEdges**: overlay edge handles generational; delete invalidates immediately; single-writer per dynamic edge. Test: `spatial_generational_edges`.
 - **I-Q13 HistoryTimeSized**: history rings exist only where consumers declared requirements; capacity from duration × rate; static constants never stored across timestamps. Test: `spatial_history_sizing`.
+- **I-Q14 CoherentSlots**: transform fields are fixed-width atomics guarded by an odd/even version; bounded snapshot failure returns `ConcurrentUpdate`, never torn geometry. Test: `spatial_slot_coherence`.
+- **I-Q15 ZeroAllocQuery**: latest/at/predict/delayed execution uses generated plans, fixed stacks, and preallocated histories; no query-time heap allocation. Test: `spatial_query_zero_alloc`.
 
 ## Functions
 
@@ -110,13 +117,13 @@ fn compile_plan(tree: &SpaceTree, target: FrameId, reference: FrameId) -> Result
 
 // ---- Runtime execution ----
 fn execute(plan: &TransformPlan, caches: &PlanCaches) -> Result<Transform3, Status> {
-    let mut stack = Vec::with_capacity(4);                  // bounded by plan depth (static)
+    let mut stack = FixedStack::<Transform3, MAX_PLAN_DEPTH>::new();
     for step in &plan.steps {
         match step {
             Constant(t) => stack.push(*t),
             CalibrationSlot { nominal, slot } => {
-                let c = slot.load();                        // version-checked read
-                stack.push(c.correction * nominal);         // Effective = Correction × Nominal
+                let c = slot.load_coherent_bounded()?;      // matching even version reads
+                stack.push(nominal * c.correction);         // Effective = Nominal × Correction
             }
             DynamicEdge { edge } => stack.push(caches.edge_value(edge)?),   // version-checked cache
             Multiply => { let b = stack.pop()?; let a = stack.pop()?; stack.push(a * b); }
@@ -125,30 +132,34 @@ fn execute(plan: &TransformPlan, caches: &PlanCaches) -> Result<Transform3, Stat
     Ok(stack.pop()?)
 }
 
-fn query(&self, target: FrameId, reference: FrameId, t: QueryTime) -> TransformResult {
+fn latest(&mut self, target: FrameId, reference: FrameId) -> TransformResult {
     let plan = self.plan_for(target, reference);            // compiled once per (target, reference)
-    if self.cache.fresh(plan.versions(), self.calibration_versions()) {
+    let versions = self.read_exact_versions_bounded(plan)?;
+    if self.cache.fresh(&versions) {
         return result(Valid, self.cache.cached);            // I-Q2 shortcircuit
     }
-    let x = execute(plan, &self.caches);
+    let x = execute(plan, &self.caches)?;
     self.cache.update(x, versions);
-    classify(x, t)                                          // VALID | STALE | DISCONTINUOUS | CLOCK_UNRESOLVED
+    classify_latest(x)
 }
 
 // ---- Interpolation (at) ----
 fn at(&self, target: FrameId, reference: FrameId, t_ns: TimePoint) -> TransformResult {
-    let hist = self.history_for(target, reference)?;        // time-based ring (I-Q13)
-    let (s0, s1) = match hist.bracket(t_ns)? {
-        Exact(s) => return result(Valid, s),
-        Bracket(a, b) => (a, b),
-        None => return result(OutOfHistory, None),          // never silently extrapolate (I-Q4)
-    };
-    if s0.discontinuous || s1.discontinuous || s0.sample_ns == boundary_of_jump {
-        return result(Discontinuous, None);                 // I-Q7: never interpolate across the jump
-    }
-    let tp = map_timestamp_pair(s0.sample, s1.sample, t_ns)?;   // CLOCK_UNRESOLVED possible (I-Q spatial-core)
-    result(Valid, interp_linear_translation(s0, s1, tp)
-              .with_rotation(slerp(s0.rotation, s1.rotation, tp)))
+    let plan = self.time_scoped_plan(target, reference, t_ns)?;
+    // Each dynamic edge brackets t independently; calibration uses the latest effective value <= t.
+    // A missing bracket/value returns OutOfHistory. Any crossed discontinuity returns Discontinuous.
+    execute_at(plan, t_ns, |edge| edge.history()?.interpolate_guarded(t_ns),
+               |slot| slot.history_value_at(t_ns))
+}
+
+fn delayed_view(&self, target: FrameId, reference: FrameId, offset_ns: u64) -> TransformResult {
+    self.at(target, reference, mono_now().saturating_sub(offset_ns))
+}
+
+fn predict(&mut self, target: FrameId, reference: FrameId, horizon_ns: u64) -> TransformResult {
+    if horizon_ns > self.declared_max_horizon(target, reference) { return result(OutOfHistory, None); }
+    extrapolate_from_latest_twist(self.latest_samples(target, reference), horizon_ns)
+        .with_status(Extrapolated)
 }
 
 // ---- Transactional temporal reparenting ----
@@ -178,6 +189,8 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 3. **Execute**: version-check → cached value, else straight-line execution (I-Q1).
 4. **Invalidate live**: calibration-slot version bump or edge version change ⇒ next query re-executes (I-Q11) — no recompilation, no restart.
 
+*Slot snapshot:* load even version (Acquire) → load atomic fields → reload version (Acquire). Accept only an unchanged even value; after the generated retry bound, return `CONCURRENT_UPDATE`.
+
 *Transactional reparenting (§Transactional Reparenting):*
 
 1. Begin atomic tree transaction (I-Q10).
@@ -187,7 +200,7 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 
 *Live calibration:*
 
-1. Calibration writer updates the shared `CalibrationSlot` (correction + effective timestamp), bumps slot version.
+1. Calibration writer sets version odd, writes atomic fields/history, then release-publishes the next even version.
 2. Consumer caches observe version change on next query ⇒ re-execute only plans containing that slot.
 3. Update also flags a discontinuity when the correction jump exceeds the declared threshold.
 
@@ -195,9 +208,9 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 
 | Case | Result |
 |---|---|
-| `at(t)` before first sample | `OUT_OF_HISTORY` (or Hold-to-first per declared policy) |
+| `at(t)` before first sample | `OUT_OF_HISTORY` |
 | `at(t)` beyond newest sample | `OUT_OF_HISTORY` — `predict` is the only extrapolation path (I-Q4/I-Q5) |
-| `predict` beyond max_horizon | `EXTRAPOLATED` status with bounded value (I-Q5) |
+| `predict` within / beyond max_horizon | `EXTRAPOLATED` with value / `OUT_OF_HISTORY` without value |
 | Query spanning discontinuity | `DISCONTINUOUS` status (I-Q7) |
 | Timestamp without valid clock mapping | `CLOCK_UNRESOLVED` (I-S7, spatial-core) |
 | Query across disconnected trees | `PathNotFound` (spatial-core I-S3) |
@@ -221,4 +234,6 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 | `spatial_calibration_live` (slot bump → cache invalidation) | I-Q11 |
 | `spatial_generational_edges` | I-Q12 |
 | `spatial_history_sizing` (`history = "2s"` declarations) | I-Q13 |
+| `spatial_slot_coherence` (writer/readers) | I-Q14: coherent or `ConcurrentUpdate` |
+| `spatial_query_zero_alloc` | I-Q15 |
 | interpolation numerics vs oracle (slerp/linear × rates) | exactness |

@@ -6,7 +6,7 @@ Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fi
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-SPATIAL-index-declaration` | `index.drm`: `anchor`, `cell_size`, `max_objects` — capacity declared before deployment, never tuned at runtime | `REQ-SPATIAL-014` |
+| `REQ-SPATIAL-index-declaration` | `index.drm`: anchor, cell size, object bound, and cells-per-object bound are static | `REQ-SPATIAL-014` |
 | `REQ-SPATIAL-hash-grid` | integer cell coordinates hashed into a fixed-capacity open-addressing table; steady-state zero heap allocation | `REQ-SPATIAL-013` |
 | `REQ-SPATIAL-motion-slack` | fat-cell envelope per object; re-bucket only on envelope exit; idle/slow objects cost zero per sample | `REQ-SPATIAL-019` |
 | `REQ-SPATIAL-compiled-bvh` | static environment compiles to BVH at build time (spatial analogue of static collapse) | `REQ-SPATIAL-006` |
@@ -14,7 +14,7 @@ Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fi
 | `REQ-SPATIAL-index-derived-cache` | index is a derived cache; each node indexes only its declared `[spatial] read`; updates ride version counters | `REQ-SPATIAL-015` |
 | `REQ-SPATIAL-proximity-frame-typed` | queries declare a frame and typed geometry; naked coordinates never enter the index API | `REQ-SPATIAL-021` |
 | `REQ-SPATIAL-proximity-complete` | candidate set is a deliberate superset — callers exact-check; misses forbidden | `REQ-SPATIAL-020` |
-| `REQ-SPATIAL-memory-verified` | worst-case index memory (buckets + slots at `max_objects`) verified exactly like channel buffers | `REQ-SPATIAL-018` |
+| `REQ-SPATIAL-memory-verified` | object, membership, query-scratch, and dual-BVH-bank memory is verified | `REQ-SPATIAL-018` |
 | `REQ-SPATIAL-rejected-structures` | octrees, k-d trees, sweep-and-prune excluded | `REQ-SPATIAL-026` |
 
 ## Data Structures
@@ -25,18 +25,18 @@ Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fi
 //   anchor: map          # grid anchored to a declared frame
 //   cell_size: 0.5       # meters — declared statically, never tuned at runtime
 //   max_objects: 4096
+//   max_cells_per_object: 27
 
 // Fixed-capacity open-addressing table — zero heap allocation in steady state (§Hash Grid)
 pub struct HashGrid {
-    slots: [Slot; CAPACITY],          // CAPACITY = f(max_objects) — compile-time/layout-fixed, page-declared
+    memberships: [Membership; MEMBERSHIP_CAPACITY], // checked max_objects × max_cells_per_object
+    objects: [ObjectRecord; MAX_OBJECTS],
+    version: AtomicU64,               // odd during mutation; even when queryable
     cell_size: f64,                   // from index.drm
     anchor: FrameId,                  // grid anchored to declared frame
 }
-pub struct Slot {
-    state: SlotState,                 // Empty | Occupied{ id, gen } | Deleted{ gen }
-    id: EntityId,
-    generation: u32,                  // ABA protection; delete bumps generation (overlay lifetime rules)
-}
+pub struct Membership { state: SlotState, key: CellKey, handle: SpatialHandle }
+pub struct ObjectRecord { handle: SpatialHandle, envelope: SlackEnvelope, last_version: u64 }
 pub struct CellKey { cx: i32, cy: i32, cz: i32 }   // floor(p / cell_size), hashed into the table
 
 // Motion slack — fat-cell envelope (§Hash Grid: re-bucket only on envelope exit)
@@ -49,8 +49,8 @@ pub struct SlackEnvelope {
 
 // Compiled static BVH (§Compiled Static BVH) — build-time artifact, fixed layout
 pub struct CompiledBvh {
-    nodes: Vec<BvhNode>,              // emitted into codegen artifacts; layout fixed per deployment
-    subtrees: Vec<SubtreeSlot>,       // live-swap calibration slots (per recalibratable subtree)
+    nodes: &'static [BvhNode],         // generated fixed artifact; no runtime growth
+    subtrees: &'static [SubtreeSlot], // two fixed banks each; atomic active-bank selection
 }
 pub struct BvhNode { aabb: Aabb, left: u32, right: u32, leaf: Option<StaticEntitySet> }
 ```
@@ -58,7 +58,7 @@ pub struct BvhNode { aabb: Aabb, left: u32, right: u32, leaf: Option<StaticEntit
 ## Invariants
 
 - **I-X1 ZeroAllocSteadyState**: indexing and queries perform zero heap allocation — all capacity declared (slots table, per-cell bounds); runtime overlay handles come from a pre-allocated pool. Test: `spatial_grid_zero_alloc` (counting-alloc harness).
-- **I-X2 CapacityDeclared**: table capacity and per-cell slots derive from `max_objects`/`cell_size` at deployment; insertion beyond capacity ⇒ bounded policy (reject + counter), never growth. Test: `spatial_grid_capacity`.
+- **I-X2 CapacityDeclared**: membership capacity is checked `max_objects × max_cells_per_object`; verifier rejects envelopes exceeding the declared cell span. Runtime overflow returns `IndexFull`, never grows. Test: `spatial_grid_capacity`.
 - **I-X3 MotionSlack**: an object re-buckets only when it exits its slack envelope; idle/slow objects cost zero work per sample. Test: `spatial_motion_slack` (sub-threshold jitter ⇒ zero re-buckets).
 - **I-X4 GenerationSafety**: overlay delete bumps generation; stale handles/iterations observe invalidation immediately. Test: `spatial_grid_generation`.
 - **I-X5 FrameTypedAPI**: `nearby(frame, typed_point, radius)` / `region(frame, typed_aabb)` — naked coordinates never enter the index API (Golden Rule 1). Test: API audit + compile-fail.
@@ -67,35 +67,45 @@ pub struct BvhNode { aabb: Aabb, left: u32, right: u32, leaf: Option<StaticEntit
 - **I-X8 BvhLiveCalibration**: recalibration swaps affected subtrees live through calibration slots (same slot mechanism as [spatial-queries.md](spatial-queries.md) §Calibration); no recompilation, no node restarts. Test: `spatial_bvh_live_calib`.
 - **I-X9 MemoryVerified**: worst-case index memory (buckets + slots at `max_objects`, BVH nodes) is part of the compute-unit budget math, verified exactly like channel buffers. Test: `spatial_index_memory_verified`.
 - **I-X10 RejectedStructures**: octrees/k-d/sweep-and-prune absent from the codebase. Test: audit.
+- **I-X11 CoherentQuery**: query accepts candidates only between matching even grid-version reads; bounded retry exhaustion returns `ConcurrentUpdate`, never an incomplete set. Test: `spatial_query_concurrent`.
 
 ## Functions
 
 ```rust
 // ---- Dynamic grid (§Hash Grid for Dynamic Objects) ----
-fn on_sample(&mut self, id: EntityId, p_typed: TypedPoint, ver: u32) {
+fn on_sample(&mut self, id: EntityId, p_typed: TypedPoint, ver: u64) -> Result<(), Status> {
     // Derived-cache discipline (I-X7): called when the versioned dynamic edge for `id` advances.
-    if ver == self.last_seen_version(id) { return; }            // unchanged version ⇒ touch nothing
+    if ver == self.last_seen_version(id) { return Ok(()); }
     let p = p_typed.in_frame(self.anchor)?;                     // typed → anchor-frame conversion (I-X5)
     let env = self.envelope(id);
-    if env.contains(p) { self.update_center(id, p); return; }   // I-X3: inside slack ⇒ zero re-bucket work
-    self.rebucket(id, p, env);                                  // remove old cells, insert new span cells
+    if env.contains(p) { self.record_version_only(id, ver); return Ok(()); } // center stays fixed
+    self.rebucket(id, p, env, ver)
 }
 
-fn rebucket(&mut self, id: EntityId, p: Point3, old: SlackEnvelope) {
-    for cell in old.span() { self.table.remove(cell_key(cell), id); }     // generation-aware removal
-    let env = SlackEnvelope { center: p, slack: self.slack, .. };
-    for cell in env.span() { self.table.insert(cell_key(cell), id, bump_gen(id)); }
+fn rebucket(&mut self, id: EntityId, p: Point3, old: SlackEnvelope, ver: u64) -> Result<(), Status> {
+    let next = SlackEnvelope { center: p, slack: self.slack, .. };
+    self.preflight_memberships(next.span().len())?;              // failure changes nothing
+    self.version.fetch_add(1, Acquire);                           // even → odd
+    for cell in old.span() { self.memberships.remove(cell_key(cell), id); }
+    for cell in next.span() { self.memberships.insert(cell_key(cell), current_handle(id)); }
+    self.set_envelope_and_version(id, next, ver);
+    self.version.fetch_add(1, Release);                           // odd → even commit
+    Ok(())
 }
 
 // ---- Proximity queries (§Proximity Query Semantics — frame + typed geometry) ----
 fn nearby(&self, frame: FrameId, point: TypedPoint, radius: f64) -> Result<CandidateSet, Status> {
     let p = point.in_frame(self.anchor)?;                       // typed conversion through standard path
-    let mut set = CandidateSet::new();
+    let v0 = self.version.load(Acquire);
+    if v0 & 1 != 0 { return Err(ConcurrentUpdate); }
+    let mut set = CandidateSet::from_caller_scratch()?;         // fixed capacity; no allocation
     for key in cells_overlapping_sphere(frame, p, radius, self.cell_size) {   // superset cells — I-X6
-        set.merge(self.table.scan_cell(key)?);                  // generation-valid entries only
+        set.merge(self.memberships.scan_cell(key)?);            // generation-valid entries only
     }
     set.merge(self.bvh.query(frame, aabb_of(p, radius)));
-    Ok(set)                                                     // deliberate superset; caller exact-checks
+    let v1 = self.version.load(Acquire);
+    if v0 != v1 { return Err(ConcurrentUpdate); }               // caller may retry boundedly
+    Ok(set)
 }
 
 fn region(&self, frame: FrameId, aabb: TypedAabb) -> Result<CandidateSet, Status> { /* same two-source union */ }
@@ -104,10 +114,9 @@ fn region(&self, frame: FrameId, aabb: TypedAabb) -> Result<CandidateSet, Status
 fn compile_bvh(static_frames: &StaticEnv) -> CompiledBvh { /* SAH split, deterministic ordering; build-time */ }
 
 fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result<(), Status> {
-    // Recalibration WITHOUT recompilation (I-X8): swap the affected subtree via its calibration slot,
-    // bump slot version; dependent queries see the new AABB set on next execution. Mirrors
-    // Effective = Nominal × Correction from spatial-queries.md — BVH edition.
-    self.subtrees[slot].publish(new_geom)                       // version bump; readers coherent via generation
+    let inactive = self.subtrees[slot].inactive_bank();
+    inactive.build_checked(new_geom)?;                          // oversize/failure leaves active intact
+    self.subtrees[slot].publish(inactive)                       // release-select complete bank
 }
 ```
 
@@ -116,7 +125,7 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 *Index build and update discipline (§Ownership and Update Discipline):*
 
 1. Node declares `[spatial] read` frames; index constructs over exactly those (I-X7).
-2. Versioned dynamic edge advances ⇒ affected buckets refresh; unchanged versions ⇒ no work (I-X3/I-X7).
+2. Versioned dynamic edge advances ⇒ affected buckets refresh; an object inside its fixed slack envelope changes no memberships.
 3. No polling, no cross-node index protocol, no central registry.
 
 *Proximity query:*
@@ -143,7 +152,7 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 | Query frame ≠ anchor frame | typed conversion through standard path; conversion failure ⇒ explicit status (I-X5) |
 | Radius exceeding grid extent | full-set fallback (completeness preserved, perf warning) |
 | Stale BVH vs runtime statics | impossible without slot bump — fingerprint check at deploy; live swaps only via slots (I-X8) |
-| Query at historical timestamp | latest cached state for candidates; historical state via `at()` (spatial-queries) |
+| Historical proximity requested | unsupported: proximity is latest-only; resolve returned candidates through `at()` |
 | Grid memory vs budget | verify rejects config exceeding declared budget (I-X9) |
 
 ## Test Matrix
@@ -159,5 +168,6 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 | `spatial_index_derived` (version-counter updates only) | I-X7 |
 | `spatial_bvh_live_calib` (slot swap, no restart) | I-X8 |
 | `spatial_index_memory_verified` | I-X9 in budget math |
+| `spatial_query_concurrent` | I-X11: complete set or `ConcurrentUpdate` |
 | code audit | I-X10 |
 | perf: candidate factor vs brute force | documented |

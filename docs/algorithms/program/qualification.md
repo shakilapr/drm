@@ -1,6 +1,6 @@
 # Qualification Harness Algorithms
 
-Scope: Phase 34 whole-system qualification — requirement traceability matrix (100% REQ → implementation → test → passing result), fault-injection + fuzz/property/sanitizer completion, long-duration soak, deterministic builds, OS×language×transport matrix closure, benchmark-invariant verification, docs/examples CI execution. Defines the phase conformance harness. Owner: all (E4 harness lead). Phase 34 (). Depends on every algorithm doc's test matrix + `docs/req/registry.csv`.
+Scope: Phase 34 whole-system qualification — requirement traceability, fault injection, fuzz/property/sanitizer completion, soak, deterministic builds, supported-platform matrix closure, invariant verification, and docs/examples CI. Owner: all (E4 harness lead). Depends on every algorithm test matrix and `docs/req/registry.csv`.
 
 ## REQ Bindings
 
@@ -36,7 +36,7 @@ pub struct QualificationReport {
 - **I-QAL2 SoakClean**: ≥ 72 h cumulative soak across mixed topologies with zero corruption/deadlock (anomaly counters all zero). Test: soak ledger.
 - **I-QAL3 Reproducible**: two clean builds on different runners bit-identical (workspace crates + drm.h artifacts). Test: build-repro job.
 - **I-QAL4 MatrixClosed**: every declared-supported cell passes; undeclared cells absent from report. Test: conformance harness.
-- **I-QAL5 BenchInvariants**: benchmark suite asserts architecture invariants under load (zero-alloc steady state, bounded times). Test: bench CI.
+- **I-QAL5 BenchInvariants**: load suite asserts zero allocation, bounded operation counts, and reports latency without treating estimates as proof. Test: bench CI.
 - **I-QAL6 DefectLedger**: P0 = 0; P1 all closed or waived with record. Test: ledger audit.
 
 ## Functions
@@ -56,7 +56,7 @@ fn qualify() -> QualificationReport {
 
 ## Protocols
 
-*Traceability drive ():*
+*Traceability closure:*
 
 1. `audit-traceability --matrix` → gap list (REQs missing impl/test/result).
 2. Per gap: owner claims → implement/test/link → same-PR registry sync.

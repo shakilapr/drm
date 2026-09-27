@@ -116,12 +116,13 @@ fn write_bytes_bounded(buf: &mut [u8], off: usize, cap: usize, prev_len: usize, 
  -> Result<(), Status>
 {
  if payload.len() > cap || prev_len > cap { return Err(InvalidArg); }
+ let encoded_len = u32::try_from(payload.len()).map_err(|_| InvalidArg)?;
  let data_off = off.checked_add(4).ok_or(InvalidArg)?;
  let new_end = data_off.checked_add(payload.len()).ok_or(InvalidArg)?;
  let old_end = data_off.checked_add(prev_len).ok_or(InvalidArg)?;
  check_bounds(buf.len(), off, 4)?;
  check_bounds(buf.len(), data_off, payload.len().max(prev_len))?; // preflight before write
- buf[off..off + 4].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+ buf[off..off + 4].copy_from_slice(&encoded_len.to_le_bytes());
  buf[data_off..new_end].copy_from_slice(payload);
  if old_end > new_end { buf[new_end..old_end].fill(0); }
  Ok(())

@@ -111,15 +111,16 @@ index:
   anchor: map
   cell_size: 0.5        # meters
   max_objects: 4096
+  max_cells_per_object: 27
 ```
 
-Indexed objects carry their existing generational handles (`SpatialHandle { index, generation }`); deleting an object invalidates outstanding handles immediately, inheriting runtime overlay lifetime rules without new machinery.
+The generated membership table has checked capacity `max_objects × max_cells_per_object`; verification rejects a slack/envelope bound that can touch more cells. Each open-addressed entry stores `{cell_key, object_handle}`. Indexed objects retain generational handles, so deletion invalidates stale references.
 
-Re-bucketing uses a declared motion slack — a fat cell envelope per object, adapted from physics-engine fat AABBs. An object re-enters the grid only when it exits its slack envelope; idle and slow-moving objects cost zero work per sample.
+Re-bucketing uses a declared motion slack — a fat cell envelope per object. Its center remains fixed until exit; moving it without updating memberships would create false negatives. Mutations publish under a version counter. A query returns only after matching even version reads; bounded retry exhaustion returns `CONCURRENT_UPDATE`, never a partial candidate set.
 
 ### Compiled Static BVH
 
-Static environment geometry compiles into a bounding-volume hierarchy at build time — the spatial analogue of Build-Time Static Collapse. Recalibration swaps affected subtrees live through calibration slots without recompilation or node restarts.
+Static environment geometry compiles into a fixed-layout bounding-volume hierarchy at build time. Each recalibratable subtree has two generated fixed-capacity banks; recalibration builds the inactive bank, then atomically selects it. Oversize geometry is rejected without disturbing the active bank.
 
 ### Ownership and Update Discipline
 
@@ -136,7 +137,7 @@ auto hits = space.nearby("map", wrist_pt, 2.0);   // radius query
 auto hits = space.region("map", region_aabb);     // region query
 ```
 
-Results return candidate object handles with status metadata. The candidate set is a deliberate superset; callers perform exact distance checks on typed points through the standard conversion path. Proximity evaluates the latest cached state of each indexed space; per-candidate historical state resolves through `at()` with existing history rules. `drm verify` costs worst-case index memory (buckets plus slots at `max_objects`) exactly like channel buffers.
+Results return candidate object handles with status metadata. The candidate set is a deliberate superset; callers perform exact distance checks on typed points through the standard conversion path. Proximity evaluates only the latest indexed state; per-candidate historical state resolves afterward through `at()`. `drm verify` costs the membership table, object records, query scratch sets, BVH nodes, and both calibration banks.
 
 ## Authoring Spaces (`spaces/`)
 
@@ -208,7 +209,7 @@ DRM provides explicit query operations:
 
 These operations resolve state between named frames. Proximity queries (`nearby`, `region`) form the second query family, executing over the Runtime Spatial Index and returning candidate object handles; per-candidate state is then resolved through the operations above.
 
-History ring buffers are allocated only on upstream dynamic edges that need them, based on declared consumer requirements (such as `history = "2s"`). Static constants are never stored across timestamps. Coordinate conversions evaluate the spatial graph at the historical sample's timestamp rather than current time.
+History ring buffers are allocated only on upstream dynamic edges and live calibration slots needed by declared historical reads. Static constants are never repeated across timestamps. `at()` selects the time-scoped hierarchy plan and resolves every dynamic/calibration input at the requested timestamp before composition.
 
 ## Discontinuities and Teleports
 
