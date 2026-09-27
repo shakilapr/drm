@@ -1,0 +1,10 @@
+# Dependencies and References
+references/
+
+# DRM generated artifacts
+.drm/
+build/
+target/
+*.db
+*.bak
+*.tmp
