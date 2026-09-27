@@ -1,0 +1,43 @@
+# Merge gate — codebase.md §5.2 (ci.yml).
+# Placeholder jobs are disabled (`if: false`) until the first crates land (W1 Phase 2+).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  rust:
+    if: false
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: fmt + lint + test + layering
+        run: |
+          cargo xtask lint
+          cargo xtask test
+          cargo xtask check-layering
+
+  frontend:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint && pnpm build
+
+  docs:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo xtask docs

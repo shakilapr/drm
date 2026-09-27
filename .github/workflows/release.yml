@@ -1,0 +1,47 @@
+# Tagged releases — codebase.md §5.2 (release.yml), §6.1.
+# Placeholder jobs disabled until API freeze (work-plan close-out, M23–M24).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  abi-check:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ABI compatibility vs previous release (Phase 7 gate)
+        run: cargo xtask abi-check --against previous-release
+
+  crates:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo xtask publish --workspace --lockstep-version
+
+  wheels:
+    if: false
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - run: maturin build --release --out dist
+
+  studio:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pnpm build && electron-builder --publish always
+
+  sbom:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo xtask sbom --out sbom.spdx.json

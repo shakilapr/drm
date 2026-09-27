@@ -1,0 +1,35 @@
+# cargo-deny configuration (codebase.md §7.2, §5.2 audit.yml).
+# Enforcement is mechanical: CI blocks on any failure.
+
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+# Allow-list mirrors codebase.md §7.2.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+]
+# Confidence threshold for license detection.
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Layer violations are additionally enforced by `xtask check-layering` (codebase.md §2.2 R6).
+deny = []
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

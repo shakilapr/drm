@@ -1,10 +1,49 @@
 # Dependencies and References
 references/
+node_modules/
+docs/work-plan
+.pnpm-store/
+.venv/
+.kilo/
+venv/
 
-# DRM generated artifacts
-.drm/
-build/
+# Build targets and artifacts
 target/
+build/
+dist/
+out/
+bin/
+*.o
+*.obj
+*.so
+*.dll
+*.dylib
+*.exe
+*.pyd
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# DRM runtime and generated artifacts
+.drm/
+/run/drm/
+*.local.json
+
+# Databases and temporary files
 *.db
 *.bak
 *.tmp
+*.log
+*.swp
+*~
+
+# OS and Editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+

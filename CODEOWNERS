@@ -1,0 +1,34 @@
+# Subsystem ownership mirrors work-plan roles E1–E4 (codebase.md §7.1).
+# Replace placeholder teams with real handles/teams when the org exists.
+
+# E1 — runtime core, epochs, precommit, Windows port, trace/RPC runtime
+/crates/drm-core/          @drm/e1-runtime
+/crates/drm-ffi/           @drm/e1-runtime
+/crates/drm-trace/         @drm/e1-runtime
+/crates/drm-rpc/           @drm/e1-runtime
+
+# E2 — toolchain, schema grammar, codegen, verify, spatial compiler
+/crates/drm-workspace/     @drm/e2-toolchain
+/crates/drm-spatial/       @drm/e2-toolchain
+/docs/architecture.md      @drm/e2-toolchain
+
+# E3 — boundary router, transports, serial/embedded integration
+/crates/drm-router/        @drm/e3-router
+
+# E4 — bindings, CI, fuzz/property/sanitizer infrastructure, benchmarks
+/bindings/                 @drm/e4-bindings
+/tests/                    @drm/e4-quality
+/examples/                 @drm/e4-bindings
+/.github/                  @drm/e4-quality
+/crates/xtask/             @drm/e4-quality
+
+# Frontend (shared: E4 CI + E2 engine contract)
+/packages/                 @drm/e4-bindings @drm/e2-toolchain
+/apps/studio/              @drm/e4-bindings
+
+# Root engineering standards
+/codebase.md               @drm/e2-toolchain @drm/e4-quality
+/work-plan.md              @drm/e2-toolchain
+
+# Strictly read-only; changes fail CI regardless of approval
+/references/

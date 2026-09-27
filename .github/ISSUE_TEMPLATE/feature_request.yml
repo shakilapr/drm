@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose a capability. Architecture-affecting proposals need a REQ ID first.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What cannot be expressed/done today. Terse.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Desired behavior.
+    validations:
+      required: true
+  - type: checkboxes
+    id: arch
+    attributes:
+      label: Architecture impact
+      options:
+        - label: This conflicts with or extends docs/architecture.md (ADR required)

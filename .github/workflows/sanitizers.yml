@@ -1,0 +1,31 @@
+# Sanitizer validation — codebase.md §5.2 (sanitizers.yml).
+# Placeholder jobs disabled until drm-core exists (W2).
+name: sanitizers
+
+on:
+  pull_request:
+    paths:
+      - "crates/drm-core/**"
+      - "crates/drm-ffi/**"
+      - "tests/stress/**"
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  asan-tsan:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ASan
+        run: RUSTFLAGS="-Zsanitizer=address" cargo test --workspace
+      - name: TSan
+        run: RUSTFLAGS="-Zsanitizer=thread" cargo test --workspace
+
+  miri:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Miri (lock-free modules; OS SHM excluded)
+        run: cargo +nightly miri test -p drm-core --features miri-only

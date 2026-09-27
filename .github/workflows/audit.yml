@@ -1,0 +1,52 @@
+# Nightly audits — codebase.md §5.2 (audit.yml).
+# Placeholder jobs disabled until the toolchain lands (W3).
+name: audit
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  deny:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo install cargo-deny --locked
+      - run: cargo deny check
+
+  zero-alloc:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo xtask audit-zero-alloc
+
+  traceability:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo xtask audit-traceability
+
+  gen-check:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo xtask gen-check
+
+  docs-examples:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo xtask docs
+
+  benchmarks:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo xtask bench --report-regressions

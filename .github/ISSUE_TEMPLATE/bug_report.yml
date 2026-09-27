@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a defect. Security issues go to GitHub Security Advisories (see SECURITY.md).
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Observed vs expected behavior. Terse.
+    validations:
+      required: true
+  - type: input
+    id: req
+    attributes:
+      label: Violated requirement
+      description: REQ ID if known (docs/req/registry.csv), else "unknown"
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - drm-core
+        - drm-workspace
+        - drm-router
+        - bindings (c/cpp/rust/python)
+        - studio
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal workspace/steps. Attach fixture if possible.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS + arch (e.g. Linux x86_64, Windows x86_64)
