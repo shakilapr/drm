@@ -18,6 +18,7 @@ Scope: `drm-spatial` foundations — distinct semantic types, compile-time fixed
 | `REQ-SPATIAL-spatial-contracts` | `[spatial] write/read` in drm.toml; single-writer per dynamic edge enforced pre-deployment | `REQ-SPATIAL-030` |
 | `REQ-SPATIAL-static-dynamic-inference` | node declares write ⇒ dynamic; transform given + no writer ⇒ static | `REQ-SPATIAL-031` |
 | `REQ-SPATIAL-time-history` | rings allocated only on upstream dynamic edges with declared requirements (`history = "2s"`) | `REQ-SPATIAL-033` |
+| `REQ-SPATIAL-history-bound` | time histories require structural `max_samples`; planning rates never define retention | `REQ-SPATIAL-037` |
 | `REQ-SPATIAL-mcu-constants` | MCU receives pre-calculated static constants at build; straight-line multiply at runtime | `REQ-SPATIAL-017` |
 
 ## Data Structures
@@ -135,7 +136,7 @@ fn emit_mcu_constants(plan: &CollapsePlan, target: McuTarget) -> CodeArtifact
 
 *History allocation (time-based):*
 
-1. For each declared consumer requirement `history = "2s"` on an upstream dynamic edge, allocate a ring sized `ceil(2s × expected_rate)` (memory-budget-verified; sequence-based channel rings remain the transport layer — spatial time-history is a derived cache).
+1. For each declared consumer requirement `history = "2s", max_samples = N` on an upstream dynamic edge, allocate exactly `N` entries. Verification rejects absent/insufficient structural bounds; `expected_rate` is informational only (sequence-based channel rings remain the transport layer — spatial time-history is a derived cache).
 2. Rings allocated only where needed; static constants never stored across timestamps.
 
 ## Edge Cases & Errors

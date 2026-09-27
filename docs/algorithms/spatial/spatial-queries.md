@@ -20,6 +20,7 @@ Scope: spatial query surface — **compiled transform plans** per (target, refer
 | `REQ-SPATIAL-reparent-atomic` | hierarchy mutations atomic — readers never observe partially updated trees | `REQ-SPATIAL-027` |
 | `REQ-SPATIAL-calibration-slots` | Effective = Nominal × Correction; shared calibration slot with effective timestamp; live cache invalidation, no recompilation, no restart | `REQ-SPATIAL-003` |
 | `REQ-SPATIAL-generational-handles` | runtime overlay handles generational; single-writer edges | `REQ-SPATIAL-011` |
+| `REQ-SPATIAL-history-bound` | every time history declares structural `max_samples`; `expected_rate` never sizes correctness storage | `REQ-SPATIAL-037` |
 
 ## Data Structures
 
@@ -65,6 +66,7 @@ pub struct PlanCache {
 pub struct TimeHistory {
     ring: FixedRing<Stamped<Transform3>>,   // allocated at activation
     duration_ns: u64,                       // e.g. history = "2s" from consumer declarations
+    max_samples: u32,                       // structural bound; verifier proves requested interval fits
 }
 
 // Query result — §Transform Status and Quality (exact status set)
@@ -93,7 +95,7 @@ pub enum ReparentMode { PreserveWorld, PreserveLocal, Snap }
 - **I-Q10 ReparentAtomic**: hierarchy mutations execute atomically; readers never observe partially updated trees. Test: `spatial_reparent_atomic`.
 - **I-Q11 CalibrationLive**: calibration-slot update invalidates dependent caches live — no recompilation, no node restart; Effective = Nominal × Correction composed via the plan's `CalibrationSlot` step. Test: `spatial_calibration_live`.
 - **I-Q12 GenerationalEdges**: overlay edge handles generational; delete invalidates immediately; single-writer per dynamic edge. Test: `spatial_generational_edges`.
-- **I-Q13 HistoryTimeSized**: history rings exist only where consumers declared requirements; capacity from duration × rate; static constants never stored across timestamps. Test: `spatial_history_sizing`.
+- **I-Q13 HistoryTimeSized**: history rings exist only where consumers declared requirements; capacity is the declared structural `max_samples`, never `expected_rate`; verifier rejects an interval without a sufficient bound. Static constants are never stored across timestamps. Test: `spatial_history_sizing`.
 - **I-Q14 CoherentSlots**: transform fields are fixed-width atomics guarded by an odd/even version; bounded snapshot failure returns `ConcurrentUpdate`, never torn geometry. Test: `spatial_slot_coherence`.
 - **I-Q15 ZeroAllocQuery**: latest/at/predict/delayed execution uses generated plans, fixed stacks, and preallocated histories; no query-time heap allocation. Test: `spatial_query_zero_alloc`.
 
@@ -104,15 +106,16 @@ pub enum ReparentMode { PreserveWorld, PreserveLocal, Snap }
 fn compile_plan(tree: &SpaceTree, target: FrameId, reference: FrameId) -> Result<TransformPlan, Status> {
     let path = tree.path_between(reference, target)?;      // compile-time only (forest-aware)
     let mut steps = vec![];
-    for seg in path.segments() {
+    for (i, seg) in path.segments().enumerate() {
         match seg.kind {
             Static => steps.push(Constant(seg.collapsed())),                    // static run (pre-collapsed)
             StaticWithCalibration { slot } => steps.push(CalibrationSlot { nominal: seg.nominal(), slot }),
             Dynamic { edge } => steps.push(DynamicEdge { edge }),
         }
-        steps.push(Multiply);
+        if i != 0 { steps.push(Multiply); }                // binary fold; never underflow on first term
     }
-    Ok(TransformPlan { steps })
+    let max_stack = verify_stack_effect(&steps)?;          // final depth exactly one
+    Ok(TransformPlan { steps, max_stack })
 }
 
 // ---- Runtime execution ----
@@ -165,7 +168,8 @@ fn predict(&mut self, target: FrameId, reference: FrameId, horizon_ns: u64) -> T
 // ---- Transactional temporal reparenting ----
 fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns: TimePoint) -> Result<(), Status> {
     let txn = self.tree.begin_atomic();                     // readers never see partial trees (I-Q10)
-    let old_pose = self.at(obj, WORLD, at_ns)?;             // pose at the reparent instant
+    let anchor = txn.common_root_or_explicit_bridge(obj, new_parent)?; // forest-aware; no universal WORLD
+    let old_pose = self.at(obj, anchor, at_ns)?;             // pose at the reparent instant
     match mode {
         PreserveWorld => txn.relink_preserving_world(obj, new_parent, old_pose),   // adjust local edge
         PreserveLocal => txn.relink_keep_local(obj, new_parent),                   // global pose changes
@@ -189,7 +193,7 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 3. **Execute**: version-check → cached value, else straight-line execution (I-Q1).
 4. **Invalidate live**: calibration-slot version bump or edge version change ⇒ next query re-executes (I-Q11) — no recompilation, no restart.
 
-*Slot snapshot:* load even version (Acquire) → load atomic fields → reload version (Acquire). Accept only an unchanged even value; after the generated retry bound, return `CONCURRENT_UPDATE`.
+*Slot write/snapshot:* the single writer checks `version + 2`, release-stores the odd version, writes fixed-width atomic fields, then release-stores the next even version. Readers load even version (Acquire) → fields → version (Acquire), accepting only an unchanged even value. Version exhaustion returns `GenerationExhausted`; bounded snapshot exhaustion returns `ConcurrentUpdate`.
 
 *Transactional reparenting (§Transactional Reparenting):*
 
@@ -219,6 +223,8 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 | Reparent racing concurrent query | atomic commit ⇒ query sees pre- or post-tree, never partial (I-Q10) |
 | `delayed_view(δ)` with δ > retained history | `OUT_OF_HISTORY` (I-Q6) |
 | Near-antipodal quaternion slerp | documented stable path + oracle test |
+| Empty or malformed compiled plan | build-time stack-effect error; never deployed |
+| Reparent across disconnected trees | `PathNotFound` unless an explicit bridge supplies a common anchor |
 
 ## Test Matrix
 

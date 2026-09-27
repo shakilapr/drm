@@ -35,9 +35,10 @@ pub struct MemoryBudget {
  }
 
  pub struct SpatialIndexCost { // per compute unit with declared spatial indexes (spatial-index.md I-X9)
-  grid_buckets: u64, // fixed open-addressing buckets from index.drm capacity
-  grid_slots: u64, // entity slots at max_objects × slack span factor
-  bvh_nodes: u64, // compiled BVH node array (fixed layout)
+  grid_buckets: u64, // all three fixed open-addressing banks
+  grid_slots: u64, // all banked entity slots at max_objects × slack span factor
+  bvh_nodes: u64, // every guarded compiled/calibration bank
+  query_scratch: u64, // fixed per declared concurrent query endpoint
   // no heap growth is possible — capacity is declared; verified exactly like channel buffers
  }
 ```
@@ -52,6 +53,7 @@ pub struct MemoryBudget {
 - **I-MB6 CheckedArithmetic**: every capacity sum/product uses `checked_add`/`checked_mul`; any overflow ⇒ `CapacityOverflow` error naming the compute/channel (a `u64` wrap must never make a huge invalid config pass). Test: `budget_overflow`.
 - **I-MB7 PerProcessLocked**: a precommit node's own locked working set (the pages of its own mappings it touches) is checked against the lockable budget, in addition to the compute-wide shared-memory capacity; hard-RT consumers need their own page-table path prefaulted. Test: `node_locked_set`.
 - **I-MB8 RouterBuffersBudgeted**: router-owned lane buffers (router-core I-RT8) are added to `worst_case` for the compute where the router runs. Test: `budget_router_buffers`.
+- **I-MB9 SpatialIndexesBudgeted**: fixed grid banks, query scratch, and BVH banks are included for every deployed spatial index. Test: `spatial_index_memory_verified`.
 
 ## Functions
 
@@ -75,7 +77,7 @@ fn verify_memory(deploy: &DeploymentConfig, model: &WorkspaceModel) -> Result<Re
  }
  // I-MB8: router-owned lane buffers on this compute
  worst = worst.checked_add(deploy.router_buffers(compute)).ok_or_else(|| CapacityOverflow { compute, .. })?;
- // I-MB9: spatial index memory (grid buckets + entity slots at max_objects + compiled BVH) — declared capacity only
+ // I-MB9: all grid/BVH banks + entity slots + query scratch — declared capacity only
  worst = worst.checked_add(spatial_index_cost(model, compute)).ok_or_else(|| CapacityOverflow { compute, .. })?;
 
  if worst > budget.drm_budget_bytes { errs.push(BudgetExceeded { compute, worst, budget }); } // I-MB2
@@ -135,7 +137,7 @@ fn activate_precommitted(mapping: &Mapping, budget: &MemoryBudget) -> Result<(),
 
 | Case | Expected |
 |---|---|
-| udget_reference_match (5 fixtures) | I-MB1 exact |
+| `budget_reference_match` (5 fixtures) | I-MB1 exact |
 | `spatial_index_memory_verified` (index.drm at max_objects) | I-MB9: grid buckets + slots + BVH in budget |
 | `budget_hard_errors` (budget/lockable exceeded) | I-MB2 |
 | `budget_overflow` (huge slot counts) | I-MB6 `CapacityOverflow` |

@@ -52,7 +52,8 @@ fn publish(ch: &Channel, src: &[u8]) -> Result<u64, Status> {
  overflow::allow_commit(ch, seq)?;                 // QueueFull / InvalidConfig
 
  let Some(slot) = hazard::select_slot(ch, &mut guard.scratch) else {
-  ch.pool_exhausted.fetch_add(1, Relaxed);
+ ch.pool_exhausted.fetch_add(1, Relaxed);
+  ch.drop_count.fetch_add(1, Relaxed);
   reclaim::scan_exhausted(ch);                     // bounded; no wait or retry loop
   return Err(PoolExhausted);                        // incoming sample is always dropped
  };
@@ -79,7 +80,7 @@ payload byte is written before a slot and both counters are known valid.
 2. Acquire `busy` with one compare-exchange; failure returns `Busy`.
 3. Check sequence capacity and `reject` retirement gates.
 4. Build the referenced-slot bitmap in activation-owned scratch and scan hazards with SeqCst loads.
-5. On no slot, increment exhaustion once, perform one bounded dead-owner scan, and drop this sample.
+5. On no slot, increment `pool_exhausted` and `drop_count` once, perform one bounded dead-owner scan, and drop this sample.
 6. Check generation capacity, then write payload and length.
 7. Publish the versioned ring cell, then release-store `write_seq`; the latter linearizes visibility.
 8. Release `busy` on every exit.
@@ -92,7 +93,7 @@ payload byte is written before a slot and both counters are known valid.
 | 2 | another publish active | `Busy` | none |
 | 3 | sequence cannot advance | `SequenceExhausted` | none |
 | 4 | required consumer gates retirement | `QueueFull` | none |
-| 5 | no reusable slot; bounded reclaim runs after the drop decision | `PoolExhausted` | counter +1 only |
+| 5 | no reusable slot; bounded reclaim runs after the drop decision | `PoolExhausted` | both drop counters +1 only |
 | 6 | selected slot generation/ring stamp exhausted | counter-exhaustion status | none |
 | 7 | success | — | one committed sample |
 

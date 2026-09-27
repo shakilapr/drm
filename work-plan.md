@@ -409,6 +409,7 @@ Owner: all.
 - **Continuous gates**: fuzz, property, sanitizer suites run from first code, not deferred to W8.
 - **Zero-allocation audits**: steady-state data path checked per release of each runtime phase.
 - **Traceability**: requirement registry updated in the same change as implementation; untraceable code rejected in review.
+- **Architecture feedback**: implementation may falsify architecture. On falsification: stop, capture failure evidence, compare ≥2 alternatives on pre-stated criteria, record ADR, update architecture + algorithm doc in the same PR, then implement (AGENTS R1). Weekly plans carry `SPIKE`/`EXP` tasks wherever risk is unresolved (weekly conventions §Experiments).
 - **Regression permanence**: a phase's completion suite becomes a permanent CI gate once green.
 
 ## Risk Register
@@ -421,3 +422,4 @@ Owner: all.
 | Router lane/shaping interactions under real saturation | Priority inversion on links | Phase 30 artificial saturation suite; two-host soak in W4 exit |
 | Spatial scope (largest single subsystem) compressing W8 | Qualification squeeze | W7 starts M19 while W5/W6 wind down; spatial compiler reuses W3 verify/codegen infrastructure; W8 buffer is 2 months |
 | Serial/MCU target diversity (toolchains, RTOS) | Long tail | Fix supported MCU targets at W6 start; zero-alloc gate enforced by linker section checks, not review only |
+| Architecture assumption falsified during implementation | Divergent local hacks, silent drift | Timeboxed `SPIKE`/`EXP` tasks with ≥2 candidates and decision criteria; ADR + same-PR architecture update; regression permanence keeps fixes honest |

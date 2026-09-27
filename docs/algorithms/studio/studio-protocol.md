@@ -1,6 +1,6 @@
 # Studio Protocol & Engine Bridge Algorithms
 
-Scope: the engine↔Studio bridge — generated TypeScript types + JSON-RPC schema (`packages/studio-protocol`), `drm studio --stdio` host, capability handshake, revisioned optimistic concurrency, journaled ChangeSets with conditional undo, format-preserving editing, run-session supervisor, command/telemetry plane separation, workspace-trust gating, renderer capability model, extension host budgets. Implements [ui-architecture.md](../../ui-architecture.md) Core Principles, §Process Architecture, §Protocol, §Transactional Mutations, §Run Session Supervisor; codebase §1 (apps/studio, packages/*), §2.3. Owner: E2 (protocol generation, stdio host) + E4 (extension host). Phase 32 (protocol-level scope; creation dialogs, editors, Inspector forms, command palette, DataStore UI, remote web mode, web sandbox, native adapters, `.drmx`, drm-visual-schemas are **post-1.0 deferred** — see §Deferred). Depends on [workspace-model.md](../toolchain/workspace-model.md), [verify-engine.md](../toolchain/verify-engine.md), [handle-system.md](../toolchain/handle-system.md), [build-orchestration.md](../toolchain/build-orchestration.md).
+Scope: the engine↔Studio bridge — generated TypeScript types + JSON-RPC schema (`packages/studio-protocol`), `drm studio --stdio` host, capability handshake, revisioned optimistic concurrency, durable journaled ChangeSets with conditional undo, format-preserving editing, run-session supervisor, command/data-plane separation, workspace-trust gating, and renderer capability model. Implements [ui-architecture.md](../../ui-architecture.md) Core Principles, §Process Architecture, §Protocol, §Transactional Mutations, §Run Session Supervisor. Owner: E2 (protocol generation, stdio host) + E4 (supervisor). Phase 32. UI state/streams: [studio-ui-runtime.md](studio-ui-runtime.md). Extensions: [studio-extensions.md](studio-extensions.md). Depends on [workspace-model.md](../toolchain/workspace-model.md), [verify-engine.md](../toolchain/verify-engine.md), [handle-system.md](../toolchain/handle-system.md), [build-orchestration.md](../toolchain/build-orchestration.md).
 
 ## REQ Bindings
 
@@ -40,14 +40,15 @@ pub enum StudioRequest {
     Mutate { base_revision: u64, command: ModelCommand },
     BuildStart { target: Option<NodeName> }, BuildCancel,
     RunStart { config: RunConfig }, RunStop { session: SessionId }, RunRestart { session: SessionId },
-    Undo { changeset: ChangeSetId },           // conditional undo (I-ST9)
+    Undo { changeset: ChangeSetId, force: bool }, // force requires explicit confirmation + trust
     SubscribeTelemetry { channels: Vec<TelemetryChannel> },
 }
 pub enum ModelCommand {
-    PackageCreate(PackageSpec), PackageUpdate(PackageSpec), PackageDelete(PackageName),
+    PackageCreate(PackageSpec), PackageRename { from: PackageName, to: PackageName }, PackageDelete(PackageName),
     NodeCreate(NodeSpec), NodeUpdate(NodeSpec), NodeDelete(NodeName),
-    TopicCreate(TopicSpec), TopicRename { from: TopicPath, to: TopicPath }, TopicDelete(TopicPath),
-    ComputeUpdate(ComputeSpec), LinkUpdate(LinkSpec),
+    TopicCreate(TopicSpec), TopicUpdate(TopicSpec), TopicRename { from: TopicPath, to: TopicPath }, TopicDelete(TopicPath),
+    ComputeCreate(ComputeSpec), ComputeUpdate(ComputeSpec),
+    LinkCreate(LinkSpec), LinkUpdate(LinkSpec),
 }
 pub enum StudioResponse {
     HelloAck(HelloAck),
@@ -87,17 +88,19 @@ pub struct RunSession {
 - **I-ST9 UndoConditional**: undo reverts the original ChangeSet only when expected input hashes still match; externally changed files cannot be silently overwritten (Compare/Cancel/Force). Undo operates on file transactions, never React state. Test: `studio_undo_guard`.
 - **I-ST10 SupervisorOutlivesUi**: run sessions owned by the supervisor process — closing Studio prompts Leave-running/Stop; remote disconnect leaves nodes running unless run_config says otherwise; closing a window can never kill or orphan robot processes. Test: `supervisor_outlives_ui`.
 - **I-ST11 TrustGatesExecution**: untrusted workspace ⇒ view manifests/browse/inspect only; Build/Run/workspace extensions/native adapters gated behind `[ Trust Workspace ]`; a cloned repository must not execute code by being opened. Test: `trust_gate` fixture.
+- **I-ST12 DurableJournal**: prepared outputs and journal are flushed before rename; renamed files and parent directories are flushed before commit cleanup. Recovery is idempotent after every kill point. Test: `journal_durability`.
+- **I-ST13 BoundedControlFrames**: JSON-RPC line length, collection counts, and decoded request size are bounded before allocation-heavy parsing. Test: `studio_frame_bounds`.
 
 ## Functions
 
 ```rust
 // drm-cli::studio --stdio host
 fn serve_stdio(mut rx: impl Read, tx: impl Write) -> Result<(), Status> {
-    let first: StudioRequest = parse(rx.next_line()?)?;
-    let hello = handshake(first)?;                       // MUST be Hello — I-ST capability handshake
+    let first: StudioRequest = parse_bounded(rx.next_line_bounded(MAX_CONTROL_BYTES)?)?;
+    let hello = handshake(first)?;                       // MUST be Hello; capability handshake
     tx.write(HelloAck(hello).to_json_line())?;
-    for line in rx.json_lines() {
-        let req: StudioRequest = parse(line)?;
+    for line in rx.json_lines_bounded(MAX_CONTROL_BYTES) {
+        let req: StudioRequest = parse_bounded(line)?;
         let resp = dispatch(req)?;                       // engine calls only — single-semantics (I-ST1)
         tx.write(resp.to_json_line())?;
     }
@@ -107,11 +110,13 @@ fn serve_stdio(mut rx: impl Read, tx: impl Write) -> Result<(), Status> {
 fn dispatch(req: StudioRequest) -> Result<StudioResponse, Status> {
     match req {
         OpenWorkspace { path } => {
-            recover_journals(&path)?;                    // I-ST8 startup recovery first
-            let snapshot = workspace_model::build_without_execution(tree(&path))?;
+            let root = authorize_workspace_root(path)?;  // remote roots are host-configured allowlists
+            if trusted(&root) { recover_journals_durable(&root)?; } // untrusted open stays read-only
+            let snapshot = workspace_model::build_without_execution(tree_no_hooks(&root))?;
             Ok(snapshot_rev_with_capabilities(snapshot, trusted(&path))) // untrusted remains view-only
         }
         Mutate { command, base_revision } => {
+            require_trusted_workspace()?;                // I-ST11: untrusted is view-only
             expect_revision(base_revision)?;             // I-ST7: stale ⇒ CONFLICT{revision}
             validate_paths_beneath_workspace_no_symlink_escape(&command)?;
             let new = apply_edit_preserving(load()?, command)?;           // I-ST6 (toml_edit/CST)
@@ -120,17 +125,18 @@ fn dispatch(req: StudioRequest) -> Result<StudioResponse, Status> {
             cs.commit()?;                                // rename prepared files; remove journal
             Ok(MutationResult { revision: new.rev, render: render(new) })
         }
-        Undo { changeset } => undo_conditional(changeset),                 // I-ST9 hash-guarded
-        BuildStart { .. } => supervisor::build(..).map(render),            // build-orchestration flow
-        RunStart { config } => supervisor::start_session(config).map(render),  // I-ST10
-        RunStop { session } | RunRestart { session } => supervisor::control(session),
-        SubscribeTelemetry { .. } => diag::subscribe(..).map(render),
+        Undo { changeset, force } => { require_trusted_workspace()?; undo_conditional(changeset, force) },
+        BuildStart { .. } => { require_trusted_workspace()?; supervisor::build(..).map(render) },
+        RunStart { config } => { require_trusted_workspace()?; supervisor::start_session(config).map(render) },
+        RunStop { session } | RunRestart { session } => { require_trusted_workspace()?; supervisor::control(session) },
+        SubscribeTelemetry { .. } => open_binary_stream_capability(..), // token only; bytes never JSON
     }
 }
 
-fn undo_conditional(cs: ChangeSetId) -> Result<StudioResponse, Status> {
+fn undo_conditional(cs: ChangeSetId, force: bool) -> Result<StudioResponse, Status> {
     let cs = journal_load(cs)?;
     if inputs_unchanged(&cs.expected_input_hashes) { cs.revert().map(render) }
+    else if force && explicit_force_confirmation_present() { cs.revert().map(render) }
     else { Ok(ConflictExternalChanged) }                 // UI offers Compare/Cancel/Force (I-ST9)
 }
 ```
@@ -146,13 +152,13 @@ fn undo_conditional(cs: ChangeSetId) -> Result<StudioResponse, Status> {
 *Mutation flow (I-ST1/I-ST6/I-ST7/I-ST8):*
 
 1. Studio sends domain command with `base_revision` (never raw file writes).
-2. Engine: revision check → format-preserving apply → re-parse → verify.
+2. Engine: trust + revision + contained-path checks → format-preserving apply → re-parse → verify.
 3. Verify failure: full failure report (check-IDs + REQ citations); no partial apply, revision unchanged.
-4. Success: journaled multi-file commit; response = new revision + canonical render; events `workspaceChanged`/`diagnosticsChanged` emitted.
+4. Success: flush temps → flush journal → rename → flush parents → mark committed → remove journal; response = new revision + canonical render.
 
 *Crash recovery (I-ST8):*
 
-1. Startup scans workspace journals.
+1. Trusted startup scans workspace journals; untrusted open reports pending recovery without writing.
 2. Journal found in Prepared/Committed-partial state ⇒ finish renames or roll back to input hashes.
 3. Journal removed; workspace consistent.
 
@@ -182,6 +188,8 @@ fn undo_conditional(cs: ChangeSetId) -> Result<StudioResponse, Status> {
 | Studio disconnect mid-build/run | build completes headless; run session persists (I-ST10) |
 | Two Studio instances | revisioned concurrency arbitrates; single in-flight build lock per workspace |
 | Untrusted workspace + Build request | refused by trust gate (I-ST11) |
+| Untrusted workspace with pending journal | view-only warning; no recovery write until trusted |
+| Oversize/deep/count-heavy JSON request | bounded error before dispatch (I-ST13) |
 
 ## Test Matrix
 
@@ -198,9 +206,11 @@ fn undo_conditional(cs: ChangeSetId) -> Result<StudioResponse, Status> {
 | `studio_undo_guard` (external change) | I-ST9 |
 | `supervisor_outlives_ui` (close/disconnect scenarios) | I-ST10 |
 | `trust_gate` (untrusted restrictions) | I-ST11 |
+| `journal_durability` (flush/rename kill matrix) | I-ST12 |
+| `studio_frame_bounds` | I-ST13 |
 | handshake compat (older client) | capability-driven feature hiding |
 | e2e: open→edit→verify→build→run→stop | full flow green |
 
-## Deferred (post-1.0 — recorded, designed-for, not built in this program)
+## Staging
 
-Creation dialogs (New Package/Node/Topic), Node/Topic editors, universal Inspector forms, raw-edit CodeMirror 6 surface, command palette/keybindings registry, DataStore UI mechanics (binary-stream panels), remote web mode (`drm studio serve`, TLS/auth), extension web sandbox (iframe CSP), native vendor adapters, `.drmx` packaging + registry, `drm-visual-schemas` converters. The protocol surface above is designed so these attach without breaking changes (capability handshake + typed command set).
+The v1 surfaces, creation flows, editors, Inspector, graph, Problems/Build/Run panels, and bounded frontend state follow [studio-ui-runtime.md](studio-ui-runtime.md). The extension platform is the designed second phase in [studio-extensions.md](studio-extensions.md). Remote serving follows desktop after protocol stability; direct listening remains disabled until TLS, origin validation, and authentication are configured.

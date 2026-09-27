@@ -51,7 +51,7 @@ pub struct ConsumerBox { auth: EndpointAuth, core: drm_core::Consumer, outstandi
 ## Invariants
 
 - **I-A1 ValidateOnce**: authorization and descriptor validation execute exactly once per endpoint open; `drm_publish`/`drm_read_*` perform zero permission or schema checks. Test: `ffi_validate_once` (counter).
-- **I-A2 PointerChecked**: every exported function checks each raw pointer (and `data.is_null() && len != 0`) **before** forming a Rust reference or slice; a null/foreign pointer yields `InvalidArg`, never UB. Test: `ffi_null_pointers`, `ffi_foreign_handles` (ASan/UBSan).
+- **I-A2 PointerChecked**: every exported function checks nullable pointers and `(data == NULL && len != 0)` **before** forming a Rust reference or slice. Non-null pointers must satisfy the C API's validity/lifetime preconditions; portable C cannot prove an arbitrary address valid. Test: `ffi_null_pointers` (ASan/UBSan).
 - **I-A3 OpaqueSafe**: client-visible handles are opaque; no raw cross-process pointer ever appears. Test: header inspection + code review gate.
 - **I-A4 StatusMirror**: every Rust `Status` variant has exactly one C code and vice versa (append-only). Test: `status_map` (exhaustive both directions).
 - **I-A5 BorrowDiscipline**: one outstanding borrow per consumer endpoint; a second ⇒ `Busy`; release with a stale/foreign/double token ⇒ `InvalidBorrow`; no heap allocation on acquire/release. Test: `ffi_borrow_discipline`, `ffi_no_borrow_alloc`, `ffi_borrow_busy`.
@@ -84,8 +84,10 @@ pub unsafe extern "C" fn drm_publish(
 {
  if p.is_null() { return DRM_ERR_INVALID_ARG; } // I-A2
  if data.is_null() && len != 0 { return DRM_ERR_INVALID_ARG; }
- let payload = if len == 0 { &[][..] } else { slice::from_raw_parts(data, len) };
- (*p).core.publish(payload).into() // auth captured at open (I-A1)
+ ffi_catch(|| { // every export has the same no-unwind shield (I-A6)
+  let payload = if len == 0 { &[][..] } else { slice::from_raw_parts(data, len) };
+  (*p).core.publish(payload).into() // auth captured at open (I-A1)
+ })
 }
 
 #[no_mangle]
@@ -136,6 +138,7 @@ pub unsafe extern "C" fn drm_borrow_release(
 | Case | Result |
 |---|---|
 | Null context/handle/out pointer | `InvalidArg` before deref (I-A2) |
+| Non-null invalid/dangling pointer | caller contract violation; behavior is undefined by the C API, never claimed detectable |
 | `data == NULL && len != 0` | `InvalidArg` before slice |
 | Undeclared topic at open | `Permission` |
 | Wrong-ABI binary vs deployment | `WrongAbi` at open (guard) |
@@ -154,7 +157,7 @@ pub unsafe extern "C" fn drm_borrow_release(
 | Case | Expected |
 |---|---|
 | `ffi_validate_once` | 0 per-message checks over 1e6 calls |
-| `ffi_null_pointers` / `ffi_foreign_handles` | I-A2 (ASan/UBSan clean) |
+| `ffi_null_pointers` + valid-pointer boundary cases | I-A2 (ASan/UBSan clean) |
 | `status_map` | I-A4 exhaustive |
 | `ffi_borrow_discipline` / `ffi_borrow_busy` / `ffi_no_borrow_alloc` | I-A5: no alloc, token discipline |
 | `ffi_no_unwind` | I-A6 |

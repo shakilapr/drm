@@ -1,6 +1,6 @@
 # Spatial Index Algorithms
 
-Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fixed-capacity open-addressing hash grid** for dynamic overlay objects and a **compiled static BVH** for static environment frames with **live calibration-slot subtree swaps**. Zero-heap steady-state indexing/queries; frame-typed query API; candidate completeness; exact spatial memory verification. Implements [spatial_architecture.md](../../spatial_architecture.md) §Runtime Spatial Index, §Hash Grid for Dynamic Objects, §Compiled Static BVH, §Ownership and Update Discipline, §Proximity Query Semantics. Owner: E2 (compiler/BVH) + E1 (runtime grid). Phase 33 (implemented M21–M22). Depends on [spatial-core.md](spatial-core.md), [spatial-queries.md](spatial-queries.md), [memory-budget.md](../memory-budget.md).
+Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fixed-capacity banked hash grid** for dynamic overlay objects and a **compiled static BVH** for static environment frames with **live calibration-slot subtree swaps**. Zero-heap steady-state indexing/queries; frame-typed query API; candidate completeness; exact spatial memory verification. Implements [spatial_architecture.md](../../spatial_architecture.md) §Runtime Spatial Index, §Hash Grid for Dynamic Objects, §Compiled Static BVH, §Ownership and Update Discipline, §Proximity Query Semantics. Owner: E2 (compiler/BVH) + E1 (runtime grid). Phase 33 (implemented M21–M22). Depends on [spatial-core.md](spatial-core.md), [spatial-queries.md](spatial-queries.md), [memory-budget.md](../memory-budget.md).
 
 ## REQ Bindings
 
@@ -29,11 +29,16 @@ Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fi
 
 // Fixed-capacity open-addressing table — zero heap allocation in steady state (§Hash Grid)
 pub struct HashGrid {
-    memberships: [Membership; MEMBERSHIP_CAPACITY], // checked max_objects × max_cells_per_object
-    objects: [ObjectRecord; MAX_OBJECTS],
-    version: AtomicU64,               // odd during mutation; even when queryable
+    banks: [GridBank; 3],             // immutable while selected/read; fixed at activation
+    selector: AtomicU64,              // packed {version, bank}; one atomic publication
+    readers: [AtomicU32; 3],          // transient query guards; no cross-process refcount ownership
+    writer_busy: AtomicBool,          // one non-blocking updater
     cell_size: f64,                   // from index.drm
     anchor: FrameId,                  // grid anchored to declared frame
+}
+pub struct GridBank {
+    memberships: [Membership; MEMBERSHIP_CAPACITY],
+    objects: [ObjectRecord; MAX_OBJECTS],
 }
 pub struct Membership { state: SlotState, key: CellKey, handle: SpatialHandle }
 pub struct ObjectRecord { handle: SpatialHandle, envelope: SlackEnvelope, last_version: u64 }
@@ -50,7 +55,7 @@ pub struct SlackEnvelope {
 // Compiled static BVH (§Compiled Static BVH) — build-time artifact, fixed layout
 pub struct CompiledBvh {
     nodes: &'static [BvhNode],         // generated fixed artifact; no runtime growth
-    subtrees: &'static [SubtreeSlot], // two fixed banks each; atomic active-bank selection
+    subtrees: &'static [SubtreeSlot],  // fixed banks + query guards; atomic selection
 }
 pub struct BvhNode { aabb: Aabb, left: u32, right: u32, leaf: Option<StaticEntitySet> }
 ```
@@ -65,9 +70,10 @@ pub struct BvhNode { aabb: Aabb, left: u32, right: u32, leaf: Option<StaticEntit
 - **I-X6 Completeness**: union(grid candidates, BVH candidates) ⊇ brute-force set — false positives allowed, misses forbidden. Test: `spatial_proximity_complete` (10k random scenes property).
 - **I-X7 DerivedCacheOnly**: the index is a derived cache, not authoritative state; authoritative object state remains versioned dynamic edges; a node builds indexes exactly over its declared `[spatial] read`; updates ride existing version counters — unchanged versions touch nothing; no polling, no cross-node protocol, no central registry. Test: `spatial_index_derived`.
 - **I-X8 BvhLiveCalibration**: recalibration swaps affected subtrees live through calibration slots (same slot mechanism as [spatial-queries.md](spatial-queries.md) §Calibration); no recompilation, no node restarts. Test: `spatial_bvh_live_calib`.
-- **I-X9 MemoryVerified**: worst-case index memory (buckets + slots at `max_objects`, BVH nodes) is part of the compute-unit budget math, verified exactly like channel buffers. Test: `spatial_index_memory_verified`.
+- **I-X9 MemoryVerified**: worst-case index memory (three grid banks, query scratch, guarded BVH banks) is part of the compute-unit budget math, verified exactly like channel buffers. Test: `spatial_index_memory_verified`.
 - **I-X10 RejectedStructures**: octrees/k-d/sweep-and-prune absent from the codebase. Test: audit.
-- **I-X11 CoherentQuery**: query accepts candidates only between matching even grid-version reads; bounded retry exhaustion returns `ConcurrentUpdate`, never an incomplete set. Test: `spatial_query_concurrent`.
+- **I-X11 CoherentQuery**: query acquires a selected immutable bank by increment→selector-reread; writers never modify a bank with readers. Bounded acquisition failure returns `ConcurrentUpdate`, never a data race or incomplete set. Test: `spatial_query_concurrent`.
+- **I-X12 UpdateAtomic**: re-bucket preflights and builds an inactive bank; one release selector store publishes the complete update. Failure leaves the selected bank unchanged. Test: `spatial_update_atomic`.
 
 ## Functions
 
@@ -84,27 +90,26 @@ fn on_sample(&mut self, id: EntityId, p_typed: TypedPoint, ver: u64) -> Result<(
 
 fn rebucket(&mut self, id: EntityId, p: Point3, old: SlackEnvelope, ver: u64) -> Result<(), Status> {
     let next = SlackEnvelope { center: p, slack: self.slack, .. };
-    self.preflight_memberships(next.span().len())?;              // failure changes nothing
-    self.version.fetch_add(1, Acquire);                           // even → odd
-    for cell in old.span() { self.memberships.remove(cell_key(cell), id); }
-    for cell in next.span() { self.memberships.insert(cell_key(cell), current_handle(id)); }
-    self.set_envelope_and_version(id, next, ver);
-    self.version.fetch_add(1, Release);                           // odd → even commit
+    let _writer = self.try_writer_guard()?;                       // Busy; never waits
+    let current = self.selector.load(Acquire);
+    let target = self.find_inactive_bank_with_zero_readers(current).ok_or(Busy)?;
+    let plan = self.preflight_exact_edits(current.bank, id, &old, &next)?; // probes exact slots
+    self.banks[target].copy_from(&self.banks[current.bank]);       // fixed bounded copy
+    self.banks[target].apply(plan, id, next, ver);                 // selected bank untouched
+    let next_version = current.version.checked_add(1).ok_or(GenerationExhausted)?;
+    self.selector.store(pack(next_version, target), Release);      // atomic visibility
     Ok(())
 }
 
 // ---- Proximity queries (§Proximity Query Semantics — frame + typed geometry) ----
 fn nearby(&self, frame: FrameId, point: TypedPoint, radius: f64) -> Result<CandidateSet, Status> {
     let p = point.in_frame(self.anchor)?;                       // typed conversion through standard path
-    let v0 = self.version.load(Acquire);
-    if v0 & 1 != 0 { return Err(ConcurrentUpdate); }
+    let guard = self.acquire_selected_bank_bounded()?;          // increment readers, reread selector
     let mut set = CandidateSet::from_caller_scratch()?;         // fixed capacity; no allocation
     for key in cells_overlapping_sphere(frame, p, radius, self.cell_size) {   // superset cells — I-X6
-        set.merge(self.memberships.scan_cell(key)?);            // generation-valid entries only
+        set.merge(guard.bank.memberships.scan_cell(key)?);      // generation-valid entries only
     }
     set.merge(self.bvh.query(frame, aabb_of(p, radius)));
-    let v1 = self.version.load(Acquire);
-    if v0 != v1 { return Err(ConcurrentUpdate); }               // caller may retry boundedly
     Ok(set)
 }
 
@@ -114,9 +119,9 @@ fn region(&self, frame: FrameId, aabb: TypedAabb) -> Result<CandidateSet, Status
 fn compile_bvh(static_frames: &StaticEnv) -> CompiledBvh { /* SAH split, deterministic ordering; build-time */ }
 
 fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result<(), Status> {
-    let inactive = self.subtrees[slot].inactive_bank();
+    let inactive = self.subtrees[slot].inactive_unread_bank().ok_or(Busy)?;
     inactive.build_checked(new_geom)?;                          // oversize/failure leaves active intact
-    self.subtrees[slot].publish(inactive)                       // release-select complete bank
+    self.subtrees[slot].publish(inactive)                       // guarded readers keep old bank immutable
 }
 ```
 
@@ -125,7 +130,7 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 *Index build and update discipline (§Ownership and Update Discipline):*
 
 1. Node declares `[spatial] read` frames; index constructs over exactly those (I-X7).
-2. Versioned dynamic edge advances ⇒ affected buckets refresh; an object inside its fixed slack envelope changes no memberships.
+2. Versioned dynamic edge advances ⇒ affected buckets refresh in an inactive fixed bank; an object inside its fixed slack envelope changes no memberships.
 3. No polling, no cross-node index protocol, no central registry.
 
 *Proximity query:*
@@ -138,7 +143,7 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 *BVH recalibration:*
 
 1. Calibration source publishes new static geometry for a subtree region.
-2. `swap_subtree` publishes into the subtree's calibration slot; slot version bumps.
+2. `swap_subtree` rebuilds an inactive bank with zero readers, then atomically selects it; if none is free, return `Busy` without mutation.
 3. Queries execute the new AABBs immediately; history before the swap resolves through `at()` rules (temporal consistency with spatial-queries I-Q8).
 
 ## Edge Cases & Errors
@@ -154,6 +159,8 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 | Stale BVH vs runtime statics | impossible without slot bump — fingerprint check at deploy; live swaps only via slots (I-X8) |
 | Historical proximity requested | unsupported: proximity is latest-only; resolve returned candidates through `at()` |
 | Grid memory vs budget | verify rejects config exceeding declared budget (I-X9) |
+| No inactive grid/BVH bank without readers | `Busy`; active geometry unchanged, updater retries later |
+| Update fails during exact probe/build | selected bank unchanged (I-X12) |
 
 ## Test Matrix
 
@@ -169,5 +176,6 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 | `spatial_bvh_live_calib` (slot swap, no restart) | I-X8 |
 | `spatial_index_memory_verified` | I-X9 in budget math |
 | `spatial_query_concurrent` | I-X11: complete set or `ConcurrentUpdate` |
+| `spatial_update_atomic` (failure/crash injection) | I-X12: old or complete new bank |
 | code audit | I-X10 |
 | perf: candidate factor vs brute force | documented |

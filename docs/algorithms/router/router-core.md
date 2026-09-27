@@ -45,7 +45,11 @@ pub enum WireFrame {
 // No DRM-level fragmentation/reassembly — oversize belongs on stream transports (build-rejected).
 
 pub struct StreamKey { epoch: u32, seq: u64 }
-pub struct IngressState { newest: Option<StreamKey> } // per (source, wire_channel_id); reset on session reconnect
+pub struct IngressState { newest: Option<StreamKey> } // per (link, wire_channel_id); reset on reconnect
+pub struct EgressState {
+ cursor: ReaderCursor,             // per (topic, link), sequential when no export limiter
+ last_exported: Option<StreamKey>, // latest-sampling routes never resend an unchanged sample
+}
 ```
 
 ## Invariants
@@ -62,6 +66,8 @@ pub struct IngressState { newest: Option<StreamKey> } // per (source, wire_chann
 - **I-RT8 RouterOwnsBytes**: egress performs `borrow → copy into router-owned bounded buffer → release`, then enqueues; no borrowed DRM sample outlives the borrow scope (external-I/O rule). Test: `router_borrow_scope` (instrumented; lane queue holds zero DRM borrows).
 - **I-RT9 IngressOrdering**: for a given (link, wire_channel_id), a frame with the same epoch and `source_seq ≤ last_seq` is dropped; a higher epoch triggers a stream reset (imported publisher epoch bump). UDP reorder/duplicate can never make older state the new latest. Test: `udp_reorder`, `udp_duplicate`, `remote_restart_reset`.
 - **I-RT10 SerialFraming**: serial frames use a delimiter + COBS encoding + explicit length + CRC32C, so a dropped byte cannot desynchronize the receiver indefinitely. Test: `serial_resync`.
+- **I-RT13 ForwardOnce**: each route forwards a source key at most once; an unrestricted route advances a per-route sequential cursor, while an export-limited route samples a newer latest key only after its period opens. Test: `egress_cursor`, `export_no_duplicate`.
+- **I-RT14 ValidateBeforeState**: malformed or integrity-failing frames change no ingress ordering/importer state. Test: `ingress_invalid_no_state`.
 
 ## Functions
 
@@ -69,8 +75,13 @@ pub struct IngressState { newest: Option<StreamKey> } // per (source, wire_chann
 // ---- Egress (per link, per tick) ----
 fn egress(&mut self, link: LinkId) -> Result<(), Status> {
  for topic in self.routes_on(link) { // I-RT1: forwarding plan filter
- // I-RT8: momentary borrow, copy to router-owned buffer, release BEFORE any queue/I/O
- let owned = self.momentary_copy_with_key(topic)?; // payload + publisher epoch/sequence
+ // Reserve a fixed lane slot first, then copy directly into it. Cursor commits only after reserve.
+ let Some(mut reserved) = self.lanes.try_reserve(link, priority_class(topic))? else {
+  return Err(QueueFull);
+ };
+ let Some(owned) = self.copy_next_or_limited_latest(topic, link, &mut reserved)? else {
+  reserved.cancel(); continue; // Empty, unchanged latest, or export period closed
+ }; // borrow → copy → release; reserved bytes never alias SHM (I-RT8/I-RT13)
  let header = WireHeader {
  version: 1, flags: self.integrity_flags(topic), reserved: 0,
  wire_channel_id: self.wire_id(topic, link), // I-RT7: transport binding
@@ -86,7 +97,7 @@ fn egress(&mut self, link: LinkId) -> Result<(), Status> {
  Stream => WireFrame::Record { header, payload: owned.payload },
  Serial => WireFrame::Serial { header, payload: owned.payload },
  };
- self.lanes.enqueue(link, priority_class(topic), frame)?; // lanes-shaping.md
+ reserved.commit(frame); // cannot fail after reservation; egress cursor/key commits here
  }
  Ok(())
 }
@@ -95,6 +106,7 @@ fn egress(&mut self, link: LinkId) -> Result<(), Status> {
 fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
  validate_header_and_exact_length(&frame)?; // before lookup, state mutation, or payload access
  let topic = self.topic_for(frame.header.wire_channel_id, link)?;
+ verify_e2e_if_final(topic, &frame)?; // I-RT14: integrity before reset/dedup state mutation
  let st = self.ingress_state(link, frame.header.wire_channel_id);
 
  if let Some(old) = st.newest {
@@ -102,11 +114,13 @@ fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
  if frame.header.stream_epoch < old.epoch { return Ok(()); }
  if frame.header.stream_epoch > old.epoch { self.import_publisher(topic)?.reset_stream_epoch(); }
  }
- verify_e2e_if_final(topic, &frame)?;
+ self.forward_preserving_origin(link, topic, &frame)?; // reserve/queue transit first; excludes ingress
+ if self.has_local_consumers(topic) {
+  if let Err(e) = self.import_publisher(topic)?.publish_copy(&frame.payload) {
+   self.count_import_drop(topic, e); // local pressure never prevents already-routed transit
+  }
+ }
  st.newest = Some(StreamKey { epoch: frame.header.stream_epoch, seq: frame.header.source_seq });
-
- if self.has_local_consumers(topic) { self.import_publisher(topic)?.publish_copy(&frame.payload)?; }
- self.forward_preserving_origin(link, topic, frame)?; // excludes ingress link; no new source key
  Ok(())
 }
 ```
@@ -140,6 +154,9 @@ fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
 | Oversize record on stream transport | accepted (stream framing allows large samples) |
 | Importer publisher lock contention on restart | publisher-lifecycle authority protocol applies |
 | Loop of routers (A↔B↔C) | forwarding plan excludes ingress-link re-export (route-derivation I-R7) |
+| Egress tick with no new source key | no frame emitted (I-RT13) |
+| Bad higher-epoch CRC | reject; importer epoch and dedup state unchanged (I-RT14) |
+| Local import pool exhausted at transit router | local drop counted; valid frame still follows its forwarding tree |
 
 ## Test Matrix
 
@@ -156,3 +173,5 @@ fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
 | `tcp_session_scope` (kill mid-stream) | I-RT5 |
 | `disconnect_isolation` (link cut) | I-RT6 |
 | two-host simulation + physical matrix | all classes and transports |
+| `egress_cursor` / `export_no_duplicate` | I-RT13 |
+| `ingress_invalid_no_state` | I-RT14 |

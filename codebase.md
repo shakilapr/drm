@@ -144,7 +144,7 @@ Artifact rules:
 1. Per-crate unit/property tests live inside each crate; `tests/` holds only whole-system suites (§4.1).
 2. `examples/` contains one buildable, CI-executed workspace per binding language.
 3. All automation lives in `xtask/` (§5.1); no one-off shell scripts.
-4. Documentation set: normative specs (architecture docs), execution plan (work-plan), requirement registry (§6.2), decision records (§6.3).
+4. Documentation set: normative specs (architecture docs), canonical algorithms, execution plan (work-plan), requirement registry (§6.2), decision records (§6.3). Algorithm coverage must include every non-deferred normative architecture path.
 
 ---
 

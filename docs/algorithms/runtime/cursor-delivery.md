@@ -71,6 +71,7 @@ fn next<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Statu
  let missed = oldest - wanted; // I-C2: exact
  if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
  self.last_read = Some(oldest - 1); // I-C4: resume at oldest next call
+ ch.overrun_count.fetch_add(missed, Relaxed); // aggregate observed gaps; diagnostics only
  return Ok(Gap { missed });
  }
  if wanted >= ws {

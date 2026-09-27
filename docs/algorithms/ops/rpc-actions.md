@@ -19,6 +19,7 @@ pub struct Request { correlation_id: CorrelationId, payload: BoundedBytes, deadl
 pub struct Cancel { correlation_id: CorrelationId }
 pub struct Response { correlation_id: CorrelationId, status: Status, payload: BoundedBytes }
 pub struct ActionState { correlation_id: CorrelationId, phase: ActionPhase, progress_pct: u8 }
+pub struct Phase { max_duration_ns: u64, execute: fn(&mut OwnedActionState) -> Status }
 // Maps and payloads have generated fixed capacities allocated at activation.
 ```
 
@@ -26,7 +27,7 @@ Topic conventions (static, generated from service declarations in manifests):
 - Each client owns `request/<client_id>` and `cancel/<client_id>` topics. This preserves one publisher per canonical topic.
 - The server consumes those topics with `next()` through a deterministic round-robin multiplexer.
 - The server alone publishes generated `response/<client_id>` and `state/<client_id>` topics. Each client reads only its pair and dispatches concurrent calls by full `CorrelationId`.
-- Request topics use `reject` with the server as a required sequential consumer. Capacity is verified from declared concurrency; saturation returns `RpcBusy`, never loses a request.
+- Request and cancel topics use `reject` with the server as a required sequential consumer. Response and state topics use `reject` with their client as the required sequential consumer. Capacity and pending-output slots are verified from declared concurrency; saturation returns `RpcBusy`, never silently loses an accepted request, cancel, response, or terminal state.
 
 ## Invariants
 
@@ -36,6 +37,8 @@ Topic conventions (static, generated from service declarations in manifests):
 - **I-R4 CoreUntouched**: rpc adds zero new channel semantics — only the declared topic pairs. Test: code-audit + verify catalogue unchanged.
 - **I-R5 SingleWriter**: every generated RPC topic has exactly one publisher; server fan-in is an explicit deterministic multiplexer. Test: `rpc_single_writer`.
 - **I-R6 BoundedState**: correlation, cancellation, and workflow tables have declared fixed capacities; full returns `RpcBusy`. Test: `rpc_capacity`.
+- **I-R7 AcceptedCompletes**: once a request is accepted, its response/terminal state occupies a fixed pending slot until the client topic accepts it or the session fails. Test: `rpc_response_pressure`.
+- **I-R8 CancelLatencyBounded**: every action phase declares a finite maximum duration; cancellation acknowledgement latency is bounded by the current phase plus one server poll interval. Test: `rpc_cancel_bound`.
 
 ## Functions
 
@@ -67,10 +70,10 @@ fn serve(&self, handler: impl Fn(BoundedBytes) -> Result<BoundedBytes, Status>) 
  if self.cancelled.contains(&req.correlation_id) {
  self.state_topic.publish(ActionState { phase: Cancelled, .. }); continue; // I-R2 ack
  }
- let (status, payload) = split_result(handler(req.payload));
- self.response_topic(req.correlation_id.client_id)?.publish(Response {
- correlation_id: req.correlation_id, status, payload
- })?;
+ let pending = self.pending_outputs.try_reserve(req.correlation_id).map_err(|Full| RpcBusy)?;
+ let (status, payload) = split_result(handler(req.payload)); // request payload is owned
+ pending.store(Response { correlation_id: req.correlation_id, status, payload });
+ self.flush_pending_round_robin()?; // QueueFull retains the slot; retry occurs outside core
  }
 }
 
@@ -78,7 +81,7 @@ fn serve(&self, handler: impl Fn(BoundedBytes) -> Result<BoundedBytes, Status>) 
 fn run_action(&self, cid: CorrelationId, phases: &[Phase; MAX_PHASES], phase_count: usize) {
  for ph in &phases[..phase_count] {
  if self.cancelled.contains(&cid) { self.ack_cancel(cid); return; } // I-R2
- ph.execute();
+ ph.execute(&mut self.owned_action_state(cid)); // bounded by declared max_duration_ns (I-R8)
  self.state_topic.publish(ActionState { correlation_id: cid, phase: ph.done_marker(), .. });
  }
 }
@@ -89,14 +92,14 @@ fn run_action(&self, cid: CorrelationId, phases: &[Phase; MAX_PHASES], phase_cou
 *Request/response cycle:*
 
 1. Client `call` → publish Request on its generated input topic (full cid unique per client session).
-2. Server multiplexes client inputs round-robin, executes handler, publishes Response (cid echo).
+2. Server multiplexes client inputs round-robin, reserves a pending-output slot, executes from owned request bytes, and retains the response until its client topic accepts it.
 3. Client consumes responses, dispatches by cid; deadline bookkeeping per I-R3.
 
 *Action workflow (cancellable):*
 
 1. Client submits action request (cid, phases hint).
 2. Server publishes `ActionState` per phase (progress).
-3. Cancel: client publishes on its cancel topic; server acknowledges at next phase boundary (I-R2); state → `Cancelled`.
+3. Cancel: client publishes on its lossless bounded cancel topic; server acknowledges at the next declared-bounded phase boundary (I-R2/I-R8); state → `Cancelled`.
 4. Client observes terminal state; correlation removed.
 
 ## Edge Cases & Errors
@@ -107,6 +110,8 @@ fn run_action(&self, cid: CorrelationId, phases: &[Phase; MAX_PHASES], phase_cou
 | Response after client timeout | dropped as stale (cid unknown post-timeout) + counter |
 | Server crash mid-action | epoch change on topics (publisher-lifecycle); client sees state stop; restart ⇒ cid space resets (per-session) — pending actions fail with `RpcPeerOffline` |
 | Request storm beyond server rate | request publish returns `RpcBusy`; accepted requests are never overwritten |
+| Response/state topic full | pending output retained; server applies RPC-layer backpressure, core thread never blocks |
+| Cancel topic full | client receives `RpcBusy`; no false claim that cancellation was accepted |
 | Duplicate cid (bug) | server drops second + counter; never mis-delivers (I-R1) |
 | Correlation counter exhausted | session closes with `SequenceExhausted`; counter never wraps |
 
@@ -119,4 +124,6 @@ fn run_action(&self, cid: CorrelationId, phases: &[Phase; MAX_PHASES], phase_cou
 | `rpc_timeout` (deadline expiry + late response) | I-R3 |
 | `rpc_capacity` | full input/table returns `RpcBusy`; no accepted request lost |
 | `rpc_single_writer` | generated graph passes single-writer verification |
+| `rpc_response_pressure` | accepted result retained until delivery/session failure |
+| `rpc_cancel_bound` | acknowledgement within declared phase bound |
 | server-crash-restart fixture | clean failure semantics |

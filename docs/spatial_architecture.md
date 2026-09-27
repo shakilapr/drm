@@ -209,7 +209,7 @@ DRM provides explicit query operations:
 
 These operations resolve state between named frames. Proximity queries (`nearby`, `region`) form the second query family, executing over the Runtime Spatial Index and returning candidate object handles; per-candidate state is then resolved through the operations above.
 
-History ring buffers are allocated only on upstream dynamic edges and live calibration slots needed by declared historical reads. Static constants are never repeated across timestamps. `at()` selects the time-scoped hierarchy plan and resolves every dynamic/calibration input at the requested timestamp before composition.
+History ring buffers are allocated only on upstream dynamic edges and live calibration slots needed by declared historical reads. A time requirement also declares a structural `max_samples` bound; `expected_rate` is planning metadata and never sizes correctness-critical history. The compiler verifies that every required interval fits the declared bound. Static constants are never repeated across timestamps. `at()` selects the time-scoped hierarchy plan and resolves every dynamic/calibration input at the requested timestamp before composition.
 
 ## Discontinuities and Teleports
 

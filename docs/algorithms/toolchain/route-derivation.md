@@ -1,6 +1,6 @@
 # Route Derivation Algorithms
 
-Scope: automatic derivation of a per-topic **forwarding tree** (route plan) from the declared communication graph and physical topology — local elimination, 1→N fan-out, multi-hop forwarding, explicit overrides (`prefer`/`deny`/`force`), external endpoints, acyclic re-export. Path analysis is polynomial (connectivity/bridge based), never simple-path enumeration. Implements architecture.md §Automatic Routing and Explicit Overrides, §External Endpoints. Owner: E3 (crate `drm-workspace::topology::route`). Phase 28 (implemented progressively from ).
+Scope: automatic derivation of a per-topic **forwarding tree** (route plan) from the declared communication graph and physical topology — local elimination, 1→N fan-out, multi-hop forwarding, explicit overrides (`prefer`/`deny`/`force`), external endpoints, acyclic re-export. Path analysis is polynomial (connectivity/bridge based), never simple-path enumeration. Implements architecture.md §Automatic Routing and Explicit Overrides, §External Endpoints. Owner: E3 (crate `drm-workspace::topology::route`). Phase 28.
 
 ## REQ Bindings
 
@@ -63,6 +63,7 @@ pub struct RouteResult {
 - **I-R9 ConflictingOverride**: for a topic, `force` and `deny` targeting the same link, or ≥ 2 `force` routes, is a verify error `ConflictingRouteOverride` — never resolved by precedence. Test: `route_conflicting_override`.
 - **I-R10 FanOutComplete**: every compute that has a consumer of the topic reachable from the source appears exactly once in `forwarding`; local and remote consumers on the same compute are both represented (plans are never overwritten per consumer). Test: `route_fanout`, `route_local_and_remote`.
 - **I-R11 PolyPaths**: path existence/uniqueness is decided by connectivity + bridge/2-connectivity analysis (O(V+E)), with a bounded alternate-path check for multi-path classification; `all_paths` simple-path enumeration is prohibited. Test: `route_cyclic_scale` (large cyclic graph completes in bounded time).
+- **I-R12 OneRootedPlan**: a topic with other than one producer yields no plan; every valid plan is a rooted arborescence with exactly one ingress per non-source compute. Test: `route_source_cardinality`, `route_tree_consistency`.
 
 ## Functions
 
@@ -81,10 +82,13 @@ fn derive(graph: &RouteGraph) -> RouteResult {
  let producers = collect_producers(graph); // nodes ∪ external producers
  let consumers = collect_consumers(graph); // nodes ∪ external consumers
  for (topic, srcs) in &producers {
- for src in srcs {
- let plan = build_forwarding_tree(graph, topic, *src, consumers.get(topic), &res.errors);
- if let Some(p) = plan { res.plans.insert(topic.clone(), p); } // I-R10
- }
+  if srcs.len() != 1 {
+   res.errors.push(SingleWriterViolation { topic: topic.clone(), producers: srcs.clone() });
+   continue; // never overwrite one source's plan with another source's plan
+  }
+  let src = srcs.first().unwrap();
+  let plan = build_forwarding_tree(graph, topic, *src, consumers.get(topic), &mut res.errors);
+  if let Some(p) = plan { res.plans.insert(topic.clone(), p); } // I-R10/I-R12
  }
  res
 }
@@ -102,11 +106,19 @@ fn build_forwarding_tree(graph, topic, src, consumer_eps, errors) -> Option<Topi
  let mut plan = TopicRoutePlan { source: src, forwarding: BTreeMap::new() };
  for (compute, path) in selected { // deterministic (BTreeMap)
  for (i, link) in path.iter().enumerate() {
- let rule = plan.forwarding.entry(compute_at(&path, i)).or_default();
- if i == 0 { rule.ingress = None; } else { rule.ingress = Some(path[i-1]); }
+ let at = compute_at(&path, i);
+ let incoming = if i == 0 { None } else { Some(path[i-1]) };
+ let rule = plan.forwarding.entry(at).or_default();
+ if rule.ingress.is_some() && rule.ingress != incoming {
+  errors.push(InconsistentFanout { topic, compute: at }); return None;
+ }
+ rule.ingress = incoming;
  rule.egress.insert(*link); // union across consumers (fan-out)
  }
  plan.forwarding.entry(compute).or_default().local_delivery |= consumer_here(compute);
+ }
+ if !is_rooted_acyclic_arborescence(&plan) {
+  errors.push(InconsistentFanout { topic }); return None;
  }
  Some(plan)
 }
@@ -120,7 +132,7 @@ fn build_forwarding_tree(graph, topic, src, consumer_eps, errors) -> Option<Topi
 2. Collect producers/consumers (internal nodes + external endpoints).
 3. Deny-prune the edge set; compute loop-safe reachability from the source.
 4. Classify each reached consumer compute as Unique / Multiple / None via polynomial analysis (I-R11); apply force → prefer → ambiguity error.
-5. Merge per-consumer paths into one `TopicRoutePlan`, unioning egress edges (fan-out) and recording local delivery (I-R10).
+5. Merge per-consumer paths into one `TopicRoutePlan`; reject conflicting ingress or cycles instead of emitting a graph the router cannot execute (I-R12).
 6. Collect every error into `RouteResult.errors`; keep successfully derived plans.
 7. Emit plans keyed by topic; verify (verify-engine.md V-RT) and router consume the forwarding rules.
 
@@ -137,6 +149,8 @@ fn build_forwarding_tree(graph, topic, src, consumer_eps, errors) -> Option<Topi
 | topic would re-export over ingress link | excluded (I-R7) |
 | disconnected forest | consumers on another island ⇒ `NoRoute` |
 | large cyclic topology | classification completes in O(V+E)-scale time (I-R11) |
+| zero or multiple producers | single-writer error; no route plan emitted (I-R12) |
+| selected paths give one compute two ingresses | `InconsistentFanout`; require explicit consistent overrides |
 
 ## Test Matrix
 
@@ -154,4 +168,5 @@ fn build_forwarding_tree(graph, topic, src, consumer_eps, errors) -> Option<Topi
 | `route_acyclic_reexport` (A↔B↔C loop) | I-R7 |
 | `route_error_collection` (multiple failures) | I-R8 |
 | `route_cyclic_scale` (property-generated cyclic graphs) | I-R11 bounded time |
+| `route_source_cardinality` / `route_tree_consistency` | I-R12 |
 | 3-fixture workspaces in CI | green |

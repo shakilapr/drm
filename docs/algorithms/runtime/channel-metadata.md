@@ -15,6 +15,7 @@ Scope: channel descriptor block (channel-level metadata) as a naturally aligned 
 | `REQ-CORE-fingerprint-guard` | node fingerprint checked against deployment before mapping | `REQ-CORE-025` |
 | `REQ-CORE-segment-validation` | §Individual Segment Validation — secondary schema/layout check | `REQ-CORE-068` |
 | `REQ-CORE-desc-exact-layout` | exact offsets, counts, and segment size checked with overflow-safe math | `REQ-CORE-016` |
+| `REQ-CORE-runtime-counters` | CCB exposes `drop_count`, `overrun_count`, and `pool_exhausted` for out-of-band diagnostics | `REQ-CORE-093` |
 
 ## Data Structures
 
@@ -61,6 +62,8 @@ pub struct ChannelControlBlock {
  _pad_epoch: u32,
  first_valid_seq: AtomicU64, // sole physical owner
  write_seq: AtomicU64,       // next sequence
+ drop_count: AtomicU64,      // incoming samples dropped inside DRM (currently pool exhaustion)
+ overrun_count: AtomicU64,   // sequences reported missed by consumer Gap outcomes
  pool_exhausted: AtomicU64,
  publish_busy: AtomicBool,
  _pad: [u8; 7],
@@ -80,6 +83,7 @@ pub struct ChannelControlBlock {
 - **I-M5 AlignedAtomics**: every atomic field is naturally aligned; no packed atomic is addressable. Test: `descriptor_offset_asserts`.
 - **I-M6 SegmentReady**: attachment returns `NotReady` while the fixed prefix state is not `Ready`; no other bytes are interpreted. Test: `attach_init_refused`.
 - **I-M7 ExactLayout**: attachment accepts only exact immutable fields, zero reserved bytes, valid checked ranges, and non-overlapping aligned regions within `segment_size`. Test: `attach_layout_matrix`.
+- **I-M8 CounterSurface**: the three diagnostic counters are naturally aligned, relaxed atomics; reads never join the publication handshake. Test: `ccb_counter_layout`.
 
 ## Functions
 
@@ -172,3 +176,4 @@ fn first_valid(ccb: &ChannelControlBlock) -> u64 { ccb.first_valid_seq.load(Acqu
 | `epoch_restart` | I-M3 (with publisher-lifecycle.md) |
 | `fingerprint_guard` | I-M4 (with deployment-identity.md) |
 | `attach_layout_matrix` (each field/range/alignment) | I-M7 |
+| `ccb_counter_layout` | I-M8; exact offsets and no data-path diagnostic callback |

@@ -40,7 +40,7 @@ impl<'c> BorrowGuard<'c> {
  pub fn bytes(&self) -> &[u8] { /* lifetime tied to &self ⇒ cannot outlive guard */ }
 }
 impl Drop for BorrowGuard<'_> { fn drop(&mut self) { drm_borrow_release(self.chan, self.token); } }
-// !Send + !Sync: each concurrent borrower thread must open its own consumer id (I-B7).
+// !Send + !Sync: each concurrent borrower thread must open its own consumer id (I-B8).
 ```
 
 ```python

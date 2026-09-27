@@ -11,13 +11,14 @@ Scope: the observability plane — `drm-diag` (out-of-band aggregation: counters
 | `REQ-OPS-trace-nonblocking` | trace rings never stall publishers; best-effort drop | `REQ-OPS-015` |
 | `REQ-OPS-trace-compiled-ids` | event names/format strings compiled to metadata dict; runtime emits numeric IDs + args | `REQ-OPS-014` |
 | `REQ-OPS-introspect-readonly` | tools never publish; each owns its diagnostic control record and releases borrows immediately | `REQ-OPS-003` |
+| `REQ-CORE-runtime-counters` | channels expose drop/overrun/pool-exhaustion counters directly | `REQ-CORE-093` |
 
 ## Data Structures
 
 ```rust
 // Trace (per-process ring; SHM-mapped for diag consumption)
 pub struct TraceRing {
- events: RingBuf<TraceEvent>, // fixed capacity, drop-new
+ events: FixedMpscRing<TraceEvent>, // fixed capacity, multi-thread producers, drop-new
  dropped: AtomicU64, // drop counter surfaced to diag
 }
 pub struct TraceEvent { id: u16, args: [u8; 16], ts_ns: u64 }
@@ -75,7 +76,7 @@ fn echo_once(topic: &TopicPath) -> Result<Owned, Status> {
 *Deadline monitoring:*
 
 1. Consumer-side deadline declarations (`consume.deadline`) known to deployment config.
-2. Diag observes inter-sample gaps + borrow latency vs declared deadline.
+2. Diag observes inter-sample arrival gaps against the declared deadline; it does not infer application compute or borrow duration.
 3. Violations counted per channel; surfaced in `drm hz`/diag report (architecture: observed vs declared).
 
 *Compiled trace pipeline (staged per architecture):*
