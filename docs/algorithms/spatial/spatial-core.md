@@ -41,8 +41,9 @@ pub struct SpatialId(u32);
 // Timed measurements: Stamped<Point3<CameraFront>> etc.
 pub struct Stamped<T> { value: T, sample: TimePoint, receive: TimePoint }
 
-// §Temporal Precision — TimePoint with clock domain id
-pub struct TimePoint { value_ns: u64, clock_domain: ClockDomain }
+// §Temporal Precision — TimePoint with clock identity (domain + epoch; epoch bump ⇒
+// timestamps from a previous incarnation never resolve against new mappings)
+pub struct TimePoint { value_ns: u64, clock: ClockIdentity }
 
 // §Temporal Precision — the four architecture clock domains (exact set; no invented variants)
 pub enum ClockDomain {
@@ -109,10 +110,11 @@ fn geodetic_to_enu(wgs84: Lla, anchor: Lla) -> Enu {
  tangent_plane_enu(ecef, anchor) // small-offset local frame (I-S5)
 }
 
-// Clock mapping (§Temporal Precision)
+// Clock mapping (§Temporal Precision) — resolved per full ClockIdentity (domain + epoch)
 fn map_timestamp(t: TimePoint, to: ClockDomain) -> Result<TimePoint, Status> {
- match resolve_mapping(t.clock_domain, to)? { // no valid mapping ⇒ CLOCK_UNRESOLVED (I-S7)
- Some(m) => Ok(TimePoint { value_ns: apply(t.value_ns, m), clock_domain: to }),
+ match resolve_mapping(t.clock, to)? { // no valid mapping ⇒ CLOCK_UNRESOLVED (I-S7)
+ Some(m) => Ok(TimePoint { value_ns: to_ref_ns(m) + m.rate_ratio * (t.value_ns - from_ref_ns(m)),
+                           clock: identity_of(to) }), // affine: t_to = to_ref + r * (t_from - from_ref)
  None => Err(ClockUnresolved),
  }
 }

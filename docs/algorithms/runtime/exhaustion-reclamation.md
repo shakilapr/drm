@@ -58,7 +58,7 @@ endpoint's OS registration lock. Implements architecture.md §Safe Handling of P
 
 ```rust
 // Called by channel-publish after one failed selection.
-fn publish_exhausted(ch: &Channel) -> Status {
+fn publish_exhausted(ch: &Channel) {
  ch.pool_exhausted.fetch_add(1, Relaxed);
  ch.drop_count.fetch_add(1, Relaxed);
  if !ch.profile.is_hard_rt() {
@@ -66,7 +66,7 @@ fn publish_exhausted(ch: &Channel) -> Status {
  } else {
   ch.ccb.reclaim_requested.store(true, Release); // maintenance context performs scan_requested
  }
- Status::PoolExhausted // incoming sample is always dropped; never retried here
+ // incoming sample is always dropped by the caller; never retried here
 }
 
 // Maintenance context (non-RT) or opportunistic general-purpose pass.
@@ -77,27 +77,25 @@ fn scan_requested(ch: &Channel) {
 
 fn try_reclaim(ch: &Channel, i: usize) -> bool {
  let rec = &ch.ccb.consumers[i];
- if rec.state.load(Acquire) != Active { return false; }
+ // NOTE: record state is NOT a filter here — a dead endpoint may sit in Closing with a live
+ // borrow's word set. Only the lock proves liveness; only the word proves protection.
  let word = rec.hazard.load(SeqCst);
  let (generation, slot) = unpack(word);
  if slot == NONE || generation != rec.registration_generation.load(Acquire) { return false; }
  // Sole liveness proof: a live owner holds its registration lock for the whole lifetime.
- let Ok(lock) = lock_backend.try_exclusive_nb(rec.generated_lock_path()) else {
+ let Ok(lock) = lock_backend.try_exclusive(rec.generated_lock_path()) else {
   return false; // lock held ⇒ live authority ⇒ never reclaim
  };
  // Lock acquired: no live DRM owner retains authority. Reread everything under the lock.
  let cur = rec.hazard.load(SeqCst);
- let cur_ok = cur == word
-  && rec.state.load(Acquire) == Active
-  && generation == rec.registration_generation.load(Acquire);
- if cur_ok {
-  // Dead endpoint. Also normalize any stale claim state and publish identity diagnostics.
+ if cur == word
+  && generation == rec.registration_generation.load(Acquire) {
+  // Dead endpoint, generation-bearing word confirmed under the lock: clear protection (I-E6).
   let _ = rec.hazard.compare_exchange(word, pack(generation, NONE), SeqCst, SeqCst);
  }
- if rec.state.load(Acquire) != Active {
-  // Stale Claiming/Active/Closing orphan (consumer-registration.md I-CR7): normalize.
-  rec.state.store(Vacant, Release);
- }
+ // Normalize: with the lock held the endpoint is dead, so Vacant is the correct terminal state
+ // for any stale Claiming/Active/Closing record; the next claimant re-claims under the lock.
+ rec.state.store(Vacant, Release);
  drop(lock); // released; kernel releases on death anyway
  true
 }
@@ -114,12 +112,14 @@ of the proof (I-E5).
 
 1. **Trigger**: pool-exhaustion event (publisher drop) or maintenance request; reclamation never
    runs speculatively; no background polling.
-2. **Probe**: attempt `try_exclusive_nb` on the abandoned endpoint's registration lock. Failure
+2. **Probe**: attempt the endpoint's non-blocking registration `try_exclusive`. Failure
    (`WouldBlock`) ⇒ live authority ⇒ skip — this is conservative and cost-free.
-3. **Prove + Inspect**: lock acquired ⇒ no live owner. Under the lock, reread
-   state/generation/hazard; require the exact `Active` + generation-matching word.
-4. **Reclaim**: SeqCst CAS the hazard word to `NONE` (I-E6); normalize stale record state to
-   `Vacant`; release the lock. The slot returns to the pool; the next publish resumes once a slot is
+3. **Prove + Inspect**: lock acquired ⇒ no live owner. Under the lock, reread generation/hazard;
+   require the exact generation-matching word (state is not consulted — a dead `Closing` record
+   with a live borrow's word is exactly the case being repaired).
+4. **Reclaim**: SeqCst CAS the hazard word to `NONE` (I-E6); normalize the record to `Vacant`
+   (terminal state for a lock-proven-dead endpoint, whatever its prior `Claiming`/`Active`/`Closing`
+   state); release the lock. The slot returns to the pool; the next publish resumes once a slot is
    selectable (I-E4).
 5. **Placement**: hard-RT publishers only set `reclaim_requested` (I-E7); general-purpose profiles
    may run one bounded pass inline as an optimization.
@@ -134,7 +134,7 @@ of the proof (I-E5).
 | PID reused by an unrelated process | irrelevant — identity is diagnostic; lock authority decides |
 | Reclaim concurrent with genuine release | idempotent: CAS or drop clears NONE; both harmless |
 | Consumer registered, never borrowed | record present, protected NONE — no reclaim needed |
-| Stale `Claiming`/`Closing` record found under lock | normalized to `Vacant` (I-CR7) |
+| Stale `Claiming`/`Closing`/`Active` record found under lock | hazard cleared when generation-matching; state normalized to `Vacant` (I-CR7) |
 
 ## Test Matrix
 
@@ -145,6 +145,7 @@ of the proof (I-E5).
 | `exhaustion_counter_exact` (concurrent drops) | I-E3 |
 | `exhaustion_resume` | I-E4 |
 | `reclaim_kill_matrix` (kill at every borrow stage) | I-E5: reclaim only under lock authority |
+| `reclaim_dead_closing_borrow` (endpoint killed in `Closing` with a live-borrow word) | I-E5 + I-CR7: word cleared under lock; slot recovered |
 | `reclaim_live_reader_never_reclaimed` (reader in disjoint PID namespace / simulated ESRCH) | I-E5: live reader never reclaimed |
 | `reclaim_recycled_slot_cas` | I-E6: new owner's protection never cleared |
 | `reclaim_no_polling` | no reclamation without exhaustion/maintenance trigger |

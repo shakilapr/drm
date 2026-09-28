@@ -47,7 +47,7 @@ fn frame_encode(cfg: &SerialLinkConfig, frame: &WireFrame, out: &mut [u8]) -> Re
  let need = decoded_len.checked_add(decoded_len.div_ceil(254)).and_then(|n| n.checked_add(1)).ok_or(InvalidArg)?;
  if out.len() < need { return Err(BufferTooSmall); } // before any write
  let mut covered = encoded_header_and_payload(frame); // I-SR3 canonical sequence:
- if let Some(e2e) = frame.e2e_crc { covered.extend_from_slice(&e2e.to_le_bytes()); } // trailer included
+ if frame.header.flags & FLAG_E2E_CRC != 0 { covered.extend_from_slice(&e2e_trailer(frame)); } // trailer covered, from the declared integrity profile
  let crc = crc32c(&covered); // host and MCU use this exact byte sequence
  cobs_encode_with_crc_and_delimiter(frame, crc, out)
 }

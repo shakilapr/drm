@@ -82,8 +82,9 @@ fn acquire(ch: &Channel, target_seq: u64, reg: &Registration) -> Result<Borrow, 
  }
  // 4b. Registration recheck (I-HZ8 / consumer-registration.md I-CR6): close-vs-acquire race.
  if !acquisition_valid(reg.rec, reg.generation) {
-  reg.hazard.compare_exchange(pack(reg.generation, e1.slot), empty, SeqCst, SeqCst)
-   .map_err(|_| Status::InvalidData)?;
+  // Best-effort clear of the exact installed word; if the word was already overwritten
+  // (record changed authority) there is nothing of ours left to clear.
+  let _ = reg.hazard.compare_exchange(pack(reg.generation, e1.slot), empty, SeqCst, SeqCst);
   return Err(Status::Busy);
  }
  // 5. locked: process immutable payload in place
@@ -114,11 +115,16 @@ its slot. Pool indices are `< u32::MAX`; `u32::MAX` is the sole `NONE` encoding.
 
 **Hazard-validity rule (`mark_hazard_protected_sc`, the sole specified form of
 `hazard_protected_on_sc`):** one SeqCst pass over all `H'` hazard words; a word marks its slot iff
-its record `state == Active` **and** `word == {current registration_generation, slot != NONE}`.
-Non-`Active` records (`Claiming`, `Closing`, `Vacant`) never protect a slot — a record interrupted
-in `Claiming` carries no protective authority (consumer-registration.md I-CR7); its stale word is
-either generation-mismatched (reclaimer/claimant will repair under the registration lock) or
-normalized under that lock. The combined selection scan costs `O(R + H' + pool/word)` with each
+`word == {the record's CURRENT registration_generation, slot != NONE}` — **record state is not
+consulted**. Rationale: only the current-generation owner can install a matching word, and a
+generation match always implies protection is required — the owner is alive and reading (state
+`Active` or `Closing` with a live borrow; a close that saw the borrow left it in `Closing`), or the
+owner died and the slot is reusable only after lock-proven reclamation clears the word
+(exhaustion-reclamation.md). `Closing` blocks **new** borrows; it never cancels an existing borrow's
+protection. A record interrupted in `Claiming` carries a word whose generation predates the current
+one, so it matches nothing, protects nothing, and pins nothing — the claimant or reclaimer
+overwrites it under the registration lock (consumer-registration.md I-CR7). Non-matching words are
+skipped without inspection. The combined selection scan costs `O(R + H' + pool/word)` with each
 hazard word read exactly once — no per-slot rescans.
 
 ## Protocols
@@ -173,4 +179,5 @@ reader's second versioned snapshot differs and it rejects before reading payload
 | `publish_busy_guard` (two threads) | I-HZ6 |
 | `borrow_single_outstanding` | I-HZ7 |
 | `consumer_close_vs_acquire` (cross-doc with consumer-registration.md; close at every acquisition boundary) | I-HZ8 + I-CR6 |
+| `hazard_closing_protects_live_borrow` (close returns Busy with a live borrow; publisher must skip that slot until the guard releases) | I-HZ1 + I-CR7: protection follows the word, not the state |
 | pool exhaustion with H borrowers at `pool_size = R+H+1` | payload-pool I-P5 |

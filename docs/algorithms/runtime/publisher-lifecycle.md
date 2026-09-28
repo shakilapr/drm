@@ -21,7 +21,7 @@ validation), [memory-budget.md](../memory-budget.md) (precommit activation).
 ## Data Structures
 
 ```rust
-// Writer lock path: /run/drm/<deployment_id>/t_<topic_handle>.publisher.lock (shm-backend §Protocols).
+// Writer lock path: /run/drm/<deployment_id>/t_<topic_id>.publisher.lock (shm-backend §Protocols).
 // CCB carries publisher_epoch: AtomicU32 (channel-metadata.md).
 
 pub enum SegmentState { Init = 0, Ready = 1 } // published in the descriptor before first use
@@ -66,14 +66,16 @@ fn publisher_open(name: &SegmentName, expect: &Expectation) -> Result<Publisher,
  Err(AlreadyExists) => {
  // Classification BEFORE exact-size validation (architecture §Stale-Object Classification):
  // full expected size is never required to inspect whether creation completed.
- let (fd, size) = shm.open_raw(name)?;
- if size < bootstrap_prefix_size() {
-  // Creation died before/during ftruncate: zero/undersized POSIX object — stale Init artifact.
-  drop(fd);
+ let m = match shm.open_existing(name, expect.size) {
+ Ok(m) => m,
+ Err(StaleIncomplete) => {
+  // Creation died before/during ftruncate: zero/undersized POSIX object — stale Init
+  // artifact, not a compatibility failure (shm-backend maps it to a recoverable class).
   shm.unlink(name)?; // we hold the publisher lock: no live writer could own it
   return recreate_fresh(name, expect);
  }
- let m = shm.map_checked(fd, size, expect.size)?; // SizeMismatch only for complete wrong-size objects
+ Err(e) => return Err(e.into()),
+ };
  if m.prefix().segment_state.load(Acquire) != Ready {
   drop(m);
   recover_init_segment_under_publisher_lock(name, expect)?
@@ -87,6 +89,7 @@ fn publisher_open(name: &SegmentName, expect: &Expectation) -> Result<Publisher,
  let next_epoch = ch.ccb.publisher_epoch.load(Relaxed)
   .checked_add(1).filter(|e| *e != 0).ok_or(EpochExhausted)?;
  ch.ccb.publish_busy.store(false, Release); // prior writer died; its uncommitted slot is unreachable
+ ch.ccb.reclaim_requested.store(false, Release); // stale maintenance wakeup from the prior run
  ch.ccb.first_valid_seq.store(floor, Release);
  for req in ch.required_consumers() { req.ack_seq.fetch_max(floor, Release); }
  ch.ccb.publisher_epoch.store(next_epoch, Release); // final run publication
@@ -94,8 +97,8 @@ fn publisher_open(name: &SegmentName, expect: &Expectation) -> Result<Publisher,
 }
 
 // recreate_fresh(name, expect): shm.create_exclusive + Init/Ready bootstrap (branch above).
-// recover_init_segment_under_publisher_lock: classify complete-Init (POSIX unlink/recreate,
-// Windows in-place reinit) — see "Init crash recovery" protocol below.
+// recover_init_segment_under_publisher_lock: complete-size Init ⇒ POSIX unlink/recreate,
+// Windows in-place reinit — see "Init crash recovery" protocol below.
 
 fn publisher_close(p: Publisher) { /* lock Drop ⇒ release; segment persistence is opportunistic
  (architecture §Session-Scoped Persistence): on Linux the name survives while mapped; on Windows a

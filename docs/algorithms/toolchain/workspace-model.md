@@ -10,7 +10,7 @@ Scope: construction of the in-memory `WorkspaceModel` from manifests and `.drm` 
 | `REQ-TOOL-model-determinism` | §In-Memory — parse whole model in ms; deterministic | `REQ-TOOL-045` |
 | `REQ-TOOL-model-external-endpoints` | §External Endpoints — third-party devices are graph vertices | `REQ-TOOL-046` |
 | `REQ-TOOL-model-timing-metadata` | publisher `expected_rate`, consumer `deadline` carried in the model | `REQ-TOOL-049` |
-| `REQ-TOOL-model-timing-mode` | topic `timing = auto/exact/off` parsed into the model; `auto` resolved from consumer deadlines/jitter diagnostics | `REQ-TOOL-065` |
+| `REQ-TOOL-model-timing-mode` | topic `timing = auto/exact/off` parsed into the model; `auto` resolved from consumer deadlines/jitter diagnostics | `REQ-OPS-016` |
 | `REQ-TOOL-model-routing-overrides` | `[routing]` prefer/deny/force/export_limit carried in the model | `REQ-TOOL-048` |
 | `REQ-TOOL-contract-single-source` | §Node Communication Contracts — manifest is single source of truth | `REQ-TOOL-013` |
 | `REQ-TOOL-fingerprint-isolation` | §Node Interface Identity — unrelated schema edit ⇒ unaffected fingerprint unchanged | `REQ-TOOL-023` |
@@ -38,7 +38,7 @@ pub struct WorkspaceModel {
 pub struct SpatialModel {
  frames: BTreeMap<FrameId, FrameEntry>, // identity = filesystem path (spaces/**.drm)
  edges: BTreeMap<FrameId, EdgeKind>, // Dynamic{writer: NodeName} | Static{transform: Transform3}
- indexes: BTreeMap<IndexName, IndexDecl>, // index.drm: anchor, cell_size, max_objects
+ indexes: BTreeMap<IndexName, IndexDecl>, // index.drm: anchor, cell_size, max_objects, max_cells_per_object, load_factor, max_query_cells
 }
 // BTree*/Sorted* everywhere ⇒ filesystem order can never leak into model output (I-D1).
 
@@ -46,7 +46,7 @@ pub struct NodeEntry {
  publishes: SortedSet<TopicName>, consumes: SortedSet<TopicName>,
  publish_meta: SortedMap<TopicName, PublishMeta>, // expected_rate (planning only)
  consume_meta: SortedMap<TopicName, ConsumeMeta>, // deadline/read mode/required/reliability (freshness + contract)
- spatial: SpatialContract, // [spatial] write = [frames], read = [frames] (spatial-core §Node Spatial Contracts)
+ spatial: SpatialContract, // [spatial] write = [frames], read = [frames] + per-read history requirements (spatial-core §Node Spatial Contracts)
  language: Language, build: BuildAdapter,
 }
 
@@ -54,6 +54,12 @@ pub struct NodeEntry {
 /// algorithms consume checked rationals, never source strings.
 pub struct Rate { numerator: u64, denominator: u64 } // e.g. "100Hz" → 100/1, "2.5Hz" → 5/2; checked rational arithmetic
 pub struct PublishMeta { expected_rate: Option<Rate>, rate_span: Option<Span> } // span kept for diagnostics only
+pub struct SpatialContract {
+ write: SortedSet<FrameId>, read: SortedSet<FrameId>,
+ history: SortedMap<FrameId, HistoryRequirement>, // per read edge (REQ-SPATIAL-037)
+}
+pub struct HistoryRequirement { duration: Duration, max_samples: u32, min_sample_period: Duration }
+// verify V-SPAT requires max_samples >= floor(duration / min_sample_period) + 2 — expected_rate never sizes it.
 pub enum ReadMode { Latest, Sequential }
 pub enum ReliabilityRequirement { BestEffort, Reliable }
 pub struct ConsumeMeta {
@@ -62,6 +68,12 @@ pub struct ConsumeMeta {
  required: bool, // required sequential consumer (overflow-policies.md registry sizing)
  reliability: ReliabilityRequirement, // route resolves against link capability (verify V-REL)
 }
+pub enum TimingMode { Auto, Exact, Off } // per topic; default Auto — TopicEntry.timing_override
+// Build-time resolution (observability-plane.md): Auto ⇒ Exact iff any consumer of the topic
+// declares `deadline` or jitter/inter-arrival diagnostics; otherwise Off. `expected_rate` alone
+// never enables Exact. Resolved mode selects the CCB TIMING variant (channel-metadata.md
+// REQ-CORE-094), covered by the layout hash. Conflict: explicit Off + a declared consumer
+// deadline ⇒ build error.
 
 pub struct ExternalEndpoint { link: LinkId, consume: SortedSet<TopicName>, produce: SortedSet<TopicName> }
 pub struct RouteOverrides {
@@ -93,6 +105,7 @@ Model construction is **total-reload**: every parse rebuilds the full model (no 
 - **I-D10 TypedRates**: dimensioned rate/duration strings are parsed exactly once at model build into checked rational `Rate`s; downstream algorithms never re-parse strings; `rate_span` retained for diagnostics only. Invalid dimension ⇒ model error at build. Test: `model_typed_rates`, `model_bad_rate_unit`.
 - **I-D11 ContractMetadata**: consumer `read_mode`, `required`, and `reliability` requirement are model data (REQ-TOOL-069); `reject`-topic required-sequential counts (overflow-policies.md) derive from `consume_meta`.
 - **I-D12 Layering**: model build enforces structural/referential integrity only (REQ-TOOL-070). Single-writer, route policy, reliability-vs-transport, budgets, and compatibility are exclusively `drm verify` checks (verify-engine.md). Test: `model_no_policy_checks` (two publishers ⇒ model builds; verify fails).
+- **I-D13 TimingModeResolution**: topic `timing` parses (default `Auto`, REQ-OPS-016); `Auto` resolves deterministically from the consumer set; explicit `Off` + declared consumer deadline ⇒ single conflict error with location. Test: `model_timing_resolution`.
 
 ## Functions
 
@@ -117,7 +130,9 @@ fn build(tree: &FileTree) -> Result<WorkspaceModel, Vec<ModelError>> {
  parse_topology(tree)?.apply(&mut m)?; // computes, links, placement; dangling refs ⇒ error
  parse_spaces(tree)?.apply(&mut m.spatial)?; // spaces/**.drm frames; static/dynamic inference (I-D6);
  // [spatial] write/read contract wiring; single-writer spatial edge check (I-D7);
- // index.drm declarations (anchor, cell_size, max_objects) — capacity feeds memory budget (I-MB9)
+ // history requirements (duration, max_samples, min_sample_period) per read edge;
+ // index.drm declarations (anchor, cell_size, max_objects, max_cells_per_object, load_factor, max_query_cells)
+ // — capacity feeds memory budget (I-MB9)
  parse_externals(tree)?.apply(&mut m)?; // [external.*] vertices; unknown link/topic ⇒ error (I-D8)
  parse_routing(tree)?.apply(&mut m)?; // [routing] prefer/deny/force/export_limit; unknown ⇒ error (I-D9)
  normalize_rates(&mut m)?; // I-D10: parse rate/duration strings once into typed Rate/Duration
@@ -186,7 +201,7 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
 | deployment.json `deployment_id` field | UUID/hex string, never a JSON number (128 bits > JSON-safe range) |
 | external endpoint fixtures | I-D8 (unknown link/topic rejected) |
 | timing/route override fixtures | I-D9 |
-| timing-mode resolution (auto-with-deadline / auto-without / explicit exact / off+deadline conflict) | I-D10 |
+| timing-mode resolution (auto-with-deadline / auto-without / explicit exact / off+deadline conflict) | I-D13 |
 | round-trip ×5 000 | I-D5 |
 | spatial inference matrix (write-only / transform-only / both / neither) | I-D6 |
 | two-writers-one-edge fixture | I-D7 conflict |

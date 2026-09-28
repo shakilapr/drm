@@ -374,12 +374,12 @@ Done when — all Spatial requirements pass:
 - Typed `Point3/Direction3/Vector3/Pose3/Transform3/Twist3`.
 - Compile-time and dynamic spaces; forests/disconnected graphs.
 - Axis/geodetic conversions; sample/receive time.
-- Clock-domain mapping with drift/uncertainty; unresolved clocks rejected.
-- Static-chain collapse; versioned cache; `latest/at/predict/delayed_view`.
-- SLERP/linear interpolation; no interpolation over discontinuity.
+- Affine clock-domain mapping (reference epoch, rate ratio, bounded uncertainty, identity epoch); unresolved clocks rejected.
+- Static-chain collapse; versioned cache (geometry-only); coherent `latest` (common timestamp); `at`/`predict` (SE(3) exp-map)/`delayed_view`; provable history window (`min_sample_period`).
+- SLERP/linear interpolation; no interpolation over discontinuity (per-edge marks).
 - Historical reparenting with Preserve World/Local/Snap; live calibration.
-- Generational runtime handles; single-writer spatial edges.
-- Dynamic hash grid; compiled BVH; proximity candidate completeness.
+- Generational runtime handles; bounded runtime overlay plans; single-writer spatial edges.
+- Incremental dynamic hash grid (dependency-vector invalidation, grid epoch); compiled BVH; proximity candidate completeness (explicit `OutputTooSmall`).
 - Exact spatial memory verification.
 - Host/MCU paths all pass against mathematical reference implementations.
 Owner: E2 (compiler/graph) + E1 (runtime caches); tests E4.

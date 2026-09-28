@@ -45,8 +45,9 @@ impl MemoryReport {
  }
 
  pub struct SpatialIndexCost { // per compute unit with declared spatial indexes (spatial-index.md I-X9)
-  grid_buckets: u64, // all three fixed open-addressing banks
-  grid_slots: u64, // all banked entity slots at max_objects × slack span factor
+  cell_hash_slots: u64, // S = ceil(M / alpha_max) open-addressing cell entries (alpha_max <= 0.70)
+  membership_pool: u64, // M = max_objects × max_cells_per_object fixed membership nodes
+  object_records: u64, // per-object envelope, occupied cells, dependency vector at max_objects
   bvh_nodes: u64, // every guarded compiled/calibration bank
   query_scratch: u64, // fixed per declared concurrent query endpoint
   // no heap growth is possible — capacity is declared; verified exactly like channel buffers
@@ -63,7 +64,7 @@ impl MemoryReport {
 - **I-MB6 CheckedArithmetic**: every capacity sum/product — including `R+1` — uses `checked_add`/`checked_mul`; any overflow ⇒ `CapacityOverflow` naming the compute/channel, collected with the remaining checks (never a wrapped pass, never a short-circuit). Test: `budget_overflow` (boundary values 0, 1, `u32::MAX`, `u64::MAX` on every quantity).
 - **I-MB7 PerProcessLocked**: a precommit node's own locked working set (the pages of its own mappings it touches) is checked against the lockable budget, in addition to the compute-wide shared-memory capacity; hard-RT consumers need their own page-table path prefaulted. Test: `node_locked_set`.
 - **I-MB8 RouterBuffersBudgeted**: router-owned lane buffers (router-core I-RT8) are added to `worst_case` for the compute where the router runs. Test: `budget_router_buffers`.
-- **I-MB9 SpatialIndexesBudgeted**: fixed grid banks, query scratch, and BVH banks are included for every deployed spatial index. Test: `spatial_index_memory_verified`.
+- **I-MB9 SpatialIndexesBudgeted**: fixed cell-hash table, membership pool, object records, query scratch, and BVH banks are included for every deployed spatial index. Test: `spatial_index_memory_verified`.
 - **I-MB10 LockedSpanRounding**: each region's locked cost is its page-rounded span (length rounded up to the target's declared page granularity); per-region rounding keeps the sum ≥ the true locked-page total even when regions share OS pages. The static locked sum is a conservative estimate — exact residency is proven at activation (I-MB5) and measured live by `drm-diag`; static checks never model OS virtual-memory policy (architecture §Memory Budgets). Test: `locked_span_rounding`.
 
 ## Functions
@@ -102,7 +103,7 @@ fn verify_memory(model: &WorkspaceModel, deploy: &DeploymentConfig) -> MemoryRep
   locked = locked.checked_add(page_round_up(rb, budget.page_granularity))
    .unwrap_or_else(|| { r.errors.push(CapacityOverflow { compute }); locked });
   }
-  // I-MB9: all grid/BVH banks + entity slots + query scratch — declared capacity only
+  // I-MB9: cell-hash table + membership pool + object records + BVH banks + query scratch — declared capacity only
   let si = spatial_index_cost(model, compute);
   worst = worst.checked_add(si)
    .unwrap_or_else(|| { r.errors.push(CapacityOverflow { compute }); worst });
@@ -176,7 +177,7 @@ fn activate_precommitted(mapping: &Mapping, budget: &MemoryBudget) -> Result<(),
 | Case | Expected |
 |---|---|
 | `budget_reference_match` (5 fixtures) | I-MB1 exact |
-| `spatial_index_memory_verified` (index.drm at max_objects) | I-MB9: grid buckets + slots + BVH in budget |
+| `spatial_index_memory_verified` (index.drm at max_objects) | I-MB9: cell hash + membership pool + BVH in budget |
 | `budget_hard_errors` (budget/lockable exceeded) | I-MB2 |
 | `budget_overflow` (0, 1, `u32::MAX`, `u64::MAX` on every quantity) | I-MB6 `CapacityOverflow` collected, no wrap-pass |
 | `budget_warning_band` | I-MB3 |

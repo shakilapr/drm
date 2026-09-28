@@ -1,6 +1,6 @@
 # Spatial Query Algorithms
 
-Scope: spatial query surface — **compiled transform plans** per (target, reference) pair, the four query operations `latest/at/predict/delayed_view`, the transform-status result object, SLERP/linear interpolation with the discontinuity guard, **transactional temporal reparenting** (Preserve World/Local/Snap), **live calibration via calibration slots** (no recompilation), versioned per-process caches with consumer-driven time-based history. Implements [spatial_architecture.md](../../spatial_architecture.md) §Versioned Local Cache, §Query Semantics and History, §Discontinuities and Teleports, §Transactional Reparenting, §Transform Status and Quality, §Calibration Without Recompilation. Owner: E2 (query-plan compiler) + E1 (runtime). Phase 33 (implemented M20–M21). Depends on [spatial-core.md](spatial-core.md), [channel-metadata.md](../runtime/channel-metadata.md), [cursor-delivery.md](../runtime/cursor-delivery.md).
+Scope: spatial query surface — **compiled transform plans** per (target, reference) pair, the four query operations `latest/at/predict/delayed_view`, the transform result object (hard error + combinable quality flags), SLERP/linear interpolation with the discontinuity guard, **transactional temporal reparenting** (Preserve World/Local/Snap), **live calibration via calibration slots** (no recompilation), versioned per-process caches with consumer-driven time-based history. Implements [spatial_architecture.md](../../spatial_architecture.md) §Versioned Local Cache, §Query Semantics and History, §Discontinuities and Teleports, §Transactional Reparenting, §Transform Status and Quality, §Calibration Without Recompilation. Owner: E2 (query-plan compiler) + E1 (runtime). Phase 33 (implemented M20–M21). Depends on [spatial-core.md](spatial-core.md), [channel-metadata.md](../runtime/channel-metadata.md), [cursor-delivery.md](../runtime/cursor-delivery.md).
 
 ## REQ Bindings
 
@@ -99,7 +99,7 @@ pub enum ReparentMode { PreserveWorld, PreserveLocal, Snap }
 - **I-Q4 AtExactOrInterpolated**: `at(t)` returns exact sample at t; otherwise linear translation + SLERP rotation between bracketing samples of the sample-time-ordered ring; **never silently extrapolates beyond the newest sample** (`OUT_OF_HISTORY`). Test: `spatial_query_at`.
 - **I-Q5 PredictExplicitOnly**: only `predict` extrapolates; within the declared horizon it sets `EXTRAPOLATED`, beyond it returns `OUT_OF_HISTORY`. Extrapolation integrates the body-frame twist on SE(3) via the exponential map, `T(t+Δ) = T(t)·Exp(ξ_b Δ)`; twist frames convert via the SE(3) adjoint. Test: `spatial_query_predict`, `spatial_predict_screw` (screw-motion oracle).
 - **I-Q6 DelayedViewBound**: `delayed_view(offset)` resolves `now − offset` through `at`; offset beyond retained history ⇒ `OUT_OF_HISTORY`. Test: `spatial_delayed_view`.
-- **I-Q7 DiscontinuityGuard**: samples can be flagged discontinuous; interpolation never spans a flagged boundary — queries spanning it return `DISCONTINUOUS`, never an invalid intermediate path. Test: `spatial_interp_guard`.
+- **I-Q7 DiscontinuityGuard**: samples can be flagged discontinuous; interpolation never spans a flagged boundary — cross-jump queries surface `DISCONTINUITY_NEARBY` with no cross-jump value (t within the jump gap ⇒ `OUT_OF_HISTORY` + flag), never an invalid intermediate path. Test: `spatial_interp_guard`.
 - **I-Q8 ReparentTemporal**: reparent at t₁ leaves history before t₁ untouched; earlier queries traverse the original hierarchy (plan versions are time-scoped); the topology-event history is bounded — epochs older than the retrievable transform-history horizon are reclaimable. Test: `spatial_reparent_temporal`.
 - **I-Q9 ReparentModes**: Preserve World keeps the global pose **continuous** (local edge recomputed as `T_anchor,newParent⁻¹ · T_anchor,obj` at t₁); Preserve Local keeps local offset; Snap pins to new parent origin — all oracle-verified; discontinuities are marked on jumped local edges only. Test: `spatial_reparent_modes`, `spatial_reparent_world_continuity`.
 - **I-Q10 ReparentAtomic**: hierarchy mutations execute atomically; readers never observe partially updated trees. Test: `spatial_reparent_atomic`.
@@ -130,16 +130,20 @@ fn compile_plan(tree: &SpaceTree, target: FrameId, reference: FrameId) -> Result
 }
 
 // ---- Runtime execution ----
-fn execute(plan: &TransformPlan, caches: &PlanCaches) -> Result<Transform3, Status> {
+// execute_at is the single executor: pushes plan steps onto a fixed stack, resolving each
+// DynamicEdge/CalibrationSlot input through a caller-supplied temporal resolver.
+fn execute_at(plan: &TransformPlan, t_ns: TimePoint,
+              edge_at: impl FnMut(EdgeId) -> Result<Stamped<Transform3>, Status>,
+              slot_at: impl FnMut(CalibrationSlotId) -> Result<Transform3, Status>) -> Result<Transform3, Status> {
     let mut stack = FixedStack::<Transform3, MAX_PLAN_DEPTH>::new();
     for step in &plan.steps {
         match step {
             Constant(t) => stack.push(*t),
             CalibrationSlot { nominal, slot } => {
-                let c = slot.load_coherent_bounded()?;      // matching even version reads
-                stack.push(nominal * c.correction);         // Effective = Nominal × Correction
+                let c = slot_at(*slot)?;                    // effective value at/before t_ns
+                stack.push(nominal * c);                    // Effective = Nominal × Correction
             }
-            DynamicEdge { edge } => stack.push(caches.edge_value(edge)?),   // version-checked cache
+            DynamicEdge { edge } => stack.push(edge_at(*edge)?.value),  // resolved at t_ns
             Multiply => { let b = stack.pop()?; let a = stack.pop()?; stack.push(a * b); }
         }
     }
@@ -152,8 +156,12 @@ fn latest(&mut self, target: FrameId, reference: FrameId) -> TransformResult {
     let x = if self.cache.matches(plan.input_versions_at(t_star)) {
         self.cache.cached                                   // geometry reuse ONLY (I-Q2)
     } else {
-        let x = execute_at(plan, t_star,                    // every dynamic input evaluated at t*
-                   |edge| edge.history_or_slot()?.value_at(t_star))?;
+        // Every dynamic input is evaluated at t*. Inputs whose newest > t* resolve through
+        // their history ring; a slot-only input newer than t* cannot be evaluated at t*
+        // ⇒ OutOfHistory (never silently mixed freshest values — I-Q3).
+        let x = execute_at(plan, t_star,
+                   |edge| edge.history_or_slot()?.value_at(t_star),
+                   |slot| slot.history_value_at(t_star))?;
         self.cache.update(x, t_star);
         x
     };
@@ -163,8 +171,9 @@ fn latest(&mut self, target: FrameId, reference: FrameId) -> TransformResult {
 // ---- Interpolation (at) ----
 fn at(&self, target: FrameId, reference: FrameId, t_ns: TimePoint) -> TransformResult {
     let plan = self.time_scoped_plan(target, reference, t_ns)?;
-    // Each dynamic edge brackets t independently; calibration uses the latest effective value <= t.
-    // A missing bracket/value returns OutOfHistory. Any crossed discontinuity returns Discontinuous.
+    // Each dynamic edge brackets t independently in its sample-time-ordered ring; calibration
+    // uses the latest effective value <= t. A missing bracket/value returns OutOfHistory; any
+    // crossed discontinuity refuses interpolation with DISCONTINUITY_NEARBY (I-Q7).
     execute_at(plan, t_ns, |edge| edge.history()?.interpolate_guarded(t_ns),
                |slot| slot.history_value_at(t_ns))
 }
@@ -174,7 +183,7 @@ fn delayed_view(&self, target: FrameId, reference: FrameId, offset_ns: u64) -> T
 }
 
 fn predict(&mut self, target: FrameId, reference: FrameId, horizon_ns: u64) -> TransformResult {
-    if horizon_ns > self.declared_max_horizon(target, reference) { return result(OutOfHistory, None); }
+    if horizon_ns > self.declared_max_horizon(target, reference) { return result_err(OutOfHistory); }
     // Body-frame twist on SE(3): T(t+Δ) = T(t) · Exp(ξ_b Δ); twist taken at the newest
     // coherent state (= latest()); twist frame conversion via the SE(3) adjoint Ad (I-Q5).
     let state = self.newest_coherent_state(target, reference)?;

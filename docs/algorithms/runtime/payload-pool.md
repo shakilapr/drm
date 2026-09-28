@@ -22,11 +22,16 @@ pub struct PoolLayout {
  base: u64, // offset of slot 0 from segment start (static constant)
  stride: u64, // offset(i) = base + i*stride; stride = align_up(slot_size, slot_align)
  count: u64, // pool_size — deployment configuration, NOT compile-time
- capacity: u64, // max payload bytes per slot
- slot_size: u64, // capacity + variable-header (u32 len) when variable
- slot_align: u64, // canon-codec align rules
- variable: bool,
+ header_size: u64, // codec header_end: fixed fields + descriptor block (canon-codec two-region)
+ sample_max: u64, // codec sample_max = header_end + max tail (one canonical sample bound)
+ slot_size: u64, // = align_up(sample_max, slot_align)
+ slot_align: u64, // canon-codec align rules (incl. tail element alignment)
+ variable: bool, // struct has ≥1 variable member (descriptor block + tail)
 }
+// The pool carries CODE-OWNED sizing only: header_size/sample_max come from drm-workspace::canon
+// (layout.json). It never assumes a fixed-offset u32 length header — a composite variable topic
+// (e.g. {stamp_ns: u64, data: bytes[<=N]}) writes the descriptor inside the header and the body
+// at an element-aligned tail offset (canon-codec.md §Fixed Header + Bounded Tail).
 // Emitted by drm-workspace::canon (layout.json), consumed by drm-core (I6 canon-codec).
 // Offsets never relocate for the mapping lifetime — no realloc, no remap, no coalescing.
 // count is runtime data, so the layout is {base, stride, count}, never [u64; POOL].
@@ -48,7 +53,7 @@ fn slot_offset(layout: &PoolLayout, i: u64) -> Result<usize, Status> {
 
 - **I-P1 OffsetsStatic**: `offset(i)` identical across process restarts and remaps; no pointer relocation ever; `count` may differ between deployments without changing `stride`. Test: `pool_offsets_static`.
 - **I-P2 Isolation**: each topic owns its pool; no cross-topic free-list or borrowing is possible (separate mappings/partitions). Test: `pool_isolation` (negative proof).
-- **I-P3 RejectBeforeWrite**: publish with size > `capacity` ⇒ `InvalidArg` before any destination byte changes. Test: `pool_size_reject` (max, max+1).
+- **I-P3 RejectBeforeWrite**: publish whose canonical `sample_len` > `sample_max` ⇒ `InvalidArg` before any destination byte changes. Test: `pool_size_reject` (max, max+1).
 - **I-P4 InvariantMin**: attach/config with `pool_size < R+1` ⇒ `InvalidConfig` (channel-metadata validate; verifier rejects at build). Test: `pool_invariant_min`.
 - **I-P5 DropFree**: with `pool_size ≥ R+H+1` and H borrowers holding aged-out samples and one in-progress write, publisher still progresses (no drop). Test: `pool_dropfree` (property; extends to Phase 14 with hazard-protocol.md).
 - **I-P6 DefaultLatest**: an unspecified `@pool_size` on a `@history: latest` topic resolves to 3. Test: `pool_default_latest`.
@@ -56,15 +61,18 @@ fn slot_offset(layout: &PoolLayout, i: u64) -> Result<usize, Status> {
 ## Functions
 
 ```rust
-fn write_checked(pool: &PayloadPool, slot: u64, payload: &[u8]) -> Result<SlotSel, Status> {
- if payload.len() as u64 > pool.layout.capacity { // I-P3 — before any write
- return Err(InvalidArg);
+// Copies the CANONICAL sample (fixed header + bounded tail, produced by the generated codec
+// encoder — canon-codec.md) into the slot. The pool never authors header bytes and never assumes
+// a fixed-offset length; it only bounds the sample and exposes the slot.
+fn write_checked(pool: &PayloadPool, slot: u64, canonical: &[u8]) -> Result<SlotSel, Status> {
+ if canonical.len() as u64 > pool.layout.sample_max { // I-P3 — before any write
+  return Err(InvalidArg);
  }
  let off = slot_offset(&pool.layout, slot)?;
- if pool.layout.variable { write_u32(buf, off, payload.len() as u32)?; } // len header (canon-codec)
- copy_to(buf[off + hdr ..], payload)?;
- Ok(SlotSel { slot, len: payload.len() })
+ copy_to(buf[off .. off + canonical.len()], canonical)?;
+ Ok(SlotSel { slot, len: canonical.len() as u64 })
 }
+
 
 ```
 
@@ -94,9 +102,9 @@ ordering is [channel-publish.md](channel-publish.md).
 
 | Case | Result |
 |---|---|
-| payload > capacity | `InvalidArg`, zero writes (I-P3) |
-| payload == capacity | accepted; all slot bytes used |
-| empty payload (variable topic) | len 0 header only |
+| canonical sample_len > `sample_max` | `InvalidArg`, zero writes (I-P3) |
+| sample_len == `sample_max` | accepted; all slot bytes used |
+| empty variable body (single-variable topic) | valid: descriptor count 0, no tail bytes |
 | `pool_size < R+1` | `InvalidConfig` at attach + build-time verify error |
 | concurrent publish | second ⇒ `Status::Busy` (hazard-protocol I-HZ6) |
 | all slots busy (pre-hazard simplification) | cannot occur at Phase 13 (no borrows); formalized in Phase 14/15 |

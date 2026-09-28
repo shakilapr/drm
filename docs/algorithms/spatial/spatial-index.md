@@ -14,7 +14,7 @@ Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fi
 | `REQ-SPATIAL-index-derived-cache` | index is a derived cache; each node indexes only its declared `[spatial] read`; updates ride each object's full anchor-pose dependency vector (own edge, ancestors, calibration, topology) | `REQ-SPATIAL-015` |
 | `REQ-SPATIAL-proximity-frame-typed` | queries declare a frame and typed geometry; naked coordinates never enter the index API | `REQ-SPATIAL-021` |
 | `REQ-SPATIAL-proximity-complete` | candidate set is a deliberate superset — callers exact-check; misses forbidden; scratch overflow returns OutputTooSmall{required}, never silent truncation | `REQ-SPATIAL-020` |
-| `REQ-SPATIAL-memory-verified` | object, membership, query-scratch, and dual-BVH-bank memory is verified | `REQ-SPATIAL-018` |
+| `REQ-SPATIAL-memory-verified` | object records, membership pool, cell-hash table, query-scratch, and dual-BVH-bank memory is verified | `REQ-SPATIAL-018` |
 | `REQ-SPATIAL-rejected-structures` | octrees, k-d trees, sweep-and-prune excluded | `REQ-SPATIAL-026` |
 
 ## Data Structures
@@ -33,6 +33,7 @@ pub struct HashGrid {
     nodes: FixedPool<MembershipNode>,  // membership pool; capacity M = max_objects × max_cells_per_object
     objects: [ObjectRecord; MAX_OBJECTS],
     grid_epoch: AtomicU64,             // even = stable, odd = update in progress; multi-cell transaction marker
+    writer_busy: AtomicBool,           // single non-blocking updater; second writer ⇒ Busy (single-writer discipline)
     cell_size: f64,                    // from index.drm; > 0 verified at activation
     max_query_cells: u32,              // from index.drm; enumeration bound (I-X13)
     anchor: FrameId,                   // grid anchored to declared frame
@@ -67,55 +68,68 @@ pub struct BvhNode { aabb: Aabb, left: u32, right: u32, leaf: Option<StaticEntit
 ## Invariants
 
 - **I-X1 ZeroAllocSteadyState**: indexing and queries perform zero heap allocation — all capacity declared (slots table, per-cell bounds); runtime overlay handles come from a pre-allocated pool. Test: `spatial_grid_zero_alloc` (counting-alloc harness).
-- **I-X2 CapacityDeclared**: membership capacity is checked `max_objects × max_cells_per_object`; verifier rejects envelopes exceeding the declared cell span. Runtime overflow returns `IndexFull`, never grows. Test: `spatial_grid_capacity`.
+- **I-X2 CapacityDeclared**: membership capacity `M = max_objects × max_cells_per_object` is fixed; the cell-hash table is sized `S = ⌈M/α_max⌉` with `α_max ≤ 0.70` (probe bounds hold at worst-case occupancy); deletion uses backward shift — no tombstones. Verifier rejects envelopes exceeding the declared cell span. Runtime overflow returns `IndexFull`, never grows. Test: `spatial_grid_capacity`, `spatial_hash_occupancy`.
 - **I-X3 MotionSlack**: an object re-buckets only when it exits its slack envelope; idle/slow objects cost zero work per sample. Test: `spatial_motion_slack` (sub-threshold jitter ⇒ zero re-buckets).
 - **I-X4 GenerationSafety**: overlay delete bumps generation; stale handles/iterations observe invalidation immediately. Test: `spatial_grid_generation`.
 - **I-X5 FrameTypedAPI**: `nearby(frame, typed_point, radius)` / `region(frame, typed_aabb)` — naked coordinates never enter the index API (Golden Rule 1). Test: API audit + compile-fail.
-- **I-X6 Completeness**: union(grid candidates, BVH candidates) ⊇ brute-force set — false positives allowed, misses forbidden. Test: `spatial_proximity_complete` (10k random scenes property).
-- **I-X7 DerivedCacheOnly**: the index is a derived cache, not authoritative state; authoritative object state remains versioned dynamic edges; a node builds indexes exactly over its declared `[spatial] read`; updates ride existing version counters — unchanged versions touch nothing; no polling, no cross-node protocol, no central registry. Test: `spatial_index_derived`.
+- **I-X6 Completeness**: union(grid candidates, BVH candidates) ⊇ brute-force set — false positives allowed, misses forbidden; candidate storage overflow returns `OutputTooSmall{required}`, never silent truncation. Test: `spatial_proximity_complete` (10k random scenes property), `spatial_candidate_saturation`.
+- **I-X7 DependencyInvalidation**: the index is a derived cache, not authoritative state; authoritative object state remains versioned dynamic edges; a node builds indexes exactly over its declared `[spatial] read`; each object tracks the full dependency vector of its anchor-space pose (own edge, ancestor edges, calibration slots, topology generation) — a change to **any** dependency invalidates the object's location; an unchanged vector touches nothing; no polling, no cross-node protocol, no central registry. Test: `spatial_index_derived`, `spatial_index_dependency`.
 - **I-X8 BvhLiveCalibration**: recalibration swaps affected subtrees live through calibration slots (same slot mechanism as [spatial-queries.md](spatial-queries.md) §Calibration); no recompilation, no node restarts. Test: `spatial_bvh_live_calib`.
-- **I-X9 MemoryVerified**: worst-case index memory (three grid banks, query scratch, guarded BVH banks) is part of the compute-unit budget math, verified exactly like channel buffers. Test: `spatial_index_memory_verified`.
+- **I-X9 MemoryVerified**: worst-case index memory (cell-hash table, membership pool, object records, query scratch, guarded BVH banks) is part of the compute-unit budget math, verified exactly like channel buffers. Test: `spatial_index_memory_verified`.
 - **I-X10 RejectedStructures**: octrees/k-d/sweep-and-prune absent from the codebase. Test: audit.
-- **I-X11 CoherentQuery**: query acquires a selected immutable bank by increment→selector-reread; writers never modify a bank with readers. Bounded acquisition failure returns `ConcurrentUpdate`, never a data race or incomplete set. Test: `spatial_query_concurrent`.
-- **I-X12 UpdateAtomic**: re-bucket preflights and builds an inactive bank; one release selector store publishes the complete update. Failure leaves the selected bank unchanged. Test: `spatial_update_atomic`.
+- **I-X11 CoherentQuery**: query reads `grid_epoch` (must be even), scans cells, rereads `grid_epoch`; unchanged ⇒ accept, else bounded retry ⇒ `ConcurrentUpdate` — never a data race or a partial multi-cell transaction. Cell reads additionally honor per-cell version handshakes. Test: `spatial_query_concurrent`.
+- **I-X12 UpdateAtomic**: a move mutates only the `remove ∪ add` cells under an odd epoch and publishes the even epoch with one release store; failure/crash leaves the previous epoch state coherent. Update cost is `O(k)` in the object's cell span — never a whole-index copy. Test: `spatial_update_atomic`, `spatial_rebucket_scaling`.
+- **I-X13 QueryBound**: the prospective cell count is computed with checked arithmetic before enumeration; above `max_query_cells` the query falls back to scanning the fixed object table. Worst-case query work is `O(min(C_q, max_objects))`, independent of radius. Test: `spatial_huge_radius`.
+- **I-X14 NumericCellBounds**: `cell_size > 0` verified at activation; NaN/±inf coordinates and out-of-i32-range cell indices are rejected (`InvalidArgument`), never silently clamped or misclassified; floor is toward −∞ with the tie rule tested at ±ULP boundaries. Test: `spatial_numeric_grid`.
 
 ## Functions
 
 ```rust
 // ---- Dynamic grid (§Hash Grid for Dynamic Objects) ----
-fn on_sample(&mut self, id: EntityId, p_typed: TypedPoint, ver: u64) -> Result<(), Status> {
-    // Derived-cache discipline (I-X7): called when the versioned dynamic edge for `id` advances.
-    if ver == self.last_seen_version(id) { return Ok(()); }
+fn on_sample(&mut self, id: EntityId, p_typed: TypedPoint, deps: &DependencyVersions) -> Result<(), Status> {
+    // Derived-cache discipline (I-X7): `deps` is the full anchor-pose dependency vector.
+    if self.record(id).dependency_versions == *deps { return Ok(()); }  // no input changed
     let p = p_typed.in_frame(self.anchor)?;                     // typed → anchor-frame conversion (I-X5)
-    let env = self.envelope(id);
-    if env.contains(p) { self.record_version_only(id, ver); return Ok(()); } // center stays fixed
-    self.rebucket(id, p, env, ver)
+    if self.record(id).envelope.contains(p) {
+        self.record(id).update_dependencies(deps);              // envelope holds: versions only (I-X3)
+        return Ok(());
+    }
+    self.rebucket(id, p, deps)
 }
 
-fn rebucket(&mut self, id: EntityId, p: Point3, old: SlackEnvelope, ver: u64) -> Result<(), Status> {
+fn rebucket(&mut self, id: EntityId, p: Point3, deps: &DependencyVersions) -> Result<(), Status> {
     let next = SlackEnvelope { center: p, slack: self.slack, .. };
-    let _writer = self.try_writer_guard()?;                       // Busy; never waits
-    let current = self.selector.load(Acquire);
-    let target = self.find_inactive_bank_with_zero_readers(current).ok_or(Busy)?;
-    let plan = self.preflight_exact_edits(current.bank, id, &old, &next)?; // probes exact slots
-    self.banks[target].copy_from(&self.banks[current.bank]);       // fixed bounded copy
-    self.banks[target].apply(plan, id, next, ver);                 // selected bank untouched
-    let next_version = current.version.checked_add(1).ok_or(GenerationExhausted)?;
-    self.selector.store(pack(next_version, target), Release);      // atomic visibility
+    let _writer = self.try_writer_guard()?;                     // Busy; never waits — serializes updaters
+    let old_cells = self.record(id).occupied_cells();           // envelope cell span
+    let new_cells = cells_of_envelope(&next);
+    let (remove, add) = (old_cells − new_cells, new_cells − old_cells);   // intersection kept
+    self.preflight_capacity(&remove, &add)?;                    // IndexFull before mutation
+    let e = self.grid_epoch.fetch_add(1, AcqRel) + 1;           // odd: update in progress (I-X12)
+    self.apply(remove, add, id, &next, deps)?;                  // touches ONLY affected cells — O(k)
+    self.grid_epoch.store(e + 1, Release);                      // even: stable, one publication
     Ok(())
 }
 
 // ---- Proximity queries (§Proximity Query Semantics — frame + typed geometry) ----
 fn nearby(&self, frame: FrameId, point: TypedPoint, radius: f64) -> Result<CandidateSet, Status> {
-    let p = point.in_frame(self.anchor)?;                       // typed conversion through standard path
-    let guard = self.acquire_selected_bank_bounded()?;          // increment readers, reread selector
-    let mut set = CandidateSet::from_caller_scratch()?;         // fixed capacity; no allocation
-    for key in cells_overlapping_sphere(frame, p, radius, self.cell_size) {   // superset cells — I-X6
-        set.merge(guard.bank.memberships.scan_cell(key)?);      // generation-valid entries only
+    let p = point.in_frame(self.anchor)?;                       // typed conversion (I-X5)
+    let e1 = self.stable_epoch_bounded()?;                      // even epoch, else bounded retry (I-X11)
+    let mut set = CandidateSet::from_caller_scratch()?;         // overflow ⇒ OutputTooSmall{required} (I-X6)
+    if checked_cell_count(p, radius, self.cell_size)? <= self.max_query_cells {
+        for key in cells_overlapping_sphere(self.anchor, p, radius, self.cell_size) {  // anchor frame (I-X5)
+            set.merge(self.cells.scan_cell(key)?);              // per-cell version handshake
+        }
+    } else {
+        set.merge(self.objects.scan_overlapping(p, radius));    // bounded fallback (I-X13)
     }
-    set.merge(self.bvh.query(frame, aabb_of(p, radius)));
+    set.merge(self.bvh.query(self.anchor, aabb_of(p, radius))); // anchor frame (I-X5)
+    if self.grid_epoch.load(Acquire) != e1 { return Err(ConcurrentUpdate); }  // coherent view (I-X11)
     Ok(set)
 }
+
+// Cell conversion (I-X14): floor toward −∞; cell_size > 0 verified at activation;
+// NaN/±inf and out-of-i32-range results rejected (`InvalidArgument`), never clamped.
+fn cell_of(coord: f64, cell_size: f64) -> Result<i32, Status>
 
 fn region(&self, frame: FrameId, aabb: TypedAabb) -> Result<CandidateSet, Status> { /* same two-source union */ }
 
@@ -134,14 +148,14 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 *Index build and update discipline (§Ownership and Update Discipline):*
 
 1. Node declares `[spatial] read` frames; index constructs over exactly those (I-X7).
-2. Versioned dynamic edge advances ⇒ affected buckets refresh in an inactive fixed bank; an object inside its fixed slack envelope changes no memberships.
+2. The node re-resolves each affected object's anchor pose whenever any input in the object's dependency vector advances (own edge, ancestors, calibration, topology); a changed vector triggers `remove/keep/add` cell edits under the grid epoch; an unchanged vector touches nothing; an object still inside its slack envelope updates only its recorded versions (I-X3, I-X7).
 3. No polling, no cross-node index protocol, no central registry.
 
 *Proximity query:*
 
-1. Caller supplies frame + typed geometry (I-X5).
-2. Grid: superset cells of the sphere/region in the anchor frame.
-3. BVH: AABB overlap over compiled static tree (with live-swapped calibration subtrees).
+1. Caller supplies frame + typed geometry (I-X5); everything downstream operates in the anchor frame.
+2. Grid: checked cell-count precheck (I-X13), then superset cells of the sphere/region in the anchor frame under the epoch handshake (I-X11), or the bounded object-table fallback.
+3. BVH: AABB overlap over compiled static tree (with live-swapped calibration subtrees), also in the anchor frame.
 4. Union returned with status metadata; caller exact-distance-checks typed points through the standard conversion path; per-candidate historical state resolves through `at()` ([spatial-queries.md](spatial-queries.md)).
 
 *BVH recalibration:*
@@ -154,17 +168,21 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 
 | Case | Result |
 |---|---|
-| Insert beyond declared capacity | reject + counter (`IndexFull` status) — never grow (I-X2) |
-| Entity crosses cells within slack | no re-bucket (I-X3) |
-| Entity exits slack envelope | bounded remove+insert across span cells |
+| Insert beyond declared capacity | reject + counter (`IndexFull` status) — never grow (I-X2); cell-hash occupancy ≤ α_max by construction |
+| Entity crosses cells within slack | no re-bucket; dependency versions updated (I-X3) |
+| Entity exits slack envelope | `remove/keep/add` edits across span cells only (I-X12) |
+| Ancestor edge moves, own edge unchanged | dependency vector changes ⇒ object invalidated, no misses (I-X7) |
 | Delete with outstanding handles | generation bump ⇒ immediate invalidation (I-X4) |
 | Query frame ≠ anchor frame | typed conversion through standard path; conversion failure ⇒ explicit status (I-X5) |
-| Radius exceeding grid extent | full-set fallback (completeness preserved, perf warning) |
+| Radius implying > max_query_cells | bounded object-table scan fallback, decided before enumeration (I-X13) |
+| All candidates beyond caller scratch | `OutputTooSmall{required}` — never silent truncation (I-X6) |
+| NaN/±inf/huge coordinates | `InvalidArgument`, never silent cell misclassification (I-X14) |
+| Query racing a move | epoch handshake ⇒ pre- or post-move coherent view, else `ConcurrentUpdate` (I-X11) |
 | Stale BVH vs runtime statics | impossible without slot bump — fingerprint check at deploy; live swaps only via slots (I-X8) |
 | Historical proximity requested | unsupported: proximity is latest-only; resolve returned candidates through `at()` |
 | Grid memory vs budget | verify rejects config exceeding declared budget (I-X9) |
-| No inactive grid/BVH bank without readers | `Busy`; active geometry unchanged, updater retries later |
-| Update fails during exact probe/build | selected bank unchanged (I-X12) |
+| BVH swap with no free unread bank | `Busy`; active geometry unchanged, updater retries later |
+| Update fails mid-move | previous epoch state coherent (I-X12) |
 
 ## Test Matrix
 
@@ -172,14 +190,20 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 |---|---|
 | `spatial_grid_zero_alloc` | I-X1 |
 | `spatial_grid_capacity` (fill to max_objects) | I-X2 |
-| `spatial_motion_slack` (jitter < slack) | I-X3: zero re-buckets |
+| `spatial_hash_occupancy` (50–95% occupancy, collisions + deletes; probe bound holds) | I-X2 |
+| `spatial_motion_slack` (jitter < slack) | I-X3: zero re-buckets; versions updated |
 | `spatial_grid_generation` | I-X4 |
 | API audit / compile-fail | I-X5 |
 | `spatial_proximity_complete` (10k scenes vs brute force) | I-X6: 0 misses |
-| `spatial_index_derived` (version-counter updates only) | I-X7 |
+| `spatial_candidate_saturation` (all objects in one region) | I-X6: `OutputTooSmall{required}` |
+| `spatial_index_derived` (dependency-vector updates only) | I-X7 |
+| `spatial_index_dependency` (ancestor moves, own edge unchanged ⇒ 0 misses) | I-X7 |
 | `spatial_bvh_live_calib` (slot swap, no restart) | I-X8 |
 | `spatial_index_memory_verified` | I-X9 in budget math |
-| `spatial_query_concurrent` | I-X11: complete set or `ConcurrentUpdate` |
-| `spatial_update_atomic` (failure/crash injection) | I-X12: old or complete new bank |
+| `spatial_query_concurrent` (query vs move) | I-X11: coherent pre/post view or `ConcurrentUpdate` |
+| `spatial_update_atomic` (failure/crash injection) | I-X12: previous epoch coherent |
+| `spatial_rebucket_scaling` (capacity 256→8192, one mover; p99 flat) | I-X12: O(k) updates |
+| `spatial_huge_radius` (fallback decided before enumeration) | I-X13 |
+| `spatial_numeric_grid` (±ULP boundaries, NaN, huge values) | I-X14 |
 | code audit | I-X10 |
 | perf: candidate factor vs brute force | documented |

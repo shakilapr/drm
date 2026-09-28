@@ -18,8 +18,8 @@ Scope: automatic derivation of a per-topic **forwarding tree** (route plan) from
 | `REQ-ROUTE-acyclic-reexport` | imported topics are never re-exported back over the ingress link | `REQ-ROUTE-001` |
 | `REQ-ROUTE-poly-paths` | path classification is polynomial; no simple-path enumeration | `REQ-ROUTE-019` |
 | `REQ-ROUTE-determinism` | same input ⇒ same plans | `REQ-ROUTE-006` |
-| `REQ-ROUTE-plan-vertices` | plans address external vertices via `VertexId`; runtime tables compute-only | `REQ-ROUTE-034` |
-| `REQ-ROUTE-hop-plan` | plans built from explicit hops; one-parent merge invariant | `REQ-ROUTE-035` |
+| `REQ-ROUTE-plan-vertices` | plans address external vertices via `VertexId`; runtime tables compute-only | `REQ-ROUTE-043` |
+| `REQ-ROUTE-hop-plan` | plans built from explicit hops; one-parent merge invariant | `REQ-ROUTE-044` |
 
 ## Data Structures
 
@@ -40,7 +40,7 @@ pub struct RouteGraph {
 // multi-hop paths. A single Route cannot express this.
 pub struct TopicRoutePlan {
  pub source: VertexId, // compute origin or external producer (I-R12: exactly one producer)
- pub forwarding: BTreeMap<ComputeName, ForwardingRule>, // runtime tables: computes only (REQ-ROUTE-034)
+ pub forwarding: BTreeMap<ComputeName, ForwardingRule>, // runtime tables: computes only (REQ-ROUTE-043)
 }
 pub struct ForwardingRule {
  pub ingress: Option<LinkId>, // link the sample arrived on (None = source compute)
@@ -161,7 +161,7 @@ fn build_forwarding_tree(graph, topic, src: VertexId, consumer_eps, errors) -> O
 | one source, consumers on B, C, D (fan-out, tree A→B, B→C, B→D) | one valid arborescence plan (I-R10/I-R12) |
 | one source, two viable paths to D (A→D and A→B→D), no policy | `Ambiguous` error naming both paths (I-R3) — never emit a two-parent D |
 | selected paths give one compute two ingresses | `InconsistentFanout` (I-R13); require explicit consistent overrides |
-| external producer is source | plan `source = External(_)`; first compute on the link records `ingress = that link` (I-R6/REQ-ROUTE-034) |
+| external producer is source | plan `source = External(_)`; first compute on the link records `ingress = that link` (I-R6/REQ-ROUTE-043) |
 | external consumer | last compute's egress covers its link; no runtime rule for the device itself |
 | local + remote consumers on same compute | plan records both `local_delivery` and egress (I-R10) |
 | topic would re-export over ingress link | excluded (I-R7) |
@@ -182,7 +182,7 @@ fn build_forwarding_tree(graph, topic, src: VertexId, consumer_eps, errors) -> O
 | `route_local_and_remote` | I-R10 |
 | `route_two_parent_rejected` (A→D ∧ B→D merge attempt) | I-R13 `InconsistentFanout` |
 | `route_determinism` ×100 | I-R5 |
-| `route_external` (consume + produce as source) | I-R6 + REQ-ROUTE-034 |
+| `route_external` (consume + produce as source) | I-R6 + REQ-ROUTE-043 |
 | `route_acyclic_reexport` (A↔B↔C loop) | I-R7 |
 | `route_error_collection` (multiple failures) | I-R8 |
 | `route_cyclic_scale` (property-generated cyclic graphs) | I-R11 bounded time |

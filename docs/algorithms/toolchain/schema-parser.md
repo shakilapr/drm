@@ -47,19 +47,27 @@ annot-value := number | annot-token | '[' number ',' number ']' | '"' [^"]* '"'
 annot-token := [^,}]+ ; bare token, e.g. unit `m/s`
 ```
 
-Restrictions (rejected with dedicated diagnostics): unbounded `string`/`bytes`/arrays on the data plane; nesting depth > 1; enum > 256 variants; unknown/duplicate `@` attributes; attributes after the first field; empty enum; `@encoding` on non-constrained-bus topics; `scale <= 0`.
+Restrictions (rejected with dedicated diagnostics): unbounded `string`/`bytes`/arrays on the data plane; nesting depth > 1; enum > 256 variants; unknown/duplicate `@` attributes; attributes after the first field; empty enum; `scale <= 0`. Two further restrictions are enforced in their owning layer, not the parser: topic-path lowercase ASCII (workspace-model builder — the parser never sees the path) and `@encoding` only on constrained-bus topics (verify-engine — transport applicability is a route property).
 
 ## Data Structures
 
 ```rust
 pub struct Span { pub line: u32, pub col: u32, pub offset: u32 } // into source bytes
 
-pub enum Tok { Ident(String), Int(u32), At, Colon, LBracket, RBracket,
- LBrace, RBrace, LEq, Comma, Newline, Eof }
+pub enum Tok {
+ Ident(String), Int(u32),
+ Number(f64), // '-3.14', '0.1' — signed decimal (grammar `number`); finite; NaN/inf rejected
+ QuotedString(String), // annotation text: "display name"
+ BareAnnotationToken(String), // annotation bare token: unit `m/s` — lexed in annotation-value mode until ',' or '}'
+ At, Colon, LBracket, RBracket, LBrace, RBrace, Leq, Comma, Newline, Eof,
+}
+// Lexer: two modes. Normal mode: idents, ints, punctuation. Annotation-value mode (after
+// `ident ':'` inside `{...}`): number | quoted string | bare token ([^,}]+, trimmed) —
+// matches grammar `annot-value` exactly. No grammar production lacks a lexical form.
 
 pub struct TokSpanned { pub tok: Tok, pub span: Span }
 
-pub struct TopicFile { pub attrs: Vec<Attribute>, pub fields: Vec<Field> }
+pub struct TopicFile { pub attrs: Vec<Attribute>, pub fields: Vec<Field> } // no path, no transport knowledge
 
 pub struct Attribute { pub key: AttrKey, pub value: AttrValue, pub span: Span }
 pub enum AttrKey { History, PoolSize, Overflow, Encoding } // @-prefixed in source
@@ -96,6 +104,8 @@ duplicate-field · duplicate-enum-variant · enum-too-large · enum-empty · arr
 size-overflow · name-invalid · missing-colon · unterminated-enum · trailing-garbage · empty-file ·
 invalid-utf8 · annotation-malformed · encoding-invalid`
 
+(`name-invalid` is emitted by the workspace-model builder for path defects — closed vocabulary is shared toolchain-wide.)
+
 Message format: `<file>:<line>:<col>: error: <reason>[: <detail>]`
 
 ## Functions
@@ -103,10 +113,11 @@ Message format: `<file>:<line>:<col>: error: <reason>[: <detail>]`
 ```rust
 fn parse_bytes(src: &[u8]) -> Result<TopicFile, Vec<Diagnostic>> {
  let text = std::str::from_utf8(src)
- .map_err(|e| Diagnostic::invalid_utf8(e.valid_up_to()))?; // I3: UTF-8 checked here, not by caller
+ .map_err(|e| vec![Diagnostic::invalid_utf8(e.valid_up_to())])?; // I3: UTF-8 checked here; Vec per signature
  parse_text(text)
 }
-// lex: Normalizes \r\n → \n; skips '#' comments but preserves newline tokens; emits `At` for '@'.
+// lex: Normalizes \r\n → \n; skips '#' comments but preserves newline tokens; emits `At` for '@';
+// switches to annotation-value mode inside field annotations (see Tok).
 // parse_text: recursive descent. On error record Diagnostic, skip to next Newline, continue —
 // one file yields ALL its errors (error recovery).
 // Attribute pass first: '@'-prefixed attrs must precede fields (attribute-after-field otherwise);
@@ -115,13 +126,18 @@ fn parse_bytes(src: &[u8]) -> Result<TopicFile, Vec<Diagnostic>> {
 // '[' int ']' / '[<= int]' (bare ⇒ unbounded-string/bytes); int > u32::MAX ⇒ size-overflow.
 
 fn validate(f: &TopicFile) -> Result<(), Vec<Diagnostic>>
+// LOCAL checks only — everything decidable from TopicFile alone:
 // duplicate-field (name set); duplicate-enum-variant; enum-empty; enum > 256 variants
 // (enum-too-large); @history ∈ {latest, 1..=u32}; @pool_size ≥ 1; @overflow ∈ {overwrite, reject};
-// @encoding: constrained-bus topics only, scale > 0 (encoding-invalid); topic path lowercase ASCII.
+// @encoding: known encoding form, scale > 0 (encoding-invalid).
+// NOT here (layering — TopicFile has neither path nor transport knowledge):
+//   topic-path lowercase ASCII ⇒ workspace-model builder (path fixed at file discovery; REQ-TOOL-056 enforced there)
+//   @encoding only on constrained-bus topics ⇒ verify-engine V-RT family (transport applicability is a route property)
 
 fn render_canonical(f: &TopicFile) -> String
 // Deterministic: attrs first in fixed order (History, PoolSize, Overflow, Encoding), then fields in
-// declaration order, each with its annotations in declaration order. render_canonical(parse(x)) is a
+// declaration order, each with its annotations in declaration order (numbers rendered from stored
+// lexical value; quoted/bare annotation values re-emitted verbatim). render_canonical(parse(x)) is a
 // pure function of the AST ⇒ I4 semantic round-trip holds.
 ```
 
@@ -146,8 +162,9 @@ fn render_canonical(f: &TopicFile) -> String
 | Attribute after first field | `attribute-after-field` |
 | Duplicate / unknown `@attr` | `duplicate-attribute` / `unknown-attribute` |
 | Field named `history` | allowed — attrs use `@history`; no reserved field names collide |
-| `@encoding` on a non-constrained-bus topic | `encoding-invalid` |
-| Uppercase path segment | `name-invalid` (lowercase ASCII topic identity) |
+| `@encoding` on a non-constrained-bus topic | valid parse; `verify` fails (transport applicability — route property, not local syntax) |
+| `@encoding` malformed / `scale <= 0` | `encoding-invalid` at parse |
+| Uppercase path segment | workspace-model builder error (`name-invalid`; parser has no path — lowercase ASCII topic identity) |
 | 10k-char identifier / 10k fields | accepted within memory bound; fuzz seeds cover |
 
 All parse/validation errors are `Err(Vec<Diagnostic>)` — no panic paths. Mapping to `drm-types::Status`: parser layer is toolchain-internal; only surface CLI exit codes (non-zero on any Diagnostic).
@@ -159,7 +176,8 @@ All parse/validation errors are `Err(Vec<Diagnostic>)` — no panic paths. Mappi
 | `001_valid_prims.drm` … (30 fixtures) | `Ok`, spans correct |
 | `031_invalid_missing_colon.drm` … (30 fixtures) | `Err` with documented reason + span |
 | attribute fixtures (`@history`, dup, unknown, after-field) | exact diagnostics |
-| annotation fixtures (`unit`, `range`, quoted text) | preserved through canonical round-trip (I4) |
+| annotation fixtures (`unit: m/s` bare token, `range: [-3.14, 3.14]` negative/decimal numbers, `description: "display name"` quoted text) | exact lexemes; preserved through canonical round-trip (I4) |
+| encoding fixture (`@encoding: {type: i16, scale: 0.01}`) | parses; scale preserved |
 | raw-byte fuzz corpus incl. invalid UTF-8 | no panic/hang; valid-prefix accepted (I3) |
 | proptest round-trip ≥ 10 000 | I4 semantic equality holds |
 | blind spot-check ×10 (test lead) | messages name actual defect |

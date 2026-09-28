@@ -14,6 +14,7 @@ Scope: first-party bindings over `drm-ffi` — C++/Rust transient zero-copy borr
 | `REQ-BIND-python-contract-error` | undeclared topic ⇒ `ContractError` | `REQ-BIND-014` |
 | `REQ-BIND-python-threading` | `Send + Sync` pyclass; per-`Topic` native lock; free-threaded CPython | `REQ-BIND-022` |
 | `REQ-BIND-consumer-id-per-borrower` | declared borrower multiplicity; lease records; exhausted ⇒ `Busy` | `REQ-BIND-010` |
+| `REQ-BIND-app-log-nonblocking` | bounded best-effort log export; no wait, no data-plane access | `REQ-BIND-023` |
 
 ## Data Structures
 
@@ -35,7 +36,8 @@ private:
  drm_consumer* chan_{nullptr};
 };
 // No .view() / .data() / .span(): nothing returns a pointer into the slot.
-// Retention requires copy_latest() (owned) — matches architecture §Application Code Experience.
+// Owned reads: drm::control::target::copy_latest() -> std::optional<OwnedTarget>
+// (application-owned decode; retain freely) — architecture §Application Code Experience.
 ```
 
 ```rust
@@ -53,13 +55,16 @@ impl<'c> BorrowGuard<'c> {
  pub fn bytes(&self) -> &[u8] { /* lifetime tied to &self ⇒ cannot outlive guard (I-B4) */ }
 }
 impl Drop for BorrowGuard<'_> { fn drop(&mut self) { drm_borrow_release(self.chan, self.token); } }
+
+// Owned reads: Target::copy_latest() -> Result<OwnedTarget, Error> (owned; retain freely),
+// Target::copy_next() -> Result<OwnedTarget | Gap{missed} | None, Error>.
 ```
 
 ```python
 # bindings/python — PyO3 native core + pure facade; OWNED READS ONLY (no zero-copy API)
 class Topic: # one consumer endpoint + native lock (I-B10); more concurrency ⇒ more Topics
- def latest(self) -> Copy: ... # acquire → copy → release INSIDE the call (I-B5)
- def next(self) -> Copy: ... # owned copy; GapError on lapped sequential read (I-C2)
+ def latest(self) -> Copy | None: ... # acquire → copy → release INSIDE the call (I-B5); None on empty
+ def next(self) -> Copy | None: ... # None when caught up; GapError on lapped read (I-C2)
 
 class Copy: # application-owned memory; retain freely
  def bytes(self) -> bytes: ...
@@ -79,19 +84,20 @@ class Copy: # application-owned memory; retain freely
 - **I-B5 PythonOwnedOnly**: no Python-visible object references a DRM payload slot; the buffer protocol is not implemented; acquire→copy→release completes before control returns to Python. Test: memory-identity check + hazard-word probe (`protected[id] == NONE` after every call).
 - **I-B6 PythonHazardFree**: GC pauses, exceptions, or reference cycles cannot pin a hazard slot beyond the call; copies (`bytes`/`numpy`) retain freely. Test: forced-GC suite + slot-free assertion.
 - **I-B7 ContractError**: undeclared topic access raises `ContractError` at first use. Test: negative suite.
-- **I-B8 ConsumerLeasePerBorrower**: activation reserves `borrowers` records per declared zero-copy consume endpoint (manifest); each borrower claims one via `drm_consumer_open`; none free ⇒ `Busy`; two borrowers never share a hazard slot. Test: `consumer_lease` (claim N, N+1 ⇒ `Busy`).
-- **I-B9 AppLogNonblocking**: `drm.log(level, message)` writes into the observability ring through `drm_log(level, msg_ptr, len)` — one bounded `try_push`, best-effort drop, no wait and no data-plane access; exposed in all four bindings. Phase 2 upgrades call sites to compiled trace IDs. Test: `app_log_nonblocking` (operation-count assertion) + drop counter + per-binding smoke.
+- **I-B8 ConsumerLeasePerBorrower**: activation reserves `borrowers` records per declared consume endpoint (manifest; default 1; records also carry required-sequential `ack_seq`); each borrower claims one via `drm_consumer_open`; none free ⇒ `Busy`; two borrowers never share a hazard slot. Test: `consumer_lease` (claim N, N+1 ⇒ `Busy`).
+- **I-B9 AppLogNonblocking** (REQ-BIND-023): `drm.log(level, message)` writes into the observability ring through `drm_log(level, msg_ptr, len)` — one bounded `try_push`, best-effort drop, no wait and no data-plane access; exposed in all four bindings. Phase 2 upgrades call sites to compiled trace IDs. Test: `app_log_nonblocking` (operation-count assertion) + drop counter + per-binding smoke.
 - **I-B10 PythonThreading**: `Topic` is `Send + Sync` (PyO3); calls on one `Topic` serialize on a native lock (cursor coherence); free-threaded and GIL CPython builds pass the full suite; the native core has no GIL dependency. Test: free-threaded + GIL build matrix.
 
 ## Functions
 
 ```rust
 // Python facade core (PyO3)
-fn latest(&self) -> PyResult<Copy> {
- let _g = self.endpoint_lock.lock().unwrap(); // native lock; I-B10
+fn latest(&self) -> PyResult<Option<Copy>> {
+ let _g = self.endpoint_lock.lock().unwrap_or_else(Poisoned::into_inner); // I-B10; poison unreachable under fail-stop
  let mut buf = vec![0u8; self.max_len()]; // binding-layer alloc; native core stays zero-alloc (I-C9)
- let len = self.core.copy_latest(&mut buf)?; // acquire → copy → release inside one call
- Ok(Copy::from_owned(buf, len)) // Python-owned; hazard already cleared (I-B5)
+ let Some(len) = self.core.copy_latest(&mut buf)? else { return Ok(None) }; // empty channel
+ buf.truncate(len);
+ Ok(Some(Copy::from_owned(buf))) // Python-owned; hazard already cleared (I-B5)
 }
 ```
 
@@ -112,7 +118,7 @@ The types layer is shared by every node using the topic (codegen-invalidation.md
 
 1. `topic.latest()` / `topic.next()` → lease the `Topic`'s consumer endpoint under its native lock.
 2. Core acquire (hazard) → copy into fresh Python-owned memory → release hazard.
-3. Return the owned object; no DRM reference survives the call (I-B5/I-B6).
+3. Return the owned object (`None` on empty/caught-up; `GapError` on gap); no DRM reference survives the call (I-B5/I-B6).
 4. Workloads that cannot tolerate the copy call a native (Rust/C++) extension over DRM's zero-copy paths (architecture §Core Language Ecosystem).
 
 *Per-borrower lease (I-B8):* the manifest's `borrowers = N` reserves N records/hazard words at activation; borrower threads claim records at endpoint open; exhausted ⇒ `Busy`. Per topic, `H = Σ declared borrowers + diagnostic-consumer range` feeds the pool drop-free bound (payload-pool.md I-P5).
@@ -129,6 +135,8 @@ The types layer is shared by every node using the topic (codegen-invalidation.md
 | Rust double-borrow of exclusive cursor | compile error (trybuild) |
 | Rust guard moved/shared across threads | compile error (trybuild, I-B4) |
 | Python undeclared topic | `ContractError` (I-B7) |
+| Python `latest()` on empty channel | `None` — no exception (I-B5) |
+| Python `next()` caught up / lapped | `None` / `GapError` (I-C2) |
 | Python GC/exception during `latest()` | slot released before return (I-B6) |
 | Copies retained arbitrarily long | safe — application-owned memory (I-B5) |
 | More `Topic`s than declared borrowers | `Busy` at consumer open (I-B8) |

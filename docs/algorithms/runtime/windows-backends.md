@@ -26,8 +26,9 @@ fn create_exclusive(name, size) -> Result<Mapping> {
 }
 fn open_existing(name, expect_size) -> Result<Mapping> {
  // OpenFileMappingW(FILE_MAP_ALL_ACCESS) → ERROR_FILE_NOT_FOUND ⇒ NotFound (I2)
- // MapViewOfFile with expect_size rejects smaller sections; descriptor.segment_size and
- // layout_hash reject larger or incompatible sections during attachment.
+ // Section smaller than the expected size ⇒ StaleIncomplete (parity with shm-backend): the
+ // publisher classifies it before exact-size validation and recovers (publisher-lifecycle.md).
+ // Section size and layout_hash reject larger or incompatible sections during attachment.
 }
 ```
 
@@ -99,12 +100,12 @@ rewrite, then `Ready` Release store). No live writer can exist (lock held); cons
 from interpreting `Init` contents; there is no unbounded wait for observers to close handles. An
 undersized section is recreated once its last handle closes; consumers see `NotReady` meanwhile.
 
-*Dead-incarnation proof:* identity (`pid` + creation time) is **diagnostic only**
-(architecture §Crash Recovery via OS Registration-Lock Authority). Windows reclamation authority is
-the consumer record's `LockFileEx` registration lock: acquiring it non-blockingly proves no live
-owner; under it the reclaimer clears the exact generation-bearing hazard and normalizes stale state
-(exhaustion-reclamation.md). Query failures, PID reuse, and stale identities can never cause a
-mis-reclaim because they are not consulted.
+*Reclamation proof (registration-lock authority):* identity (`pid` + creation time) is **diagnostic
+only** (architecture §Crash Recovery via OS Registration-Lock Authority). Windows reclamation
+authority is the consumer record's `LockFileEx` registration lock: acquiring it non-blockingly
+proves no live owner; under it the reclaimer clears the exact generation-bearing hazard and
+normalizes stale state (exhaustion-reclamation.md). Query failures, PID reuse, and stale identities
+can never cause a mis-reclaim because they are not consulted.
 
 ## Edge Cases & Errors
 

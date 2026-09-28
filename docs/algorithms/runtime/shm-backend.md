@@ -59,11 +59,14 @@ pub trait ShmBackend {
 pub struct LockPaths(PathBuf); // runtime lock dir: /run/drm/<deployment_id> (NOT under /dev/shm)
 impl LockPaths {
  fn active(&self) -> PathBuf { self.0.join("active.lock") } // one per deployment
- fn publisher(&self, topic_handle: u32) -> PathBuf {
-  self.0.join(format!("t_{topic_handle}.publisher.lock"))
+ // Lock names use the SAME generated topic identifier family as segment names
+ // (deployment-identity.md) — never canonical topic strings, whose '/' hierarchy would
+ // turn filenames into directories.
+ fn publisher(&self, topic_id: u32) -> PathBuf {
+  self.0.join(format!("t_{topic_id}.publisher.lock"))
  }
- fn consumer(&self, topic_handle: u32, id: u32) -> PathBuf {
-  self.0.join(format!("t_{topic_handle}.{id}.consumer.lock"))
+ fn consumer(&self, topic_id: u32, id: u32) -> PathBuf {
+  self.0.join(format!("t_{topic_id}.{id}.consumer.lock"))
  }
 }
 // Topic handles, not canonical topic strings: topic paths contain '/', which would turn lock
@@ -126,7 +129,10 @@ fn open_raw(name: &SegmentName) -> Result<(OwnedFd, u64), ShmError> {
 
 fn open_existing(name: &SegmentName, expect_size: usize) -> Result<Mapping, ShmError> {
  let (fd, size) = open_raw(name)?;
- if size == 0 || size < bootstrap_prefix() { return Err(StaleIncomplete); } // creation never completed
+ // A POSIX SHM object is born zero-length; ftruncate(size) establishes the full size in one
+ // atomic step, so a live object is either 0 (creation never completed) or full. Anything
+ // below the fixed 16-byte SegmentPrefix (channel-metadata.md) is unclassifiable ⇒ stale.
+ if size < size_of::<SegmentPrefix>() as u64 { return Err(StaleIncomplete); }
  if size != expect_size { return Err(SizeMismatch); } // I3 — never trust, always check
  let ptr = mmap(&fd, expect_size, PROT_READ | PROT_WRITE, MAP_SHARED, 0)?;
  Ok(Mapping { ptr, len: expect_size }) // fd closes
@@ -178,8 +184,8 @@ fn current_identity() -> ProcessIdentity {
 
 *Writer authority (publisher-lifecycle.md owns the full lifecycle; SHM supplies the primitive):*
 
-1. Publisher: `try_exclusive(paths.publisher(topic_handle))` =
-   `/run/drm/<deployment_id>/t_<handle>.publisher.lock`; failure ⇒ another live publisher exists ⇒ refuse.
+1. Publisher: `try_exclusive(paths.publisher(topic_id))` =
+   `/run/drm/<deployment_id>/t_<topic_id>.publisher.lock`; failure ⇒ another live publisher exists ⇒ refuse.
 2. Hold for process lifetime; `Drop`/death ⇒ kernel releases (I4) — restarted publisher re-acquires
    without heartbeat or takeover.
 

@@ -9,7 +9,7 @@ Machine-readable traceability registry required by work-plan Phase 1 and consume
 
 ## ID Scheme
 
-`REQ-<AREA>-<NNN>`, areas: `CORE | TOOL | ROUTE | SPATIAL | BIND | STUDIO`.
+`REQ-<AREA>-<NNN>`, areas: `CORE | TOOL | ROUTE | SPATIAL | BIND | STUDIO | OPS | QAL`.
 Examples: `REQ-CORE-042`, `REQ-TOOL-011`.
 
 ## registry.csv Columns
@@ -22,7 +22,7 @@ Examples: `REQ-CORE-042`, `REQ-TOOL-011`.
 | `source_ref` | Architecture doc + anchor (e.g. `architecture.md#zero-copy-memory-lifecycle`) |
 | `phase` | Work-plan phase that implements it (1–34) |
 | `test` | Test path or suite owning the verification |
-| `status` | `open \| implemented \| verified` |
+| `status` | `open \| specified \| implemented \| verified` |
 
 ## Sync Rule
 

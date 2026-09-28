@@ -33,12 +33,12 @@ Check catalogue (each check ⇒ one negative fixture set):
 | `V-SCH` | schemas valid/consistent | grammar errors; cross-package schema hash mismatch on same topic |
 | `V-SW` | single writer | zero publishers for consumed topic; ≥ 2 publishers |
 | `V-PLC` | placement validity | node placed twice; unknown compute; unknown link endpoint |
-| `V-RT` | route plan existence + fit | no path; ambiguous (no policy); `ConflictingRouteOverride` (force∧deny / multiple force); encoded frame > `max_datagram_payload` on datagram route |
+| `V-RT` | route plan existence + fit | no path; ambiguous (no policy); `ConflictingRouteOverride` (force∧deny / multiple force); encoded frame > `max_datagram_payload` on datagram route; shaped route with `burst_bytes < max charge_bytes` (lanes-shaping I-LS9 — such a frame could never send); `SafetyEnvelope` < declared safety worst case (policer must never throttle legitimate safety traffic) |
 | `V-REL` | reliability capability | `reliable` requirement (ConsumeMeta.reliability, workspace-model.md) routed onto best-effort transport (UDP/serial adapter) |
 | `V-MEM` | budgets | worst-case > drm_budget; precommit locked > lockable; `pool_size < R+1` |
 | `V-CMP` | consumer compatibility | incompatible shared-topic requirements (e.g. `reject` with zero required sequential consumers). Different per-consumer deadlines are **valid** (architecture.md: publisher cadence is capability, consumer deadline is requirement); nominal cadence-vs-deadline plausibility is a feasibility warning, not a failure |
 | `V-ID` | identity | duplicate topic/node/compute names; handle table conflicts |
-| `V-SPAT` | spatial contracts | two writers on one dynamic edge; write+transform conflict; dangling spatial frame; undeclared `[spatial] read`; index.drm capacity exceeding memory budget (I-MB9); naked-coordinate schema fields in spatial-typed topics |
+| `V-SPAT` | spatial contracts | two writers on one dynamic edge; write+transform conflict; dangling spatial frame; undeclared `[spatial] read`; index.drm capacity exceeding memory budget (I-MB9); history requirement unsatisfiable by its structural bound (`max_samples < floor(duration/min_sample_period)+2`, REQ-SPATIAL-037); naked-coordinate schema fields in spatial-typed topics |
 | `V-RPC` | RPC route reliability + shape | generated request/cancel/event topics resolve to best-effort-only routes; event topic not single-writer server-owned; declared concurrency exceeds capacity model (rpc-actions.md) |
 | `V-REC` | recorder backpressure declaration | `on_full = backpressure` on a `reject` topic without a declared required sequential recorder (record-replay.md) |
 
@@ -101,6 +101,8 @@ fn fail(check: CheckId, msg: impl Display, reqs: &[ReqId]) -> VerifyError {
 | Route ambiguity | `V-RT` failure naming the topic and the two paths |
 | Contradictory overrides (force∧deny, multiple force) | `V-RT` `ConflictingRouteOverride` |
 | Budget warning band | warning only (memory-budget I-MB3) |
+| Lane caps or `SafetyEnvelope` < 2× declared worst case | warning (lanes-shaping sizing guidance) — headroom, not invalid |
+| Serial `blocking_max` vs declared deadlines (serial-mcu I-SR7) | feasibility estimate/warning; remedy smaller `max_frame_bytes`, higher baud, or dedicated link — never a fact failure (timing is never provable) |
 | Estimates exceed 100% link | feasibility error collected into facts (I-V5); report still complete |
 
 ## Test Matrix

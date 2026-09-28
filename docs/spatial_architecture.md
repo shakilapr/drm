@@ -47,7 +47,7 @@ position:
 
 The compiler exposes `Point3<CameraFront>`. The message payload on the wire contains only the raw numerical values without frame strings or IDs, saving memory and bandwidth.
 
-For heterogeneous streams where objects originate from different spaces (such as tracked objects from multiple sensors), DRM provides dynamic spatial types (`SpatialPoint3`) that carry a numeric `SpatialID` alongside the coordinates. Timed measurements are composed using `Stamped<T>` (such as `Stamped<Point3<CameraFront>>`).
+For heterogeneous streams where objects originate from different spaces (such as tracked objects from multiple sensors), DRM provides dynamic spatial types (`SpatialPoint3`) that carry a numeric `SpatialID` — a persistent object identity, not a slot index — alongside the coordinates. Timed measurements are composed using `Stamped<T>` (such as `Stamped<Point3<CameraFront>>`).
 
 ## A Forest of Spaces (No Mandatory Universal World)
 
@@ -78,7 +78,7 @@ Every transform sample explicitly records two distinct timestamps:
 - **Sample Time**: The exact moment in time when the physical pose was true.
 - **Receive Time**: The moment DRM received the data on the local computer.
 
-A timestamp in DRM carries a clock domain identifier (`TimePoint { value, clock_domain }`). Clock domains distinguish:
+A timestamp in DRM carries a clock identity (`TimePoint { value, clock: ClockIdentity }` — domain plus epoch). Clock domains distinguish:
 - **Host Monotonic Clock**: Internal operating system time.
 - **Device Hardware Clocks**: Hardware timers on cameras, LiDARs, and microcontrollers.
 - **Global Time**: PTP or GNSS synchronized clocks.
@@ -112,11 +112,13 @@ index:
   cell_size: 0.5        # meters
   max_objects: 4096
   max_cells_per_object: 27
+  load_factor: 0.70     # physical cell-hash slots = ceil(M / load_factor)
+  max_query_cells: 512  # enumeration bound before object-table fallback
 ```
 
 The generated membership pool has checked capacity `max_objects × max_cells_per_object`; verification rejects a slack/envelope bound that can touch more cells. Cells are hashed into a fixed open-addressing table sized $\lceil M/\alpha_{max} \rceil$ with $\alpha_{max} \le 0.70$, keeping probe bounds within the real-time budget at worst-case occupancy; deletion uses backward shift, so no tombstones accumulate. Indexed objects retain generational handles, so deletion invalidates stale references.
 
-Re-bucketing uses a declared motion slack — a fat cell envelope per object. Its center remains fixed until exit; moving it without updating memberships would create false negatives. Updates are **incremental**: only cells whose membership actually changes (`remove` ∪ `add`; the intersection is kept) are touched — $O(k)$ in the object's cell span, never a whole-index copy. Each object record carries its occupied cells and the dependency versions of every transform input feeding its anchor-space pose; a change to any dependency invalidates the object's index location even if its own edge did not move. A global grid epoch (even = stable, odd = updating) makes multi-cell moves transactional: queries accept candidates only when the epoch is unchanged across the scan; bounded retry exhaustion returns `CONCURRENT_UPDATE`, never a partial candidate set.
+Re-bucketing uses a declared motion slack — a fat cell envelope per object. Its center remains fixed until exit; moving it without updating memberships would create false negatives. Updates are **incremental**, serialized by a single non-blocking updater: only cells whose membership actually changes (`remove` ∪ `add`; the intersection is kept) are touched — $O(k)$ in the object's cell span, never a whole-index copy. Each object record carries its occupied cells and the dependency versions of every transform input feeding its anchor-space pose; a change to any dependency invalidates the object's index location even if its own edge did not move. A global grid epoch (even = stable, odd = updating) makes multi-cell moves transactional: queries accept candidates only when the epoch is unchanged across the scan; bounded retry exhaustion returns `CONCURRENT_UPDATE`, never a partial candidate set.
 
 ### Compiled Static BVH
 
@@ -193,7 +195,7 @@ Traditional transform trees repeatedly multiply long chains of static coordinate
 
 ## Versioned Local Cache
 
-Authoritative runtime state consists only of dynamic edges. Each dynamic edge in shared memory has a numeric ID, transform, timestamp, and version counter.
+Authoritative runtime state consists only of dynamic edges. Each dynamic edge in shared memory has a numeric ID, transform, sample and receive timestamps, and version counter.
 
 Each process maintains an internal cache for its declared spatial reads. When a node queries `camera.world()`, it verifies whether the dependency versions of `world_to_base` have changed:
 - If the versions match, the cached transform **geometry** is returned immediately without recomputation; freshness, staleness, and clock uncertainty are always derived per query from timestamps — version equality never implies `VALID`.
@@ -213,7 +215,7 @@ History ring buffers are allocated only on upstream dynamic edges and live calib
 
 ## Discontinuities and Teleports
 
-When a localization algorithm relocalizes or resets, the transform jumps discontinuously. DRM samples can be flagged as discontinuous. DRM never interpolates across a discontinuity boundary; queries spanning the jump return a discontinuity status rather than computing an invalid intermediate path.
+When a localization algorithm relocalizes or resets, the transform jumps discontinuously. DRM samples can be flagged as discontinuous. DRM never interpolates across a discontinuity boundary; queries spanning the jump surface a discontinuity flag with no cross-jump value rather than computing an invalid intermediate path.
 
 ## Transactional Reparenting
 

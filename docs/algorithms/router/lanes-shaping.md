@@ -26,8 +26,10 @@ pub struct LinkScheduler { // per link — spans ALL transports (REQ-ROUTE-034)
  safety_envelope: SafetyEnvelope, // verified max admission rate/burst for class 0
  shaper: TokenBucket, // link-level admission, all egress
  caps: LaneCaps, // static, from deployment generation
+ drr_deficit: [u32; 2], // control/status DRR state (quanta 4:1), reset on link reset
 }
-pub struct SafetyEnvelope { rate_bits_per_sec: u64, burst_bytes: u64 } // ≥ 2× declared safety worst case; verify-checked
+pub struct LaneCaps { realtime: [usize; 3], bulk: usize } // static, from deployment generation
+pub struct SafetyEnvelope { rate_bits_per_sec: u64, burst_bytes: u64 } // ≥ declared safety worst case (verify error below); < 2× ⇒ warning
 pub struct PeerLanes { // only reliable ordered streams: ordered lanes per peer (REQ-ROUTE-013)
  realtime: OrderedStream, // class-scheduled frames enter here in dequeue order
  bulk: OrderedStream, // separate ordered stream (REQ-ROUTE-012)
@@ -78,22 +80,25 @@ fn enqueue(s: &mut LinkScheduler, class: PriorityClass, frame: WireFrame) -> Res
  }
 }
 
-// One scheduler pass (per tick, per link) — I-LS6:
+// One scheduler pass (per tick, per link) — I-LS6/I-LS9:
+// Token-bucket admission happens HERE, before a frame leaves its queue; a denied frame stays queued (FIFO intact).
 fn schedule_pass(s: &mut LinkScheduler, out: &mut impl FnMut(WireFrame, StreamKind)) {
  // 1. safety: strict first, bounded by the verified admission envelope
- loop {
-  let Some(f) = s.classes[0].pop_front() else { break; };
-  if !policer_admits(&mut s.safety_envelope, now()) {
-   s.classes[0].push_front(f); // envelope exhausted: frame waits, token not consumed
-   break;
-  }
+ while let Some(f) = s.classes[0].peek_front() {
+  if !policer_admits(&mut s.safety_envelope, now()) { break; } // envelope exhausted: frame waits, no token consumed
+  if !try_consume(&mut s.shaper, charge_bytes(&f), now()) { break; } // I-LS9: denied ⇒ stays queued
+  s.classes[0].pop_front();
   out(f, Realtime);
  }
- // 2. control/status: deficit round robin, quanta 4:1 — neither starves
- drr_pass(&mut s.classes[1], &mut s.classes[2], &[4, 1], out);
+ // 2. control/status: deficit round robin, quanta 4:1 — neither starves (state: s.drr_deficit).
+ // Each queue admits through the same shaper; a queue the shaper blocks is skipped this pass, the other continues.
+ drr_pass(&mut s.classes[1], &mut s.classes[2], &mut s.drr_deficit, &[4, 1], &mut s.shaper, out);
  // 3. bulk: after realtime
- if let Some(f) = s.bulk.pop_front() { out(f, Bulk); }
+ if let Some(f) = s.bulk.peek_front() {
+  if try_consume(&mut s.shaper, charge_bytes(&f), now()) { s.bulk.pop_front(); out(f, Bulk); }
+ }
 }
+// charge_bytes(frame) = this link's adapter max_wire_size (feasibility-estimation I-F7) — one definition of charged bytes.
 
 fn token_bucket_refill(b: &mut TokenBucket, now_ns: u64) {
  let dt = now_ns.saturating_sub(b.last_ns) as u128;
@@ -121,13 +126,12 @@ fn export_admit(l: &mut ExportLimiter, now_ns: u64) -> bool {
 
 *Egress pipeline (per link, per tick — router-core §egress feeds this):*
 
-1. Apply the generated per-route export limiter; a denied frame increments `export_limited`.
+1. Apply the generated per-route export limiter; a denied frame increments `export_limited` (the router-core peek applies it — I-RT13/I-LS8).
 2. Classify and enqueue into the link scheduler's class or bulk queue (route-scoped failures, I-RT15).
-3. `schedule_pass`: safety (envelope-bounded) → DRR control/status → bulk; frames enter the peer's ordered stream (reliable) or transport egress (datagram/serial) in dequeue order.
-4. Before transmission: token-bucket admission (`try_consume(charge_bytes)`); denied frames wait in their queue rather than being reordered across classes; sustained starvation alarms via diag.
-5. Transport egress: UDP datagram send / serial frame write / reliable-stream socket write (realtime stream first, then bulk).
+3. `schedule_pass`: safety (envelope-bounded) → DRR control/status → bulk. Token-bucket admission happens inside the pass (I-LS9) before a frame leaves its queue; a denied frame stays queued in FIFO order — never reordered across classes — and sustained denial alarms via diag.
+4. Transport egress: frames enter the peer's ordered stream in dequeue order (reliable) or go to UDP datagram send / serial frame write (realtime stream first, then bulk).
 
-*Sizing guidance:* lane caps derived from `expected_rate × frame_size × slack` at deployment generation; verify warns if caps < 2× nominal burst and rejects `SafetyEnvelope < 2×` declared safety worst case and `burst_bytes < max charge_bytes` (I-LS9).
+*Sizing guidance:* lane caps derived from `expected_rate × frame_size × slack` at deployment generation; verify warns if caps < 2× nominal burst or `SafetyEnvelope < 2×` declared safety worst case, and hard-errors if `SafetyEnvelope` < declared safety worst case (the policer must never throttle legitimate safety traffic) or `burst_bytes < max charge_bytes` (I-LS9).
 
 *Budget:* scheduler queues hold router-owned buffers (router-core.md I-RT8), never DRM borrows; worst-case capacity (`Σ caps × max_frame_bytes` per link) is included in the compute's DRM memory budget ([memory-budget.md](../memory-budget.md)).
 

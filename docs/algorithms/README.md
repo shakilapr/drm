@@ -7,7 +7,7 @@ Canonical pseudocode for every DRM subsystem, grouped by module. Implementation 
 ## Conventions
 
 1. **Style**: Rust-flavored pseudocode (`fn`, `match`, `Option`, `Result`, `enum`) for functions; **numbered steps** for cross-process protocols (SHM, locks, recovery). Pseudocode is a reviewable contract, not compilable code — implementation details (error paths via `?`, interior mutability) are elided.
-2. **REQ citations**: docs use provisional requirement slugs (`REQ-AREA-<slug>`, areas `CORE|TOOL|ROUTE|SPATIAL|BIND|STUDIO` per codebase.md R7). Numeric IDs (`REQ-TOOL-001…`) are bound in `docs/req/registry.csv` during requirement extraction; each doc carries a `## REQ Bindings` table updated in the same PR as extraction.
+2. **REQ citations**: docs use provisional requirement slugs (`REQ-AREA-<slug>`, areas `CORE|TOOL|ROUTE|SPATIAL|BIND|STUDIO|OPS|QAL` per codebase.md R7). Numeric IDs (`REQ-TOOL-001…`) are bound in `docs/req/registry.csv` during requirement extraction; each doc carries a `## REQ Bindings` table updated in the same PR as extraction.
 3. **Invariants**: `I1, I2, …` — each invariant names the test that proves it. Tests live in the locations fixed by codebase.md §4 (per-crate / `tests/{conformance,stress,soak,fuzz,fixtures}`).
 4. **Error taxonomy**: every error path maps to `drm-types::Status` (codebase R4). Docs state the mapping; no panics on data paths.
 5. **Templates**: every doc follows §Doc Template below.
@@ -73,9 +73,9 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 
 | Doc | Phase(s) | Scope |
 |---|---|---|
-| [ops/record-replay.md](ops/record-replay.md) | 32 | Borrow-copy-release pipeline, on_full policies, MCAP, faithful replay |
-| [ops/observability-plane.md](ops/observability-plane.md) | 32 | diag aggregation, compiled trace rings, non-publishing introspection |
-| [ops/rpc-actions.md](ops/rpc-actions.md) | 32 | Correlated topic pairs, cid dispatch, deterministic cancellation |
+| [ops/record-replay.md](ops/record-replay.md) | 32 | Borrow-copy-release pipeline, per-topic slab pools, loss-ledger gap accounting, MCAP + DRM metadata records, tiered replay fidelity with scheduler |
+| [ops/observability-plane.md](ops/observability-plane.md) | 32 | diag aggregation, per-consumer deadline state, `timing=auto/exact/off`, per-producer SPSC trace lanes, epoch-consistent snapshots |
+| [ops/rpc-actions.md](ops/rpc-actions.md) | 32 | Reactor/worker RPC over one ordered per-client event stream; admission, bounded outbox, sessions, relative deadlines, cooperative cancel |
 
 ### studio/ — Studio host, protocol, extensions
 
@@ -89,7 +89,7 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 |---|---|---|
 | [spatial/spatial-core.md](spatial/spatial-core.md) | 33 | Typed quantities, compile/dynamic spaces, `[spatial]` contracts, four clock domains, geodetic, overlay handles, MCU constants |
 | [spatial/spatial-queries.md](spatial/spatial-queries.md) | 33 | Compiled transform plans, latest/at/predict/delayed_view, interpolation guard, temporal reparenting, calibration slots |
-| [spatial/spatial-index.md](spatial/spatial-index.md) | 33 | Fixed-capacity hash grid, motion slack, frame-typed proximity, compiled BVH with live calibration slots, memory verification |
+| [spatial/spatial-index.md](spatial/spatial-index.md) | 33 | Incremental fixed-capacity hash grid (grid epoch), motion slack, dependency invalidation, frame-typed proximity, compiled BVH with live calibration slots, memory verification |
 
 ### program/ — qualification
 

@@ -128,7 +128,7 @@ payload byte is written before a slot and both counters are known valid.
 2. Acquire `busy` with one compare-exchange; failure returns `Busy`.
 3. Check sequence capacity and `reject` retirement gates.
 4. Build the referenced-slot bitmap in activation-owned scratch and scan hazards with SeqCst loads.
-5. On no slot, increment `pool_exhausted` and `drop_count` once, perform one bounded dead-owner scan, and drop this sample.
+5. On no slot, call `reclaim::publish_exhausted` — increments both counters, then sets `reclaim_requested` (hard-RT, I-E7) or runs one bounded maintenance pass (general-purpose) — and drop this sample.
 6. Check generation capacity, then write payload and length.
 7. Publish the versioned ring cell, then release-store `write_seq`; the latter linearizes visibility.
 8. Release `busy` on every exit.

@@ -21,6 +21,7 @@ Scope: the stable C ABI (`drm.h`, crate `drm-ffi`) — opaque context/publisher/
 | `REQ-BIND-abi-write-loan` | `write_acquire`/`commit`/`abort` writes directly into a shared slot | `REQ-BIND-019` |
 | `REQ-BIND-abi-fail-stop` | panic terminates the node process; no in-process recovery; no `Internal` status | `REQ-BIND-020` |
 | `REQ-BIND-abi-context` | opaque `drm_context` with explicit open/close lifecycle | `REQ-BIND-021` |
+| `REQ-BIND-abi-app-log` | best-effort bounded observability log export; never blocks or touches the data plane | `REQ-BIND-023` |
 
 ## Data Structures
 
@@ -62,7 +63,8 @@ typedef struct drm_consumer drm_consumer;   // opaque
 
 typedef struct drm_borrow_view { // caller-owned; caller stack/heap, never drm-owned
  const void *data; // points into the consumer's LOCAL mapping; valid until release
- size_t len;
+ size_t len; // observable sample length: bulk byte topics = stored u32 header;
+             // struct-variable topics = derived from canonical counts (canon-codec)
  uint64_t token; // opaque; 0 = invalid
 } drm_borrow_view;
 
@@ -93,7 +95,7 @@ pub struct PublisherBox { auth: EndpointAuth, core: drm_core::Publisher }
 ## Invariants
 
 - **I-A1 ValidateOnce**: authorization and descriptor validation execute exactly once per endpoint open; steady-state exports perform zero permission or schema/descriptor checks. Test: `ffi_validate_once` (`authorization_checks == 0 ∧ descriptor_checks == 0` over 1e6 steady-state calls).
-- **I-A2 PointerChecked**: every exported function checks null pointers, `(data == NULL && len != 0)`, and — **before forming any Rust reference or slice** — validates externally supplied lengths against the endpoint's structural maximum and `isize::MAX`. Every failure path zeroes all out-params first, so an ignored status can never observe stale pointers/tokens. Non-null invalid/dangling pointers remain caller UB, never claimed detectable. Tests: `ffi_null_pointers`, `ffi_len_boundaries` (0, 1, max−1, max, max+1, `isize::MAX`, `SIZE_MAX`, NULL+0; ASan/UBSan), `ffi_out_zeroed`.
+- **I-A2 PointerChecked**: every exported function checks null pointers, `(data == NULL && len != 0)`, and — **before forming any Rust reference or slice** — validates externally supplied lengths against the endpoint's structural maximum and `isize::MAX`. Every failure path zeroes all out-params (after the out-param's own null check) before any attempt, so an ignored status can never observe stale pointers/tokens. Non-null invalid/dangling pointers remain caller UB, never claimed detectable. Tests: `ffi_null_pointers`, `ffi_len_boundaries` (0, 1, max−1, max, max+1, `isize::MAX`, `SIZE_MAX`, NULL+0; ASan/UBSan), `ffi_out_zeroed`.
 - **I-A3 OpaqueSafe**: client-visible handles (context, publisher, consumer, views) are opaque or plain data; no raw cross-process pointer ever appears. Test: header inspection + code review gate.
 - **I-A4 StatusMirror**: every Rust `Status` variant has exactly one C code value and vice versa (append-only). Test: `status_map` (exhaustive both directions).
 - **I-A5 BorrowDiscipline**: one outstanding borrow per consumer endpoint; a second ⇒ `Busy`; release with a stale/foreign/double token ⇒ `InvalidBorrow`; no heap allocation on acquire/release. Test: `ffi_borrow_discipline`, `ffi_no_borrow_alloc`, `ffi_borrow_busy`.
@@ -106,15 +108,20 @@ pub struct PublisherBox { auth: EndpointAuth, core: drm_core::Publisher }
 ## Functions
 
 ```rust
-// ---- Deployment context (I-A3/I-A21; deployment-identity.md §node_startup) ----
+// Boundary conventions (pseudocode): `?` maps Err(Status) to its C code and returns.
+// zero_out(p): p == NULL ⇒ InvalidArg; else *p = zeroed — always before any attempt (I-A2).
+// ---- Deployment context (I-A3; deployment-identity.md §node_startup) ----
 #[no_mangle]
 pub unsafe extern "C" fn drm_context_open(
  path: *const c_char, // NULL ⇒ DRM_DEPLOYMENT env var; absent ⇒ NotFound
  out: *mut *mut drm_context) -> drm_status
 {
- zero_out(out)?; // I-A2: zeroed before any failure path
- if out.is_null() { return DRM_ERR_INVALID_ARG; }
- let path = copy_cstr(path)?; // owned copy before use; embedded NUL ⇒ InvalidArg
+ zero_out(out)?; // I-A2: null ⇒ InvalidArg; else zeroed before any failure path
+ let path = if path.is_null() {
+  env_deploy_path().ok_or(DRM_ERR_NOT_FOUND)? // DRM_DEPLOYMENT; absent ⇒ NotFound
+ } else {
+  copy_cstr(path)? // owned copy before use; embedded NUL ⇒ InvalidArg
+ };
  match drm_core::context_open(&path) { // fingerprint-guard inputs loaded ONCE (I-A1)
  Ok(ctx) => { *out = Box::into_raw(ctx); DRM_OK }
  Err(e) => e.into(),
@@ -128,8 +135,8 @@ pub unsafe extern "C" fn drm_context_open(
 pub unsafe extern "C" fn drm_publisher_open(
  ctx: *mut drm_context, topic_id: u32, out: *mut *mut drm_publisher) -> drm_status
 {
- zero_out(out)?;
- if ctx.is_null() || out.is_null() { return DRM_ERR_INVALID_ARG; } // I-A2: check before deref
+ zero_out(out)?; // I-A2
+ if ctx.is_null() { return DRM_ERR_INVALID_ARG; } // check before deref
  let ctx = &*ctx;
  match validate_open(ctx, topic_id, Direction::Publisher)
   .and_then(drm_core::publisher_open) { // ONCE: manifest auth + fingerprint + descriptor
@@ -145,8 +152,8 @@ pub unsafe extern "C" fn drm_publisher_open(
 pub unsafe extern "C" fn drm_consumer_open(
  ctx: *mut drm_context, topic_id: u32, out: *mut *mut drm_consumer) -> drm_status
 {
- zero_out(out)?;
- if ctx.is_null() || out.is_null() { return DRM_ERR_INVALID_ARG; }
+ zero_out(out)?; // I-A2
+ if ctx.is_null() { return DRM_ERR_INVALID_ARG; }
  // validate_open (once) then CLAIM one declared borrower record
  // (consumer-registration.md: OS lock + generation CAS); no vacant record ⇒ Busy.
 }
@@ -170,30 +177,37 @@ pub unsafe extern "C" fn drm_publish_copy(
 pub unsafe extern "C" fn drm_write_acquire(
  p: *mut drm_publisher, requested: usize, out: *mut drm_write_view) -> drm_status
 {
- zero_out(out)?;
+ zero_out(out)?; // I-A2: writes drm_write_view zeros
+ if p.is_null() { return DRM_ERR_INVALID_ARG; }
  // requested > structural max ⇒ InvalidArg BEFORE guard (I-A2/I-A10);
  // then guard CAS → Busy loser, seq/overflow checks, slot select, generation reserve.
+ // At most ONE loan is outstanding per publisher at any instant — the busy guard is the
+ // registry; a second acquire while a loan is open ⇒ Busy (no per-loan allocation).
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn drm_write_commit(
  p: *mut drm_publisher, token: u64, len: usize) -> drm_status
 {
+ if p.is_null() { return DRM_ERR_INVALID_ARG; } // I-A2
  // token lookup; len <= acquired capacity else InvalidArg (I-A10);
- // length header + ring preflight/commit + generation store + write_seq release (channel-publish.md).
+ // bulk byte topics: write the u32 length header; struct-variable topics: caller-encoded
+ // counts are part of the canonical sample — nothing extra to write, sample_len is derived
+ // (canon-codec);
+ // ring preflight/commit + generation store + write_seq release (channel-publish.md).
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn drm_write_abort(p: *mut drm_publisher, token: u64) -> drm_status
-{ /* guard drop only; no visible effect (I-A10) */ }
+{ if p.is_null() { return DRM_ERR_INVALID_ARG; } /* guard drop only; no visible effect (I-A10) */ }
 
 // ---- Read: transient borrow (one outstanding per endpoint — I-A5) ----
 #[no_mangle]
 pub unsafe extern "C" fn drm_borrow_latest(
  c: *mut drm_consumer, out: *mut drm_borrow_view) -> drm_status
 {
- zero_out(out)?;
- if c.is_null() || out.is_null() { return DRM_ERR_INVALID_ARG; }
+ zero_out(out)?; // I-A2: null ⇒ InvalidArg; else zeroed before any failure path
+ if c.is_null() { return DRM_ERR_INVALID_ARG; }
  match (*c).borrow_latest() { // one outstanding (I-A5); hazard-protocol.md
  Ok(v) => { (*out).data = v.ptr; (*out).len = v.len; (*out).token = v.token; DRM_OK }
  Err(e) => e.into(), // *out stays zeroed (I-A2)
@@ -204,9 +218,12 @@ pub unsafe extern "C" fn drm_borrow_latest(
 pub unsafe extern "C" fn drm_borrow_next(
  c: *mut drm_consumer, out: *mut drm_borrow_view, out_missed: *mut u64) -> drm_status
 {
- zero_out(out)?; zero_out(out_missed)?;
- // cursor advance (cursor-delivery.md); lapped ⇒ DRM_ERR_GAP with exact *out_missed (I-C2);
- // *out zeroed — GAP produces no view.
+ zero_out(out)?; zero_out(out_missed)?; // I-A2: null ⇒ InvalidArg; else zeroed
+ if c.is_null() { return DRM_ERR_INVALID_ARG; }
+ // Bounded core primitive (cursor-delivery.md I-C10): at most RETRY_BUDGET acquisition
+ // attempts; budget exhausted ⇒ DRM_ERR_RETRY (caller may loop — WCET-claimable surface).
+ // Lapped ⇒ DRM_ERR_GAP with exact *out_missed (I-C2); *out zeroed — GAP produces no view.
+ // Caught-up/empty ⇒ DRM_ERR_NO_SAMPLE.
 }
 
 // ---- Read: copy into caller-owned memory (cursor-delivery.md I-C9: core never allocates) ----
@@ -214,16 +231,23 @@ pub unsafe extern "C" fn drm_borrow_next(
 pub unsafe extern "C" fn drm_copy_latest(
  c: *mut drm_consumer, buf: *mut u8, cap: usize, out_len: *mut usize) -> drm_status
 {
- zero_out(out_len)?;
- // acquire → copy into buf → release hazard immediately; cap < required ⇒ InvalidArg with
- // *out_len = required, no partial copy; empty channel ⇒ DRM_ERR_NO_SAMPLE.
+ zero_out(out_len)?; // I-A2: null ⇒ InvalidArg; else zeroed
+ if c.is_null() || (buf.is_null() && cap != 0) { return DRM_ERR_INVALID_ARG; }
+ // Bounded primitive (I-C10) → DRM_ERR_RETRY on budget exhaustion; acquire → copy into buf →
+ // release hazard immediately; cap < required ⇒ InvalidArg with *out_len = required, no partial
+ // copy (I-C9); empty/caught-up ⇒ DRM_ERR_NO_SAMPLE.
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn drm_copy_next(
  c: *mut drm_consumer, buf: *mut u8, cap: usize,
  out_len: *mut usize, out_missed: *mut u64) -> drm_status
-{ /* copy form of drm_borrow_next; GAP ⇒ DRM_ERR_GAP + exact *out_missed, no copy */ }
+{
+ zero_out(out_len)?; zero_out(out_missed)?; // I-A2
+ if c.is_null() || (buf.is_null() && cap != 0) { return DRM_ERR_INVALID_ARG; }
+ // Same rules as drm_borrow_next + drm_copy_latest: bounded (I-C10) ⇒ DRM_ERR_RETRY; GAP ⇒
+ // DRM_ERR_GAP + exact *out_missed, no copy; cap < required ⇒ InvalidArg + *out_len = required.
+}
 
 // ---- Release / close / version ----
 #[no_mangle]
@@ -240,9 +264,16 @@ pub unsafe extern "C" fn drm_borrow_release(c: *mut drm_consumer, token: u64) ->
 #[no_mangle] pub unsafe extern "C" fn drm_consumer_close(c: *mut drm_consumer) -> drm_status
 { /* null-check; outstanding borrow ⇒ Busy (consumer-registration I-CR4); drop after release */ }
 #[no_mangle] pub extern "C" fn drm_abi_version() -> u32 { DRM_ABI_VERSION }
+
+// ---- Observability (Phase 1 app log; never on the data path) ----
+#[no_mangle]
+pub extern "C" fn drm_log(level: u32, msg: *const u8, len: usize)
+{ /* One bounded try_push into the observability ring (observability-plane.md I-OB1/I-OB6);
+     full ring or invalid/null buffer ⇒ silent drop + drop counter — no wait, no return, no
+     data-plane access. Bindings expose it as drm.log(level, message) (I-B9, REQ-BIND-023). */ }
 ```
 
-Every export shares the same boundary rules: null/length checks first (I-A2), status-only errors, no `catch_unwind` (I-A6) — there is no `ffi_catch` wrapper to forget.
+Every export shares the same boundary rules: null/length checks first (I-A2), status-only errors, no `catch_unwind` (I-A6) — there is no `ffi_catch` wrapper to forget. Generated per-topic C wrappers (`drm_read_control_target`, `drm_publish_control_target` in architecture §Application Code Experience) are thin typed layers over these canonical operations (`drm_copy_latest`/`drm_publish_copy`), emitted per node manifest.
 
 ## Protocols
 
@@ -261,7 +292,7 @@ Every export shares the same boundary rules: null/length checks first (I-A2), st
 
 *Consumer lease (per-borrower records):*
 
-1. Activation reserves `borrowers` records (consumer-registration.md) for each declared zero-copy consume endpoint.
+1. Activation reserves `borrowers` records (consumer-registration.md) for every declared consume endpoint (default 1). Copy-only use keeps the record's hazard word `NONE`; required-sequential `ack_seq` lives in the record regardless of borrow/copy.
 2. Each borrower thread calls `drm_consumer_open`; it claims one record (OS lock + generation CAS).
 3. No vacant record ⇒ `Busy`; the thread uses a copy path or waits for a sibling endpoint to close.
 
@@ -275,7 +306,7 @@ Every export shares the same boundary rules: null/length checks first (I-A2), st
 
 1. `drm_write_acquire(p, cap)` — capacity checked against the structural max before the guard (I-A10); then channel-publish.md loan steps: guard CAS (`Busy` loser), sequence/overflow checks, slot select, generation reserve. Returns `drm_write_view` into the publisher's local mapping.
 2. Application writes payload bytes directly into `view.data` (no DRM copy).
-3. `drm_write_commit(p, token, len)` finalizes: length header (variable topics), ring preflight/commit, generation store, `write_seq` release.
+3. `drm_write_commit(p, token, len)` finalizes: bulk byte topics write the u32 length header; struct-variable topics need nothing extra (caller-encoded counts are part of the canonical sample; sample_len is derived per canon-codec); then ring preflight/commit, generation store, `write_seq` release.
 4. `drm_write_abort` on any failure path. A crash before commit leaves the slot unreachable; restart order applies (publisher-lifecycle.md I-L7).
 
 *Thread-safety summary (I-A7):*
@@ -290,7 +321,8 @@ Every export shares the same boundary rules: null/length checks first (I-A2), st
 
 | Case | Result |
 |---|---|
-| Null context/handle/out pointer | `InvalidArg` before deref; out-params zeroed (I-A2) |
+| Null out-param | `InvalidArg` (nothing to write) |
+| Null context/handle/buf (out-params non-null) | `InvalidArg` before deref; out-params already zeroed (I-A2) |
 | Non-null invalid/dangling pointer | caller contract violation; behavior is undefined by the C API, never claimed detectable |
 | `data == NULL && len != 0` | `InvalidArg` before slice |
 | `len > structural max` or `len > isize::MAX` | `InvalidArg` before any Rust reference/slice exists (I-A2) |
@@ -299,8 +331,9 @@ Every export shares the same boundary rules: null/length checks first (I-A2), st
 | No vacant borrower record at consumer open | `Busy` (I-A7 lease) |
 | Concurrent publish on one publisher | exactly one proceeds; others `DRM_ERR_BUSY`, no race, no corruption (I-A7 / I-HZ6) |
 | second borrow before release | `DRM_ERR_BUSY` (I-A5) |
-| borrow of empty channel | `DRM_ERR_NO_SAMPLE` |
+| borrow/copy of empty channel, or caught-up `next` | `DRM_ERR_NO_SAMPLE` |
 | copy with `cap < required` | `InvalidArg`, `*out_len = required`, no partial copy (I-C9) |
+| read retry budget exhausted under adversarial publisher | `DRM_ERR_RETRY` — bounded core primitive (I-C10); caller may loop |
 | lapped sequential read | `DRM_ERR_GAP` + exact `*out_missed` (I-C2); view/copy skipped |
 | stale/foreign/double release token | `DRM_ERR_INVALID_BORROW` (I-A5) |
 | `write_commit` with `len > acquired capacity` | `InvalidArg`; nothing committed (I-A10) |
@@ -327,4 +360,5 @@ Every export shares the same boundary rules: null/length checks first (I-A2), st
 | `ffi_consumer_lease` (claim N, N+1th) | I-A7: Nth+1 ⇒ `Busy` |
 | `ffi_parity` (C↔Rust↔Python) | identical bytes both directions |
 | `abi_spike` (gcc/clang/clang-cl, c99/c11) | compiles clean |
+| `app_log_nonblocking` (operation-count + drop counter) | I-B9/REQ-BIND-023: no wait, no data-plane access |
 | `abi_compat` (v0 golden suite × current exports) | I-A8 one-way |

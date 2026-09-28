@@ -94,7 +94,8 @@ fn reset(&mut self, ch: &Channel) {
 fn try_next<B>(&mut self, ch: &Channel, own: MemOwn, k: u32) -> Result<ReadOutcome<B>, Status> {
  observe_epoch_at_entry(ch, &mut self.state); // I-C6b: persistent detection first
  let mut attempts = 0;
- loop {
+ while attempts < k { // I-C10: EVERY retry path consumes the budget — epoch crossings included
+  attempts += 1;
   let epoch0 = ch.epoch().load(Acquire);
   let ws = ch.write_seq().load(Acquire);
   let fv = ch.first_valid_seq().load(Acquire);
@@ -137,14 +138,11 @@ fn try_next<B>(&mut self, ch: &Channel, own: MemOwn, k: u32) -> Result<ReadOutco
   }
   return Ok(Sample(payload));
   }
-  Err(AgedOut | Retry) => {
-   attempts += 1; // I-C10: bounded core primitive
-   if attempts >= k { return Ok(WouldRetry); }
-   continue; // publisher advanced; recompute snapshot
-  }
+  Err(AgedOut | Retry) => continue, // publisher advanced; recompute snapshot
   Err(e) => return Err(e),
   }
  }
+ Ok(WouldRetry) // budget exhausted without a terminal outcome
 }
 
 fn next<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Status> {
@@ -160,7 +158,8 @@ fn next<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Statu
 fn try_latest<B>(&mut self, ch: &Channel, own: MemOwn, k: u32) -> Result<ReadOutcome<B>, Status> {
  observe_epoch_at_entry(ch, &mut self.state); // I-C6b
  let mut attempts = 0;
- loop {
+ while attempts < k { // I-C10: every retry path consumes the budget
+  attempts += 1;
   let epoch0 = ch.epoch().load(Acquire);
   // Unified acquisition: resolve the logical target sequence, then use the SAME
   // hazard::acquire(target_seq) protocol as next() — no entry-passing side path
@@ -176,14 +175,11 @@ fn try_latest<B>(&mut self, ch: &Channel, own: MemOwn, k: u32) -> Result<ReadOut
   if ch.epoch().load(Acquire) != epoch0 { drop(payload); self.reset(); continue; }
   Ok(Sample(payload))
   }
-  Err(AgedOut | Retry) => {
-   attempts += 1; // I-C10
-   if attempts >= k { return Ok(WouldRetry); }
-   continue; // rolled during acquisition; recompute ws
-  }
+  Err(AgedOut | Retry) => continue, // rolled during acquisition; recompute ws
   Err(e) => return Err(e),
   }
  }
+ Ok(WouldRetry)
 }
 
 fn latest<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Status> {
@@ -222,8 +218,9 @@ acquire → re-read epoch → mismatch ⇒ drop payload, `reset()`, retry — re
 the read path. Both layers are required; neither subsumes the other.
 
 *Bounded core (I-C10):* `try_next`/`try_latest` are the WCET-claimable primitives; `next`/`latest`
-wrap them with an unbounded loop for ergonomics. An adversarial publisher that advances at every
-race point forces `WouldRetry` after `RETRY_BUDGET` attempts, never an open-ended spin.
+wrap them with an unbounded loop for ergonomics, and the ABI/binding surface exposes the bounded
+`try_` form for hard-real-time callers. An adversarial publisher that advances at every race point
+forces `WouldRetry` after `RETRY_BUDGET` attempts, never an open-ended spin.
 
 ## Edge Cases & Errors
 
