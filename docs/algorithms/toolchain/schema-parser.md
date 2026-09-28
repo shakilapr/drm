@@ -62,8 +62,9 @@ pub enum Tok {
  At, Colon, LBracket, RBracket, LBrace, RBrace, Leq, Comma, Newline, Eof,
 }
 // Lexer: two modes. Normal mode: idents, ints, punctuation. Annotation-value mode (after
-// `ident ':'` inside `{...}`): number | quoted string | bare token ([^,}]+, trimmed) —
-// matches grammar `annot-value` exactly. No grammar production lacks a lexical form.
+// `ident ':'` inside `{...}`): '[' number ',' number ']' (range) | number | quoted string |
+// bare token ([^,}]+, trimmed) — matches grammar `annot-value` exactly, including the bracketed
+// range whose interior comma is not an entry separator. No grammar production lacks a lexical form.
 
 pub struct TokSpanned { pub tok: Tok, pub span: Span }
 
@@ -136,8 +137,9 @@ fn validate(f: &TopicFile) -> Result<(), Vec<Diagnostic>>
 
 fn render_canonical(f: &TopicFile) -> String
 // Deterministic: attrs first in fixed order (History, PoolSize, Overflow, Encoding), then fields in
-// declaration order, each with its annotations in declaration order (numbers rendered from stored
-// lexical value; quoted/bare annotation values re-emitted verbatim). render_canonical(parse(x)) is a
+// declaration order, each with its annotations in declaration order (numbers rendered canonically
+// from the stored f64 — idempotent normalization, e.g. `0.10` → `0.1`; quoted/bare annotation
+// values re-emitted verbatim). render_canonical(parse(x)) is a
 // pure function of the AST ⇒ I4 semantic round-trip holds.
 ```
 

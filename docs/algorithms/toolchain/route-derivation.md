@@ -86,7 +86,8 @@ fn derive(graph: &RouteGraph) -> RouteResult {
  let mut res = RouteResult::default();
 
  // 1. Validate explicit overrides first (I-R9) — contradictory intent is an error, not precedence.
- for topic in graph.overrides.topics() { // force/deny/prefer keys, deterministic BTree order
+ // A conflict requires `force` (≥2, or force∩deny), so force keys cover every case; deny-only is harmless.
+ for topic in graph.overrides.force.keys() {
   let forced = graph.overrides.force.get(topic);
   let denied = graph.overrides.deny.get(topic);
   if forced.map_or(0, |f| f.len()) > 1
