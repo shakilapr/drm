@@ -1,0 +1,20 @@
+# Derived Component Specs
+
+Non-normative derived specifications: extraction of details that live in the architecture docs
+and algorithm pseudocode but need a stable, standalone home (grammar, diagnostics vocabulary,
+ABI policy, capability tables, routing derivation drafts). On any conflict the architecture docs
+win; on any pseudocode conflict the algorithm docs win (codebase.md §2.4).
+
+Owned by E2 unless noted. Written by the weekly plan named in each file's header.
+
+| Spec | Phase | Source of truth |
+|---|---|---|
+| `schema-grammar.md` | 2 | `docs/algorithms/toolchain/schema-parser.md` §Grammar |
+| `DIAGNOSTICS.md` | 2 | `docs/algorithms/toolchain/schema-parser.md` §Diagnostics Vocabulary |
+| `routing-derivation.md` | 28 (draft M01) | `docs/algorithms/toolchain/route-derivation.md` |
+| `transport-capabilities.md` | 29 (draft M01) | `docs/algorithms/router/router-core.md`, `lanes-shaping.md`, `serial-mcu.md` |
+| `metadata-layout.md` | 5 | `docs/architecture.md` §No Universal Envelope, `docs/algorithms/canon-codec.md` |
+| `abi-policy.md` | 7 | `docs/algorithms/bindings/c-abi-surface.md`; ADR 0002 |
+
+Specs here may not introduce requirements beyond the architecture; each lands with a `source_ref`
+back to the owning architecture/algorithm section.

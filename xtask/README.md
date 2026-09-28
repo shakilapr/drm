@@ -1,0 +1,33 @@
+# xtask Command Registry
+
+All repository automation is invoked through `xtask` (codebase.md §5.1). No one-off scripts.
+
+## Core commands (codebase.md §5.1)
+
+| Command | Purpose |
+|---|---|
+| `xtask fmt` | rustfmt, clang-format, ruff, prettier, taplo, markdownlint (`--check` in CI) |
+| `xtask lint` | clippy `-D warnings`, mypy, eslint, yamllint, markdownlint |
+| `xtask test` | unit + property + doc tests, all languages |
+| `xtask check-layering` | crate dependency-layer verification (codebase §2.2 R6) |
+| `xtask gen-check` | regenerate against fixtures; fail on diff (codebase §3.1 R6) |
+| `xtask audit-zero-alloc` | data-path allocation audit (codebase §3.2) |
+| `xtask audit-traceability` | REQ citation coverage; flags `--registry`, `--citations`, `--matrix` |
+| `xtask docs` | build docs + execute examples headless |
+
+## Extension commands (ADR 0003)
+
+| Command | Purpose |
+|---|---|
+| `xtask golden-gen` | regenerate `tests/fixtures/golden/` byte vectors (idempotent) |
+| `xtask soak` | long-duration stability suite (`tests/soak`) |
+| `xtask test --stress` | chaos/stress suites (`tests/stress`) |
+| `xtask test --two-host` | two-host router/transport matrix |
+| `xtask test --cross-os` | cross-OS parity matrix (Linux/Windows) |
+| `xtask bench --report-regressions` | benchmark regression report (audit.yml) |
+| `xtask abi-check --against <ref>` | ABI/layout compatibility vs a previous release (release.yml) |
+| `xtask publish` | lockstep crates.io publishing (release.yml) |
+| `xtask sbom --out <file>` | SBOM generation (release.yml) |
+| `xtask audit syscall` | syscall audit on the data path |
+
+Adding, renaming, or removing a command requires updating this registry and ADR 0003 in the same PR.

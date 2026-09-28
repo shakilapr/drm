@@ -19,5 +19,5 @@ Do not open public issues for suspected vulnerabilities.
 ## Response
 
 - Acknowledgment: within 7 days.
-- Fix + advisory: P0/P1 correctness or memory-safety defects prioritized per work-plan quality gates; fuzz and sanitizer suites run continuously (codebase §5.2).
+- Fix + advisory: P0/P1 correctness or memory-safety defects prioritized per work-plan quality gates; fuzz and sanitizer suites run per PR (core paths) and nightly (codebase §5.2).
 - Supported releases: latest tagged release and `main`.

@@ -214,7 +214,7 @@ In systems like ROS 2, each language requires a dedicated client library (`rclcp
 DRM eliminates runtime serialization by generating thin, native bindings from a single canonical C-ABI specification (`drm.h`). For the initial MVP, DRM provides first-class support for four foundational robotics languages:
 
 - **C (ISO C99/C11)**: Pure, zero-allocation C structs and direct functions (`drm_publish_control_target`, `drm_read_control_target`). Built for microcontrollers, bare-metal chips, real-time operating systems (FreeRTOS, Zephyr), and safety-critical motor controllers.
-- **C++ (C++17/20)**: Type-safe templates, RAII memory managers, and zero-copy byte-backed accessor views (no reinterpret-cast of shared bytes) without runtime overhead.
+- **C++ (C++20)**: Type-safe templates, RAII memory managers, and zero-copy byte-backed accessor views (no reinterpret-cast of shared bytes) without runtime overhead.
 - **Rust**: Safe zero-copy reference wrappers, compile-time thread safety, and lock-free ring buffer access.
 - **Python**: Owned reads only. `latest()`, `next()`, and `.numpy()` return application-owned copies; the first-party binding exposes no DRM shared-memory payload through the Python buffer protocol, `memoryview`, NumPy views, or any other Python-visible borrowed pointer — a derived Python object can outlive any scope, so scope-pinned zero-copy cannot be made sound there. The binding may internally borrow a slot while performing a copy, but the hazard is released before control returns to Python. Workloads that cannot tolerate the copy run the intensive section in a native (Rust/C++) extension over DRM's zero-copy paths.
 

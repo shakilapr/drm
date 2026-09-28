@@ -8,7 +8,7 @@ Normative sources: [docs/architecture.md](docs/architecture.md), [docs/spatial_a
 - **Team**: 4 engineers. Testing is a shared duty; a rotating test lead owns each wave's exit gate.
 - **Stack**: `drm-core` and the `drm` toolchain in Rust with a pure canonical C ABI; first-party bindings C, C++, Rust, Python.
 - **Scope**: all 34 development phases, including DRM Spatial (Phase 33).
-- **Architecture discipline**: AGENTS.md directives apply at all times (architecture-first, reference-only, clean-room, brokerless/single-writer, transient borrow lifecycle, zero data-path allocation, terse, 100% verification).
+- **Architecture discipline**: AGENTS.md directives apply at all times (architecture-first, reference-only, clean-room, brokerless/single-writer, transient borrow lifecycle, zero data-path allocation, terse, 100% verification, traceability, falsification/ADR, layering, generated-code, regression permanence, commits).
 
 ## Team and Roles
 

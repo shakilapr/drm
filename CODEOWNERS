@@ -7,10 +7,16 @@
 /crates/drm-trace/         @drm/e1-runtime
 /crates/drm-rpc/           @drm/e1-runtime
 
-# E2 — toolchain, schema grammar, codegen, verify, spatial compiler
+# E2 — toolchain, schema grammar, codegen, verify, spatial compiler, standards
 /crates/drm-workspace/     @drm/e2-toolchain
 /crates/drm-spatial/       @drm/e2-toolchain
 /docs/architecture.md      @drm/e2-toolchain
+/docs/spatial_architecture.md @drm/e2-toolchain
+/docs/algorithms/          @drm/e2-toolchain
+/docs/spec/                @drm/e2-toolchain
+/docs/req/                 @drm/e2-toolchain
+/docs/adr/                 @drm/e2-toolchain
+/docs/work-plan/           @drm/e2-toolchain
 
 # E3 — boundary router, transports, serial/embedded integration
 /crates/drm-router/        @drm/e3-router
@@ -23,6 +29,7 @@
 /crates/xtask/             @drm/e4-quality
 
 # Frontend (shared: E4 CI + E2 engine contract)
+/docs/ui-architecture.md   @drm/e4-bindings @drm/e2-toolchain
 /packages/                 @drm/e4-bindings @drm/e2-toolchain
 /apps/studio/              @drm/e4-bindings
 
@@ -30,5 +37,4 @@
 /codebase.md               @drm/e2-toolchain @drm/e4-quality
 /work-plan.md              @drm/e2-toolchain
 
-# Strictly read-only; changes fail CI regardless of approval
-/references/
+# references/ is git-ignored and local-only; it is never committed (codebase.md §1, AGENTS R2/R3).

@@ -42,8 +42,8 @@ drm/
 │
 ├── crates/                         # Rust workspace members; layering in §2.1
 │   ├── drm-types/                  # primitives, handles, status codes; zero dependencies
-│   ├── drm-core/                   # SHM backends, rings, hazard pools, epochs, precommit
-│   │   └── src/{shm,hazard,ring,epoch,alloc}/
+│   ├── drm-core/                   # SHM backends, channels, rings, hazard pools, epochs, precommit
+│   │   └── src/{shm,channel,hazard,ring,epoch,alloc}/
 │   ├── drm-ffi/                    # canonical C ABI exports; drm.h single source of truth
 │   ├── drm-router/                 # boundary router: framing, priority lanes, traffic shaping
 │   ├── drm-spatial/                # spatial-temporal engine (Phase 33)
@@ -55,7 +55,7 @@ drm/
 │   ├── drm-rpc/                    # request/response and actions over correlated topic pairs
 │   ├── drm-cli/                    # `drm` executable + `drm studio --stdio` host
 │   ├── drm-extension-host/         # WASM extension host process (wasmtime resource budgets)
-│   └── xtask/                      # all repository automation (§5.1)
+│   └── xtask/                      # all repository automation (§5.1); README.md = command registry
 │
 ├── bindings/                       # first-party bindings over drm-ffi
 │   ├── c/                          # drm.h distribution + pure C11 ABI conformance suite
@@ -89,6 +89,7 @@ drm/
 ├── examples/                       # CI-executed workspace + node per binding language
 │
 ├── tests/                          # whole-system harness (§4); per-crate tests live inside crates
+│   ├── platform/                   # OS platform conformance: SHM create/open/cleanup, locks, identity
 │   ├── conformance/                # 4-language cross-process ABI and interop matrix
 │   ├── fixtures/                   # manifests, .drm schemas, golden/ byte vectors
 │   ├── fuzz/                       # cargo-fuzz targets: schema, framing, hazard protocol
@@ -96,11 +97,13 @@ drm/
 │   └── soak/                       # long-duration stability
 │
 ├── docs/
+│   ├── README.md                   # documentation index
 │   ├── architecture.md             # normative core specification
 │   ├── spatial_architecture.md     # normative spatial specification
 │   ├── ui-architecture.md          # normative Studio specification
 │   ├── work-plan/                  # milestone execution documents (weekly plans reference ../algorithms/)
 │   ├── algorithms/                 # canonical algorithm pseudocode, grouped per subsystem (runtime/toolchain/router/bindings/ops/studio/spatial/program)
+│   ├── spec/                       # derived component specs: grammar, diagnostics, ABI policy, capability tables (non-normative; §2.4)
 │   ├── req/                        # requirement registry (§6.2)
 │   └── adr/                        # decision records (§6.3)
 │
@@ -110,7 +113,7 @@ drm/
 Artifact rules:
 - Generated bindings are never committed to this repo and never hand-edited (§3.1 R6).
 - Runtime deployment state (`.drm/deploy/`, `studio.local.json`) is machine-local and git-ignored.
-- `references/` sits outside the workspace graph; CI fails on any diff touching it.
+- `references/` is local-only and git-ignored, outside the workspace graph; it is never committed, and any reference copy reaching the repo is rejected at review (AGENTS R2/R3).
 
 ---
 
@@ -144,7 +147,7 @@ Artifact rules:
 1. Per-crate unit/property tests live inside each crate; `tests/` holds only whole-system suites (§4.1).
 2. `examples/` contains one buildable, CI-executed workspace per binding language.
 3. All automation lives in `xtask/` (§5.1); no one-off shell scripts.
-4. Documentation set: normative specs (architecture docs), canonical algorithms, execution plan (work-plan), requirement registry (§6.2), decision records (§6.3). Algorithm coverage must include every non-deferred normative architecture path.
+4. Documentation set: normative specs (architecture docs), canonical algorithms, execution plan (work-plan), derived component specs (`docs/spec/`, non-normative; architecture wins conflicts), requirement registry (§6.2), decision records (§6.3). Algorithm coverage must include every non-deferred normative architecture path.
 
 ---
 
@@ -202,6 +205,7 @@ Artifact rules:
 | Level | Location | Tooling | Scope | Cadence |
 |---|---|---|---|---|
 | Unit | per-crate `#[cfg(test)]`, crate `tests/` | built-in | module invariants | every PR |
+| Platform | `tests/platform/` | multi-process harness | SHM create/open/cleanup, locks, process identity, fork | every PR (Linux/Windows) |
 | Property | per-crate | proptest | encode→decode round-trips, ring/pool algebra | every PR |
 | Compile-fail | binding crates, schema fixtures | trybuild | forbidden borrow lifetimes, contract violations | every PR |
 | Fuzz | `tests/fuzz` | cargo-fuzz | schema parser, framing, hazard protocol | PR smoke + nightly |
@@ -235,6 +239,8 @@ Artifact rules:
 | `xtask audit-traceability` | REQ citation coverage (§3.1 R2) |
 | `xtask docs` | build docs + execute examples headless |
 
+Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak`, `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
+
 `xtask` is the single automation entry point — cross-platform by construction (Windows is a first-class platform, Phase 31), no external runner binaries required.
 
 ### 5.2 Workflows
@@ -245,7 +251,7 @@ Artifact rules:
 | `audit.yml` | nightly + release | cargo-deny, advisories, `audit-zero-alloc`, `audit-traceability`, `gen-check`, docs/examples execution, benchmark regression report |
 | `release.yml` | tag `v*` | crates.io publish, Python wheels (maturin), Studio artifacts, SBOM, ABI compatibility check vs previous release |
 
-Required checks: all `ci.yml` jobs. Nightly `audit.yml` failures auto-file issues.
+Required checks: all `ci.yml` jobs. `audit.yml` runs nightly and on release; failures auto-file issues. Advisory scanning runs within `audit.yml` (codebase §7.2).
 
 ### 5.3 Caching and Build Performance
 - sccache (Rust) and ccache (C/C++) keyed per toolchain; pnpm store cache; incremental Rust compilation disabled in CI.
@@ -262,7 +268,8 @@ Required checks: all `ci.yml` jobs. Nightly `audit.yml` failures auto-file issue
 3. Releases flow only through `release.yml` (§5.2) — never ad-hoc publishing.
 
 ### 6.2 Requirement Registry
-- Location: `docs/req/` — `registry.csv` (`id, area, statement, source_ref, phase, test, status`) plus per-area normative statements.
+- Location: `docs/req/` — `registry.csv` (`id, area, statement, source_ref, phase, test, status`); `README.md` defines the column schema. No separate per-area statement files; `area` groups rows.
+- Column semantics: `source_ref` = architecture anchor + owning algorithm doc; `phase` = work-plan phase (1–34) whose gate verifies the requirement, resolved during Phase-1 extraction (never guessed); `test` = planned verification owner (algorithm Test Matrix anchor until the test exists, then the crate/`tests` path).
 - Sync rule: the registry changes in the same PR as its architecture statement or implementation (work-plan risk register).
 - Terminal gate: 100% REQ → implementation → test → passing result by Phase 34.
 
@@ -287,12 +294,12 @@ Required checks: all `ci.yml` jobs. Nightly `audit.yml` failures auto-file issue
 | Role | Subsystems | CODEOWNERS paths |
 |---|---|---|
 | E1 | Runtime core, epochs, precommit, Windows port, trace/RPC runtime | `crates/drm-core`, `crates/drm-ffi`, `crates/drm-trace`, `crates/drm-rpc` |
-| E2 | Toolchain, schema grammar, codegen, verify, spatial compiler | `crates/drm-workspace`, `crates/drm-spatial`, `docs/architecture.md` |
+| E2 | Toolchain, schema grammar, codegen, verify, spatial compiler, architecture standards | `crates/drm-workspace`, `crates/drm-spatial`, `docs/architecture.md`, `docs/spatial_architecture.md`, `docs/spec/*`, `codebase.md`, `work-plan.md` |
 | E3 | Boundary router, transports, serial/embedded integration | `crates/drm-router` |
-| E4 | Bindings, CI, fuzz/property/sanitizer infrastructure, benchmarks | `bindings/*`, `tests/*`, `.github/`, `xtask` |
+| E4 | Bindings, CI, fuzz/property/sanitizer infrastructure, benchmarks, frontend build | `bindings/*`, `tests/*`, `examples/*`, `.github/`, `xtask`, `apps/studio` |
 
 Rotating test lead per wave owns the exit gate (work-plan). Two approvals required for `drm-core` and `drm-workspace` changes.
 
 ### 7.2 Licensing and Security
-- Dual license: `MIT OR Apache-2.0`, matching the Rust ecosystem convention; `deny.toml` allow-list enforces third-party compatibility (MIT, Apache-2.0, BSD, ISC, Unicode-3.0).
-- Vulnerability reports follow `SECURITY.md`; advisory scanning runs weekly in `audit.yml`.
+- Dual license: `MIT OR Apache-2.0`, matching the Rust ecosystem convention; `deny.toml` allow-list enforces third-party compatibility (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0) — keep `deny.toml` and this list in lockstep.
+- Vulnerability reports follow `SECURITY.md`; advisory scanning runs within `audit.yml` (nightly + release).
