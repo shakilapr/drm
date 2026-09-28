@@ -24,7 +24,7 @@ pub struct PoolLayout {
  count: u64, // pool_size — deployment configuration, NOT compile-time
  header_size: u64, // codec header_end: fixed fields + descriptor block (canon-codec two-region)
  sample_max: u64, // codec sample_max = header_end + max tail (one canonical sample bound)
- slot_size: u64, // = align_up(sample_max, slot_align)
+ slot_size: u64, // = sample_max (logical per-slot span; stride aligns it)
  slot_align: u64, // canon-codec align rules (incl. tail element alignment)
  variable: bool, // struct has ≥1 variable member (descriptor block + tail)
 }

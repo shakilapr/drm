@@ -36,8 +36,9 @@ pub struct WriteLoan<'a> { // returned by write_acquire; consumed by commit/abor
  seq: u64,
  next: u64,
  generation: u64, // reserved (current + 1); stored only at commit
- capacity: usize, // acquired capacity <= structural max
-} // the loan exposes `data` = mapping base + slot offset + header — the caller writes there
+ capacity: usize, // acquired sample bound <= codec sample_max (canon-codec two-region)
+} // the loan exposes `data` = the canonical sample buffer at the slot; the caller writes fixed
+  // fields and variable bodies through generated codec accessors (no fixed-offset length header)
 ```
 
 ## Invariants
@@ -83,7 +84,7 @@ fn publish(ch: &Channel, src: &[u8]) -> Result<u64, Status> {
 // ---- Loan form: the publisher writes directly into the shared slot (bulk topics) ----
 // Acquire = steps 1–5 of `publish` MINUS payload write and ring preflight.
 fn write_acquire(ch: &Channel, requested: usize) -> Result<WriteLoan<'_>, Status> {
- if requested > ch.max_payload_len() { return Err(InvalidArg); }   // I-PB4: before guard
+ if requested > ch.sample_max() { return Err(InvalidArg); }        // I-PB4: before guard (codec sample bound)
  let mut guard = ch.try_publish_guard()?;                          // Busy; non-blocking
  let seq = ch.write_seq.load(Acquire);
  let next = seq.checked_add(1).ok_or(SequenceExhausted)?;
@@ -99,11 +100,13 @@ fn write_acquire(ch: &Channel, requested: usize) -> Result<WriteLoan<'_>, Status
 
 // Commit = the ONLY step that touches ring/generation/write_seq. Ring preflight lives here:
 // a failed stamp check discards only this loan's payload, never visible history.
-fn write_commit(ch: &Channel, loan: WriteLoan<'_>, len: usize) -> Result<u64, Status> {
- if len > loan.capacity { return Err(InvalidArg); }                // never committed (I-PB2)
- if ch.is_fixed_size() && len != ch.fixed_len() { return Err(InvalidArg); }
+fn write_commit(ch: &Channel, loan: WriteLoan<'_>, sample_len: usize) -> Result<u64, Status> {
+ if sample_len > loan.capacity { return Err(InvalidArg); }         // never committed (I-PB2)
+ if ch.is_fixed_size() && sample_len != ch.fixed_len() { return Err(InvalidArg); }
  let ring_stamp = ch.ring.preflight_commit(loan.seq)?;             // RingStampExhausted
- if ch.is_variable_size() { pool::write_len_header(ch, loan.slot, len)?; } // header only, no copy
+ // The canonical header (fixed fields + descriptor block) and tail bodies were already written
+ // into the loan buffer through the generated codec (canon-codec.md two-region) — commit authors
+ // no header and assumes no fixed-offset length; it only validates the final sample_len.
  ch.slot_generation(loan.slot).store(loan.generation, Relaxed);
  ring::commit(ch, loan.seq, loan.slot, loan.generation, ring_stamp);
  ch.write_seq.store(loan.next, Release);                           // linearization point
@@ -124,27 +127,27 @@ payload byte is written before a slot and both counters are known valid.
 
 ## Protocols
 
-1. Validate source length and variable-length header arithmetic.
+1. Validate the encoded sample against the codec structural bound (canon-codec.md I3; no fixed-offset header assumption).
 2. Acquire `busy` with one compare-exchange; failure returns `Busy`.
 3. Check sequence capacity and `reject` retirement gates.
 4. Build the referenced-slot bitmap in activation-owned scratch and scan hazards with SeqCst loads.
 5. On no slot, call `reclaim::publish_exhausted` — increments both counters, then sets `reclaim_requested` (hard-RT, I-E7) or runs one bounded maintenance pass (general-purpose) — and drop this sample.
-6. Check generation capacity, then write payload and length.
+6. Check generation capacity, then write the canonical sample (codec-authored fixed header + bounded tail).
 7. Publish the versioned ring cell, then release-store `write_seq`; the latter linearizes visibility.
 8. Release `busy` on every exit.
 
-*Loan form (bulk direct-write):* steps 1–5 run in `write_acquire` (payload write and ring preflight
-deferred); the caller writes payload bytes directly into the acquired slot; `write_commit` runs
-length-header write, ring preflight, generation store, ring commit, and `write_seq` release (steps
-6–7); `write_abort` runs step 8 only. Both forms share one ordering, so I-PB4 precedence and the
-crash states are identical: an in-progress loan slot is unreachable until commit, exactly like the
-copy form's not-yet-committed write.
+*Loan form (bulk direct-write):* steps 1–5 run in `write_acquire` (sample write and ring preflight
+deferred); the caller writes fixed fields and variable bodies into the acquired slot through generated
+codec accessors (canon-codec.md two-region); `write_commit` validates the final `sample_len`, runs ring
+preflight, generation store, ring commit, and `write_seq` release (steps 6–7); `write_abort` runs step
+8 only. Both forms share one ordering, so I-PB4 precedence and the crash states are identical: an
+in-progress loan slot is unreachable until commit, exactly like the copy form's not-yet-committed write.
 
 ## Edge Cases & Errors
 
 | Order | Case | Status | Visible side effect |
 |---:|---|---|---|
-| 1 | invalid payload shape/size (or `requested`/`len` beyond structural max) | `InvalidArg` | none |
+| 1 | invalid sample shape (or `requested`/`sample_len` beyond structural max) | `InvalidArg` | none |
 | 2 | another publish active (either form) | `Busy` | none |
 | 3 | sequence cannot advance | `SequenceExhausted` | none |
 | 4 | required consumer gates retirement | `QueueFull` | none |

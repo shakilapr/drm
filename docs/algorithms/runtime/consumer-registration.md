@@ -61,17 +61,21 @@ payload-pool `H` (and the `pool_size >= R + H + 1` proof) verifiable.
   Test: `consumer_close_vs_acquire` (Loom: close at every instruction boundary of acquisition).
 - **I-CR7 WordIsProtection**: a hazard word protects its slot iff it names the record's **current**
   registration generation and a slot — regardless of record state (`Active` or `Closing` with a
-  live borrow both protect). A record interrupted in `Claiming` carries an outdated-generation word:
-  protective of nothing, pinned by nothing, overwritten under the registration lock. Test:
-  `consumer_claiming_orphan`.
+  live borrow both protect). A record interrupted in `Claiming` carries the parked generation-0 word
+  (`claim` parses it under the registration lock before publishing `Claiming`): generation zero is
+  invalid, so it protects nothing, pins nothing, and is overwritten under the registration lock.
+  Test: `consumer_claiming_orphan`.
 
 ## Functions
 
 ```rust
 fn claim(rec: &ConsumerRecord, me: ProcessIdentity, floor: u64) -> Result<Registration, Status> {
  let lock = lock_backend.try_exclusive(rec.generated_lock_path())?; // Busy if live owner
- // Lock held: prior owner is dead or closed — stale Claiming/Active/Closing + stale hazard are
- // orphaned state with no live authority; this claim normalizes all of it (I-CR7).
+ // Lock held: prior owner is dead or closed. Normalize FIRST — park a generation-0 word
+ // (generation zero is invalid, so it matches no current generation) before publishing Claiming.
+ // A crash anywhere in Claiming therefore leaves a word that protects/pins nothing (I-CR7);
+ // without this, the stale prior-owner word can still carry the *current* generation.
+ rec.hazard.store(pack(0, NONE), SeqCst);
  rec.state.store(Claiming, Release);
  let Some(generation) = rec.registration_generation.load(Relaxed).checked_add(1)
   .filter(|g| *g != 0) else {
@@ -149,11 +153,11 @@ kernel lock release (owner death) or normalized by the reclaimer holding the loc
 claimant increments generation and overwrites stale registration state. Hazard reclamation uses the
 same authority: see exhaustion-reclamation.md.
 
-*Stale-`Claiming` normalization (I-CR7):* a crash between `state = Claiming` and the hazard
-republication can leave `{Claiming, old-generation hazard word}`. The stale word names an outdated
-generation: per the hazard-validity rule it protects nothing, so the publisher never honors it. Any
-holder of the registration lock (new claimant or reclaimer) overwrites it with
-`pack(new_generation, NONE)` and normalized state.
+*Stale-`Claiming` normalization (I-CR7):* `claim` parks the generation-0 word under the registration
+lock before `state = Claiming`, so a crash inside `Claiming` leaves `{Claiming, pack(0, NONE)}` — a
+generation that never matches any record. Per the hazard-validity rule it protects nothing, so the
+publisher never honors it and it is overwritten under the registration lock by the next claimant or
+reclaimer.
 
 *Required consumer:* initial `ack_seq` is the current `first_valid_seq`, meaning prior-run sequences
 need no acknowledgement. Reattachment initializes its local cursor to `ack_seq - 1` (`None` when

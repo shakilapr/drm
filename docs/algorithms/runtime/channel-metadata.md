@@ -126,8 +126,11 @@ fn validate_on_attach(map: &Mapping, expect: &Expectation) -> Result<ChannelView
  if desc.pool_size < min_pool { return Err(InvalidConfig); }
  if desc.pool_size >= u32::MAX as u64 { return Err(InvalidConfig); } // reserves slot NONE
  if desc.flags.contains(VARIABLE) && desc.payload_capacity > u32::MAX as u64 {
-  return Err(InvalidConfig); // canonical variable-length header is u32
+  return Err(InvalidConfig); // max tail bound is u32 (canonical descriptors are u32)
  }
+ // Note: the full canonical sample_max (header_end + max tail) ≤ u32::MAX is enforced at build
+ // (canon-codec.md SizeOverflow) and bound to this descriptor by layout_hash; attach re-checks the
+ // tail bound only.
  validate_aligned_nonoverlapping_ranges(desc, map.len())?; // checked add/mul only
  if desc.reserved.iter().any(|b| *b != 0) { return Err(WrongAbi); }
  require_lock_free_shared_atomics()?;
