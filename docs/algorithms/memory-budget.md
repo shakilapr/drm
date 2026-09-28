@@ -39,8 +39,8 @@ impl MemoryReport {
 
  pub struct ChannelCost { // per active channel on a compute unit
   pool_slots: u64, // validated ≥ R+1 (payload-pool I-P4)
-  slot_bytes: u64, // capacity + variable header
-  control_block: u64, // CCB, hazard array, ring — fixed overhead
+   slot_bytes: u64, // max sample size: fixed header + max tail capacity (canon-codec two-region)
+  control_block: u64, // CCB, hazard array (declared borrower records + diagnostic range), ring — fixed overhead
   precommit: bool, // drives the lockable sum (per channel, not per compute)
  }
 

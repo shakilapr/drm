@@ -1,6 +1,12 @@
 # Publisher Lifecycle & Epochs Algorithms
 
-Scope: publisher authority acquisition via OS locks, restart semantics, `publisher_epoch` increment exactly-once, consumer epoch observation and state reset, freshness transitions. Implements architecture.md §Publisher Epoch, §Segment Creation and Writer Authority, §Data Freshness vs Stored Bytes, §Session-Scoped Persistence. Owner: E1 (crate `drm-core::channel::lifecycle`). Phase 17. Depends on [shm-backend.md](shm-backend.md) (locks, identity), [channel-metadata.md](channel-metadata.md) (epoch field, validation).
+Scope: publisher authority acquisition via OS locks, restart semantics, stale-segment recovery,
+`publisher_epoch` increment exactly-once, consumer epoch observation and state reset, freshness
+transitions. Implements architecture.md §Publisher Epoch, §Segment Creation and Writer Authority
+(§Stale-Object Classification), §Data Freshness vs Stored Bytes, §Session-Scoped Persistence. Owner:
+E1 (crate `drm-core::channel::lifecycle`). Phase 17. Depends on [shm-backend.md](shm-backend.md)
+(locks, identity, classification), [channel-metadata.md](channel-metadata.md) (epoch field,
+validation), [memory-budget.md](../memory-budget.md) (precommit activation).
 
 ## REQ Bindings
 
@@ -15,7 +21,7 @@ Scope: publisher authority acquisition via OS locks, restart semantics, `publish
 ## Data Structures
 
 ```rust
-// Writer lock path: /run/drm/<deployment_id>/<topic>.publisher.lock (shm-backend §Protocols).
+// Writer lock path: /run/drm/<deployment_id>/t_<topic_handle>.publisher.lock (shm-backend §Protocols).
 // CCB carries publisher_epoch: AtomicU32 (channel-metadata.md).
 
 pub enum SegmentState { Init = 0, Ready = 1 } // published in the descriptor before first use
@@ -58,7 +64,16 @@ fn publisher_open(name: &SegmentName, expect: &Expectation) -> Result<Publisher,
  m
  }
  Err(AlreadyExists) => {
- let m = shm.open_existing(name, expect.size)?;
+ // Classification BEFORE exact-size validation (architecture §Stale-Object Classification):
+ // full expected size is never required to inspect whether creation completed.
+ let (fd, size) = shm.open_raw(name)?;
+ if size < bootstrap_prefix_size() {
+  // Creation died before/during ftruncate: zero/undersized POSIX object — stale Init artifact.
+  drop(fd);
+  shm.unlink(name)?; // we hold the publisher lock: no live writer could own it
+  return recreate_fresh(name, expect);
+ }
+ let m = shm.map_checked(fd, size, expect.size)?; // SizeMismatch only for complete wrong-size objects
  if m.prefix().segment_state.load(Acquire) != Ready {
   drop(m);
   recover_init_segment_under_publisher_lock(name, expect)?
@@ -78,9 +93,17 @@ fn publisher_open(name: &SegmentName, expect: &Expectation) -> Result<Publisher,
  Ok(Publisher { lock, mapping, epoch: next_epoch, .. })
 }
 
-fn publisher_close(p: Publisher) { /* lock Drop ⇒ release; segment stays (session-scoped persistence) */ }
+// recreate_fresh(name, expect): shm.create_exclusive + Init/Ready bootstrap (branch above).
+// recover_init_segment_under_publisher_lock: classify complete-Init (POSIX unlink/recreate,
+// Windows in-place reinit) — see "Init crash recovery" protocol below.
 
-// Consumer side (cursor-delivery.md integrates)
+fn publisher_close(p: Publisher) { /* lock Drop ⇒ release; segment persistence is opportunistic
+ (architecture §Session-Scoped Persistence): on Linux the name survives while mapped; on Windows a
+ pagefile section dies with its last handle. Correctness never depends on stale availability. */ }
+
+// Consumer side (cursor-delivery.md integrates). `local` is ReaderState.observed_epoch —
+// PERSISTED across read calls, so a restart completing between calls is detected at entry;
+// cursor-delivery.md additionally re-checks in-call for a restart crossing an acquisition.
 fn observe_epoch(ch: &Channel, local: &mut u32) -> bool {
  let e = ch.ccb.publisher_epoch.load(Acquire);
  if e != *local { // I-L4
@@ -122,16 +145,23 @@ the new `first_valid_seq`; no `last + 1` arithmetic is needed.
 3. `segment_state.store(Ready, Release)` — the only point at which the segment is usable.
 4. Consumers that observed `Init` unmap and retry under their bounded startup policy.
 
-*Init crash recovery (I-L8):* only a process holding the publisher lock repairs `Init`. It unmaps,
-unlinks the incomplete name, creates a new `Init` object, initializes it, and publishes `Ready`. POSIX
-stale mappings remain unusable; Windows retries creation until observers have closed their `Init`
-handles. Consumers never repair or retain an `Init` mapping.
+*Init crash recovery (I-L8):* only a process holding the publisher lock repairs incomplete state.
+Classification first (shm-backend `open_raw`): size below the bootstrap prefix ⇒ the object never
+completed creation ⇒ POSIX: unlink and recreate; Windows: recreate once no observer holds it, else
+**reinitialize in place** — an exact-sized `Init` section with the publisher lock held has no live
+writer, and consumers are forbidden from interpreting `Init` contents, so the lock holder may
+rewrite descriptor + CCB and publish `Ready` with a Release store (no unbounded
+wait-for-observers-to-exit). Complete objects with matching size/layout are adopted; complete
+incompatible objects return explicit `WrongAbi`/`InvalidData`. POSIX stale mappings of a recovered
+`Init` object remain unusable by design. Consumers never repair or retain an `Init` mapping; they
+treat undersized/`Init` objects as `NotReady` inside their bounded startup retry policy — never as a
+permanent compatibility failure.
 
 *Restart cycle (I-L2/I-L3/I-L7, exercised 100×, crash-injected at each step):*
 
 1. Publisher A holds lock, published N samples, then SIGKILL.
 2. Kernel releases `.publisher.lock` (shm-backend I4).
-3. Publisher B `publisher_open`: lock acquired; segment exists and is READY ⇒ `open_existing`; descriptor valid.
+3. Publisher B `publisher_open`: lock acquired; existing object classified first (architecture §Stale-Object Classification) — READY + compatible ⇒ adopt; Init/undersized ⇒ recover; wrong size/layout ⇒ explicit error.
 4. Read `floor = write_seq`; publish `first_valid_seq = floor` and advance required acknowledgement floors. Ring cells, hazards, and lifetime counters remain untouched.
 5. Publish the checked new epoch **last** (I-L7). Sequence continues at `floor`.
 6. Consumers observe epoch' ⇒ reset cursors to the new window floor; first read under the new epoch gets B's first sample, never A's stale payload as "new".
@@ -154,7 +184,9 @@ handles. Consumers never repair or retain an `Init` mapping.
 | Publisher killed after epoch store | that authority acquisition consumed the epoch; successor advances again |
 | Restart without prior run | epoch initialized to 1 |
 | Consumer attaches during restart race | either pre-restart descriptor (epoch e) or post (e+1); attach validation passes both (fingerprint identical); cursor resets on first observation |
-| Machine reboot | segments recreated fresh (session-scoped persistence); epoch starts at 1 in new session |
+| Machine reboot | segments recreated fresh (session-scoped persistence is opportunistic); epoch starts at 1 in new session |
+| Crash before `ftruncate` | zero-length stale object; classified on restart ⇒ unlink/recreate (POSIX) or in-place reinit (Windows); never a permanent `SizeMismatch` |
+| Consumer attach during create→`ftruncate` interval | `StaleIncomplete` ⇒ `NotReady`; bounded startup retry, no permanent error |
 | `drm clean` while publisher active | active.lock shared hold ⇒ cleanup refuses (deployment-identity.md) |
 
 ## Test Matrix
@@ -168,6 +200,8 @@ handles. Consumers never repair or retain an `Init` mapping.
 | `epoch_valid_range` (restart watermark) | I-L6 |
 | `epoch_restart_order` (crash after each init/reset/epoch/commit step) | I-L7 |
 | `segment_init_ready` (kill between create and READY) | I-L8 |
+| `init_recovery_matrix` (kill after shm_open / ftruncate / fallocate / mmap / prefix Init / mid descriptor / mid CCB / after Ready; restart asserts recover-or-explicit-error) | no permanently unrecoverable object |
+| `consumer_undersized_attach` (attach inside create window) | `NotReady` retry, never permanent compatibility failure |
 | freshness fixtures | transitions per contracts |
 | `freshness_boundaries` (threshold−1, threshold, clock regression, epoch) | I-L9 |
 | reboot-sim (fresh namespace) | epoch 1, clean segment |

@@ -50,10 +50,12 @@ FIXED HEADER                            VARIABLE TAIL
 
 - **Pure-fixed structs**: single region, unchanged — declaration order, natural alignment, total padding. Fixed-size topics never pay any length field (architecture §Sample Metadata).
 - **Exactly one variable member** ⇒ offset is implicit (body starts at `align_up(header_end, elem_align)`); the descriptor degenerates to the `u32` length header of a bulk topic (architecture: "prepend an actual byte length before the payload").
+- **Canonical packing**: bodies are contiguous and element-aligned in declaration order — each body's offset is a pure function of the preceding counts. Encoders MUST emit exactly that packing; there is no freedom to pad or reorder. This keeps every canonical byte deterministic (I1/I8).
+- **`sample_len` is derived, not stored**: `sample_len = f(counts)` via the packing rule, so the ring cell needs no committed-length field (ring-history.md unchanged). Decoders recompute it, require every descriptor offset to match the expected packing exactly, and treat any deviation as `InvalidData`.
 - **`offset` is absolute** (from sample start): element-aligned, `≥ header_end`, so aligned zero-copy access needs no relocation.
-- **`sample_len`** (committed at publish, channel-publish.md) = `header_end + Σ aligned body bytes`. Slot capacity (max header + max tail) is fixed at activation.
+- **Slot capacity** (max header + max tail) is fixed at activation; `struct_align = max(align over header fields, max element alignment over tail bodies)` — the slot base itself must be aligned so absolute body offsets are element-aligned.
 - **Bytes at `≥ sample_len` are outside the current sample**: never observable, never transmitted, never required to be cleared. Stale tail bytes are unreachable by construction — no `prev_len`, no shrink memset, no `..capacity` scrubbing.
-- **Decoder validation per descriptor**: `count ≤ declared_max` ∧ `offset ≡ 0 (mod elem_align)` ∧ `offset ≥ header_end` ∧ `offset + count·elem_size ≤ sample_len` ∧ body ranges pairwise disjoint ∧ declaration-ordered. Any violation ⇒ `InvalidData` (I5: value or error, never UB).
+- **Decoder validation per descriptor**: `count ≤ declared_max` ∧ `offset == expected_packed_offset` (canonical, element-aligned, `≥ header_end`) ∧ bodies pairwise disjoint ∧ declaration-ordered ∧ recomputed `sample_len ≤ slot capacity`. Any violation ⇒ `InvalidData` (I5: value or error, never UB).
 
 ```rust
 // Canonical arithmetic domain is FIXED-WIDTH u64 — never usize (C1: usize is pointer-width;
@@ -71,7 +73,7 @@ fn layout(t: &Type) -> Result<CanonLayout, Status> {
  Ok(match t {
   Prim(p) => prim_layout(p),
   Enum { .. } => CanonLayout { size: 1, align: 1 },
-  String { max } | Bytes { max } => CanonLayout { size: 4, align: 4 }, // descriptor; body lives in the tail
+  String { .. } | Bytes { .. } => CanonLayout { size: 4, align: 4 }, // descriptor; body lives in the tail
   FixedArray { elem, n } => {
   let e = layout(&elem.as_type())?;
   CanonLayout { size: e.size.checked_mul(u64::from(*n)).ok_or(SizeOverflow)?, align: e.align }
@@ -89,8 +91,9 @@ fn layout_struct(fields: &[Field]) -> Result<StructLayout, Status> {
  //   aligned up to the element alignment (absolute offsets, CanonOffset).
  // All arithmetic in u64 checked_add/checked_mul/checked align_up (I7).
  // Final: sample_max = header_end + Σ max-aligned bodies; > u32::MAX ⇒ SizeOverflow (MVP cap).
- // struct_align = max align over header fields; layout_hash covers the two-region render
- //   (field offsets + descriptor offsets + tail packing rules).
+ // struct_align = max(align over header fields, max element alignment over tail bodies) —
+ //   the slot base must be aligned so absolute body offsets are element-aligned.
+ // layout_hash covers the two-region render (field offsets + descriptor offsets + tail packing rules).
 }
 ```
 
@@ -128,9 +131,11 @@ fn read_bool(buf: &[u8], off: usize) -> Result<bool, Status> {
 
 // Variable body access (two-region layout): validate the descriptor, hand out the body slice.
 // Never trusts caller-supplied prior state — the slot's own descriptor is the only source.
+// sample_len and expected offsets derive from the counts via the canonical packing rule;
+// offset == expected is checked before this call (offsets are a pure function of counts).
 fn body_range(buf: &[u8], d: Descriptor, sample_len: usize) -> Result<Range<usize>, Status> {
  if d.count > d.max { return Err(InvalidData); } // structural bound
- if d.offset < d.header_end || d.offset % d.elem_align != 0 { return Err(InvalidData); } // aligned, inside header guard
+ if d.offset < d.header_end || d.offset % d.elem_align != 0 { return Err(InvalidData); } // aligned, ≥ header_end
  let bytes = u64::from(d.count).checked_mul(d.elem_size).ok_or(InvalidData)?; // I7
  let end = u64::from(d.offset).checked_add(bytes).ok_or(InvalidData)?;
  if end > u64::try_from(sample_len).map_err(|_| InvalidData)? { return Err(InvalidData); } // body ⊆ [0, sample_len)
@@ -172,7 +177,7 @@ fn emit_layout_json(model: &WorkspaceModel, topic: &TopicId) -> LayoutJson
 | bool byte ∉ {0,1} | `InvalidData` (decode) |
 | length/count descriptor > declared max | `InvalidData` pre-read |
 | count × elem_size overflow | `InvalidData` (checked_mul) |
-| descriptor offset misaligned / < header_end / bodies overlapping or out of order | `InvalidData` (I5 — two-region validation) |
+| descriptor offset misaligned / < header_end / ≠ canonical packed offset / bodies overlapping or out of order | `InvalidData` (I5 — two-region validation; offsets are a pure function of counts) |
 | body end > sample_len | `InvalidData` — bodies must lie inside the current sample |
 | `off + 4` overflow / near `u64::MAX` | `InvalidData`/`SizeOverflow` (checked_add), never wrapped |
 | canonical sample size > `u32::MAX` | `SizeOverflow` at layout (MVP cap); 32-bit target maps via `try_from` ⇒ `InvalidConfig` |

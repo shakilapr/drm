@@ -1,19 +1,19 @@
 # Spatial Index Algorithms
 
-Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fixed-capacity banked hash grid** for dynamic overlay objects and a **compiled static BVH** for static environment frames with **live calibration-slot subtree swaps**. Zero-heap steady-state indexing/queries; frame-typed query API; candidate completeness; exact spatial memory verification. Implements [spatial_architecture.md](../../spatial_architecture.md) §Runtime Spatial Index, §Hash Grid for Dynamic Objects, §Compiled Static BVH, §Ownership and Update Discipline, §Proximity Query Semantics. Owner: E2 (compiler/BVH) + E1 (runtime grid). Phase 33 (implemented M21–M22). Depends on [spatial-core.md](spatial-core.md), [spatial-queries.md](spatial-queries.md), [memory-budget.md](../memory-budget.md).
+Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fixed-capacity incremental hash grid** for dynamic overlay objects and a **compiled static BVH** for static environment frames with **live calibration-slot subtree swaps**. Zero-heap steady-state indexing/queries; frame-typed query API; candidate completeness; exact spatial memory verification. Implements [spatial_architecture.md](../../spatial_architecture.md) §Runtime Spatial Index, §Hash Grid for Dynamic Objects, §Compiled Static BVH, §Ownership and Update Discipline, §Proximity Query Semantics. Owner: E2 (compiler/BVH) + E1 (runtime grid). Phase 33 (implemented M21–M22). Depends on [spatial-core.md](spatial-core.md), [spatial-queries.md](spatial-queries.md), [memory-budget.md](../memory-budget.md).
 
 ## REQ Bindings
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-SPATIAL-index-declaration` | `index.drm`: anchor, cell size, object bound, and cells-per-object bound are static | `REQ-SPATIAL-014` |
-| `REQ-SPATIAL-hash-grid` | integer cell coordinates hashed into a fixed-capacity open-addressing table; steady-state zero heap allocation | `REQ-SPATIAL-013` |
+| `REQ-SPATIAL-index-declaration` | `index.drm`: anchor, cell size, object bound, cells-per-object bound, load factor, and max_query_cells are static | `REQ-SPATIAL-014` |
+| `REQ-SPATIAL-hash-grid` | integer cell coordinates hashed into a fixed open-addressing table sized ceil(M/alpha_max) with alpha_max <= 0.70 and backward-shift deletion; incremental affected-cell updates published under a grid epoch; steady-state zero heap allocation | `REQ-SPATIAL-013` |
 | `REQ-SPATIAL-motion-slack` | fat-cell envelope per object; re-bucket only on envelope exit; idle/slow objects cost zero per sample | `REQ-SPATIAL-019` |
 | `REQ-SPATIAL-compiled-bvh` | static environment compiles to BVH at build time (spatial analogue of static collapse) | `REQ-SPATIAL-006` |
 | `REQ-SPATIAL-bvh-live-calibration` | recalibration swaps affected subtrees live via calibration slots — no recompilation, no restarts | `REQ-SPATIAL-001` |
-| `REQ-SPATIAL-index-derived-cache` | index is a derived cache; each node indexes only its declared `[spatial] read`; updates ride version counters | `REQ-SPATIAL-015` |
+| `REQ-SPATIAL-index-derived-cache` | index is a derived cache; each node indexes only its declared `[spatial] read`; updates ride each object's full anchor-pose dependency vector (own edge, ancestors, calibration, topology) | `REQ-SPATIAL-015` |
 | `REQ-SPATIAL-proximity-frame-typed` | queries declare a frame and typed geometry; naked coordinates never enter the index API | `REQ-SPATIAL-021` |
-| `REQ-SPATIAL-proximity-complete` | candidate set is a deliberate superset — callers exact-check; misses forbidden | `REQ-SPATIAL-020` |
+| `REQ-SPATIAL-proximity-complete` | candidate set is a deliberate superset — callers exact-check; misses forbidden; scratch overflow returns OutputTooSmall{required}, never silent truncation | `REQ-SPATIAL-020` |
 | `REQ-SPATIAL-memory-verified` | object, membership, query-scratch, and dual-BVH-bank memory is verified | `REQ-SPATIAL-018` |
 | `REQ-SPATIAL-rejected-structures` | octrees, k-d trees, sweep-and-prune excluded | `REQ-SPATIAL-026` |
 
@@ -27,21 +27,25 @@ Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fi
 //   max_objects: 4096
 //   max_cells_per_object: 27
 
-// Fixed-capacity open-addressing table — zero heap allocation in steady state (§Hash Grid)
+// Fixed-capacity incremental hash grid — zero heap allocation in steady state (§Hash Grid)
 pub struct HashGrid {
-    banks: [GridBank; 3],             // immutable while selected/read; fixed at activation
-    selector: AtomicU64,              // packed {version, bank}; one atomic publication
-    readers: [AtomicU32; 3],          // transient query guards; no cross-process refcount ownership
-    writer_busy: AtomicBool,          // one non-blocking updater
-    cell_size: f64,                   // from index.drm
-    anchor: FrameId,                  // grid anchored to declared frame
-}
-pub struct GridBank {
-    memberships: [Membership; MEMBERSHIP_CAPACITY],
+    cells: FixedCellTable,             // CellKey -> CellHead; S = ceil(M / alpha_max) slots, alpha_max = 0.70
+    nodes: FixedPool<MembershipNode>,  // membership pool; capacity M = max_objects × max_cells_per_object
     objects: [ObjectRecord; MAX_OBJECTS],
+    grid_epoch: AtomicU64,             // even = stable, odd = update in progress; multi-cell transaction marker
+    cell_size: f64,                    // from index.drm; > 0 verified at activation
+    max_query_cells: u32,              // from index.drm; enumeration bound (I-X13)
+    anchor: FrameId,                   // grid anchored to declared frame
 }
-pub struct Membership { state: SlotState, key: CellKey, handle: SpatialHandle }
-pub struct ObjectRecord { handle: SpatialHandle, envelope: SlackEnvelope, last_version: u64 }
+pub struct CellHead { version: AtomicU32, head: AtomicU32 }   // membership list root; read handshake via version
+pub struct MembershipNode { entity: SpatialHandle, next: u32 }
+pub struct ObjectRecord {
+    handle: SpatialHandle,
+    envelope: SlackEnvelope,               // last bucketed anchor-space fat envelope
+    occupied_cells: [CellKey; MAX_CELLS_PER_OBJECT],
+    dependency_versions: [u64; MAX_POSE_DEPENDENCIES], // full anchor-pose input vector (I-X7)
+    topology_generation: u64,
+}
 pub struct CellKey { cx: i32, cy: i32, cz: i32 }   // floor(p / cell_size), hashed into the table
 
 // Motion slack — fat-cell envelope (§Hash Grid: re-bucket only on envelope exit)

@@ -72,7 +72,7 @@ Done when:
 Owner: E2.
 
 **Phase 7 (draft) — Canonical C ABI**
-Output: draft stable `drm.h`, handles, statuses, publisher/consumer functions, ABI versioning policy.
+Output: draft stable `drm.h`, opaque context/publisher/consumer handles, fixed int32 statuses (no `Internal`), copy publish, publisher write-loan (`write_acquire`/`commit`/`abort`), borrow/copy read operations, ABI versioning + one-way compatibility policy, fail-stop panic rule.
 Done when (draft gate): plain C programs can compile against the draft header in a spike; final completion gate closes in W2.
 Owner: E1 + E4.
 
@@ -183,10 +183,12 @@ Done when:
 Owner: E1.
 
 **Phase 16 — Dead-reader recovery**
-Output: incarnation-safe process ownership, abandoned hazard reclamation.
+Output: registration-lock authority, abandoned hazard reclamation, fork sanitization.
 Done when:
-- Killing a reader at every possible borrow stage: slots eventually recovered only after the exact process incarnation is proven dead.
-- Simulated PID reuse can never reclaim a live reader's slot.
+- Killing a reader at every possible borrow stage: slots eventually recovered only after the endpoint's registration lock is acquired and state/generation/hazard reread under it.
+- Simulated PID reuse and cross-PID-namespace visibility can never reclaim a live reader's slot (identity is diagnostic only).
+- Hard-RT publisher path runs zero inspection syscalls on exhaustion; maintenance context reclaims via `reclaim_requested`.
+- Fork with live publisher/consumer/borrow: child mutates nothing, releases no lock; parent authority intact.
 Owner: E1.
 
 **Phase 17 — Publisher lifecycle & epochs**
@@ -223,30 +225,32 @@ Owner: E1 + E2.
 ## W3 — Bindings, Toolchain & Verification (M6–M12)
 
 **Phase 20 — C++ binding**
-Output: type-safe generated C++ API, RAII borrows.
+Output: type-safe generated C++ API, RAII borrows whose owning object is also the accessor (no detached view/span escape).
 Done when:
 - Every schema maps correctly.
 - Borrow automatically releases on every scope-exit path including exceptions.
-- Undeclared operations are absent from the generated node API.
+- No accessor returns a pointer, reference, or span into the slot; retention requires copy.
+- Undeclared operations are absent from the generated node API; the shared types layer exposes types/codecs only.
 - C++↔C/Rust/Python interoperability matrix passes.
 Owner: E4.
 
 **Phase 21 — Rust binding**
-Output: type-safe Rust API, scoped zero-copy references.
+Output: type-safe Rust API, scoped zero-copy references, encoded `!Send + !Sync` guards.
 Done when:
 - Borrow lifetimes prevent use-after-release in safe code.
+- `PhantomData<*mut ()>` makes guards `!Send + !Sync`; compile-fail tests cover cross-thread move/share.
 - Compile-fail tests cover forbidden lifetime/contract cases.
 - Generated layouts match golden bytes.
 - Interoperability matrix passes.
 Owner: E1.
 
 **Phase 22 — Python binding**
-Output: generated Python API, owned-default reads, context-managed zero-copy/NumPy access.
+Output: generated Python API, owned-default reads only (no zero-copy borrow API, no buffer-protocol exposure).
 Done when:
-- `latest()` cannot leak DRM-owned memory.
-- Zero-copy pointer is only usable inside valid borrow scope.
-- Forced GC/exceptions cannot pin slots permanently.
-- NumPy views reference the correct bytes.
+- `latest()`/`next()`/`.numpy()` return application-owned memory; no Python-visible object references DRM shared memory (hazard-free after every call).
+- PyO3 classes are `Send + Sync`; per-`Topic` native locks keep cursor calls coherent.
+- Free-threaded and GIL builds pass the full suite.
+- Forced GC/exceptions cannot pin slots beyond a call.
 - Contract violations raise `ContractError`.
 Owner: E4.
 

@@ -1,6 +1,6 @@
 # Deployment Identity & Isolation Algorithms
 
-Scope: the three-identity model — node contract fingerprints (compiled), deployment instance IDs (runtime config), publisher epochs (runtime state) — plus namespace scoping, startup compatibility guard, per-segment validation, and OS-lock-based cleanup. Implements architecture.md §Shared-Memory Lifetime: Three Identities and Deployment Isolation. Owner: E1 (runtime guards, `drm clean`) + E2 (fingerprint computation, deployment packaging). Phase 18. Depends on [workspace-model.md](toolchain/workspace-model.md) (fingerprints), [channel-metadata.md](runtime/channel-metadata.md) (validation), [shm-backend.md](runtime/shm-backend.md) (locks).
+Scope: the three-identity model — node contract fingerprints (compiled), deployment instance IDs (runtime config), publisher epochs (runtime state) — plus namespace scoping, startup compatibility guard, per-segment validation, and OS-lock-based cleanup. Implements architecture.md §Shared-Memory Lifetime: Three Identities and Deployment Isolation. Owner: E1 (runtime guards, `drm clean`) + E2 (fingerprint computation, deployment packaging). Phase 18. Depends on [workspace-model.md](toolchain/workspace-model.md) (fingerprints), [channel-metadata.md](runtime/channel-metadata.md) (validation), [shm-backend.md](runtime/shm-backend.md) (locks), [publisher-lifecycle.md](runtime/publisher-lifecycle.md) (restart/epoch barrier at publisher open).
 
 ## REQ Bindings
 

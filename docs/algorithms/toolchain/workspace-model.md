@@ -1,6 +1,6 @@
 # Workspace Model Algorithms
 
-Scope: construction of the in-memory `WorkspaceModel` from manifests and `.drm` files — topics, nodes, packages, compute units, links, placement — plus contract validation, contract fingerprints, and deterministic reproducibility. Implements architecture.md §In-Memory Workspace Model, §Primary Domain Relationships, §Node Communication Contracts. Owner: E2 (crate `drm-workspace::model`). Phase 23.
+Scope: construction of the in-memory `WorkspaceModel` from manifests and `.drm` files — topics, nodes, packages, compute units, links, placement — plus normalized planning metadata (typed rates, contract metadata), contract validation, contract fingerprints, and deterministic reproducibility. Layering: model construction enforces **structural/referential integrity only**; architectural policy (single-writer, routing, reliability, budgets, compatibility) belongs to `drm verify` (verify-engine.md). Implements architecture.md §In-Memory Workspace Model, §Primary Domain Relationships, §Node Communication Contracts. Owner: E2 (crate `drm-workspace::model`). Phase 23.
 
 ## REQ Bindings
 
@@ -10,10 +10,14 @@ Scope: construction of the in-memory `WorkspaceModel` from manifests and `.drm` 
 | `REQ-TOOL-model-determinism` | §In-Memory — parse whole model in ms; deterministic | `REQ-TOOL-045` |
 | `REQ-TOOL-model-external-endpoints` | §External Endpoints — third-party devices are graph vertices | `REQ-TOOL-046` |
 | `REQ-TOOL-model-timing-metadata` | publisher `expected_rate`, consumer `deadline` carried in the model | `REQ-TOOL-049` |
-| `REQ-TOOL-model-routing-overrides` | `[routing]` prefer/deny/force carried in the model | `REQ-TOOL-048` |
+| `REQ-TOOL-model-timing-mode` | topic `timing = auto/exact/off` parsed into the model; `auto` resolved from consumer deadlines/jitter diagnostics | `REQ-TOOL-065` |
+| `REQ-TOOL-model-routing-overrides` | `[routing]` prefer/deny/force/export_limit carried in the model | `REQ-TOOL-048` |
 | `REQ-TOOL-contract-single-source` | §Node Communication Contracts — manifest is single source of truth | `REQ-TOOL-013` |
 | `REQ-TOOL-fingerprint-isolation` | §Node Interface Identity — unrelated schema edit ⇒ unaffected fingerprint unchanged | `REQ-TOOL-023` |
 | `REQ-TOOL-no-build-cycles` | communication loops never create build cycles | `REQ-TOOL-050` |
+| `REQ-TOOL-model-typed-rates` | dimensioned values parsed once into checked rational rates | `REQ-TOOL-068` |
+| `REQ-TOOL-model-contract-meta` | consumer read mode, required flag, reliability requirement in model | `REQ-TOOL-069` |
+| `REQ-TOOL-model-layering` | model = structural integrity; policy = verify | `REQ-TOOL-070` |
 
 ## Data Structures
 
@@ -41,18 +45,30 @@ pub struct SpatialModel {
 pub struct NodeEntry {
  publishes: SortedSet<TopicName>, consumes: SortedSet<TopicName>,
  publish_meta: SortedMap<TopicName, PublishMeta>, // expected_rate (planning only)
- consume_meta: SortedMap<TopicName, ConsumeMeta>, // deadline (freshness)
+ consume_meta: SortedMap<TopicName, ConsumeMeta>, // deadline/read mode/required/reliability (freshness + contract)
  spatial: SpatialContract, // [spatial] write = [frames], read = [frames] (spatial-core §Node Spatial Contracts)
  language: Language, build: BuildAdapter,
 }
-pub struct PublishMeta { expected_rate: Option<String> }
-pub struct ConsumeMeta { deadline: Option<String> }
+
+/// Dimensioned value parsed ONCE at model build (REQ-TOOL-068). Downstream
+/// algorithms consume checked rationals, never source strings.
+pub struct Rate { numerator: u64, denominator: u64 } // e.g. "100Hz" → 100/1, "2.5Hz" → 5/2; checked rational arithmetic
+pub struct PublishMeta { expected_rate: Option<Rate>, rate_span: Option<Span> } // span kept for diagnostics only
+pub enum ReadMode { Latest, Sequential }
+pub enum ReliabilityRequirement { BestEffort, Reliable }
+pub struct ConsumeMeta {
+ deadline: Option<Duration>,
+ read_mode: ReadMode, // default from topic @history: absent ⇒ Latest
+ required: bool, // required sequential consumer (overflow-policies.md registry sizing)
+ reliability: ReliabilityRequirement, // route resolves against link capability (verify V-REL)
+}
 
 pub struct ExternalEndpoint { link: LinkId, consume: SortedSet<TopicName>, produce: SortedSet<TopicName> }
 pub struct RouteOverrides {
  prefer: SortedMap<TopicName, LinkId>,
  deny: SortedMap<TopicName, SortedSet<LinkId>>,
  force: SortedMap<TopicName, Vec<LinkId>>,
+ export_limit: SortedMap<(TopicName, LinkId), Rate>, // per-egress shaping (architecture.md: boundary router export)
 }
 
 pub struct ContractFingerprint([u8; 16]); // BLAKE3 output truncated to 128 bits (see contract_fingerprint())
@@ -66,20 +82,24 @@ Model construction is **total-reload**: every parse rebuilds the full model (no 
 ## Invariants
 
 - **I-D1 Deterministic**: same input tree (any read order) ⇒ byte-identical model render. Test: shuffled-fs-order ×100 seeds.
-- **I-D2 ConflictRejection**: duplicate topic/node/package identity, unknown topic in publish/consume, dangling placement, unknown link endpoint ⇒ single `Err` with location. Test: `model_conflicts`.
+- **I-D2 ConflictRejection**: duplicate topic/node/package identity, unknown topic in publish/consume, dangling placement, unknown link endpoint ⇒ all failures collected with locations; duplicates retained in a staging map (`BTreeMap<Name, Vec<Definition>>`) until reported so every duplicate site is named. Test: `model_conflicts`, `model_all_duplicates_reported`.
 - **I-D3 LoopsHarmless**: A publishes B-consumes, B publishes A-consumes ⇒ model builds fine (no build-cycle error). Test: `communication_loop`.
 - **I-D4 FingerprintIsolation**: edit topic `camera/front` ⇒ `controller` fingerprint unchanged; edit a topic that `controller` itself uses ⇒ changed. Test: `fingerprint_isolation`.
 - **I-D5 ReproducibleModel**: `render_model(parse(tree))` round-trips byte-identically (feeds property test).
 - **I-D6 SpatialInference**: static/dynamic edge classification is deterministic — node declares `[spatial] write` ⇒ dynamic; `transform` given + no writer ⇒ static; both ⇒ conflict error; neither ⇒ dangling-frame error (spatial-core I-S10). Test: `spatial_inference`.
 - **I-D7 SpatialSingleWriter**: two nodes writing one dynamic spatial edge ⇒ compiler conflict before deployment (spatial-core I-S11). Test: `spatial_single_writer`.
 - **I-D8 ExternalVertices**: `[external.*]` endpoints with `link` + `consume`/`produce` are first-class graph vertices; unknown link or topic ⇒ error. Test: `model_external`.
-- **I-D9 TimingOverrides**: publisher `expected_rate`, consumer `deadline`, and `[routing]` overrides are parsed into the model and preserved by render. Test: `model_timing_overrides`.
+- **I-D9 TimingOverrides**: publisher `expected_rate`, consumer `deadline`, and `[routing]` overrides (prefer/deny/force/export_limit) are parsed into the model, normalized to typed values, and preserved by render. Test: `model_timing_overrides`.
+- **I-D10 TypedRates**: dimensioned rate/duration strings are parsed exactly once at model build into checked rational `Rate`s; downstream algorithms never re-parse strings; `rate_span` retained for diagnostics only. Invalid dimension ⇒ model error at build. Test: `model_typed_rates`, `model_bad_rate_unit`.
+- **I-D11 ContractMetadata**: consumer `read_mode`, `required`, and `reliability` requirement are model data (REQ-TOOL-069); `reject`-topic required-sequential counts (overflow-policies.md) derive from `consume_meta`.
+- **I-D12 Layering**: model build enforces structural/referential integrity only (REQ-TOOL-070). Single-writer, route policy, reliability-vs-transport, budgets, and compatibility are exclusively `drm verify` checks (verify-engine.md). Test: `model_no_policy_checks` (two publishers ⇒ model builds; verify fails).
 
 ## Functions
 
 ```rust
 fn build(tree: &FileTree) -> Result<WorkspaceModel, Vec<ModelError>> {
  let mut m = WorkspaceModel::default();
+ let mut dup_staging = BTreeMap::new(); // I-D2: retain duplicates until all reported
  for pkg in discover_packages_sorted(tree) { // sorted discovery (I-D1)
  parse_package_manifest(pkg)?; // duplicates ⇒ conflict error (I-D2)
  for topic_file in pkg.topics_sorted() {
@@ -88,9 +108,10 @@ fn build(tree: &FileTree) -> Result<WorkspaceModel, Vec<ModelError>> {
  m.topics.insert(topic_name(pkg, file_stem), TopicEntry { schema_hash: hash(t), layout, .. });
  }
  }
+ let mut errs = Vec::new();
  for node_manifest in discover_nodes_sorted(tree) {
- let n = parse_node_manifest(node_manifest)?; // publish/consume/language/build
- check_contracts(&mut m, &n)?; // unknown topic ⇒ error; single-writer precheck (verify-lite)
+ let n = parse_node_manifest(node_manifest)?; // publish/consume/language/build/meta
+ check_references(&mut m, &n, &mut errs)?; // unknown topic ⇒ error; NO policy checks here (I-D12)
  m.nodes.insert(n.name, n);
  }
  parse_topology(tree)?.apply(&mut m)?; // computes, links, placement; dangling refs ⇒ error
@@ -98,7 +119,9 @@ fn build(tree: &FileTree) -> Result<WorkspaceModel, Vec<ModelError>> {
  // [spatial] write/read contract wiring; single-writer spatial edge check (I-D7);
  // index.drm declarations (anchor, cell_size, max_objects) — capacity feeds memory budget (I-MB9)
  parse_externals(tree)?.apply(&mut m)?; // [external.*] vertices; unknown link/topic ⇒ error (I-D8)
- parse_routing(tree)?.apply(&mut m)?; // [routing] prefer/deny/force; unknown ⇒ error (I-D9)
+ parse_routing(tree)?.apply(&mut m)?; // [routing] prefer/deny/force/export_limit; unknown ⇒ error (I-D9)
+ normalize_rates(&mut m)?; // I-D10: parse rate/duration strings once into typed Rate/Duration
+ if !errs.is_empty() { return Err(collect_with_duplicates(errs, &mut dup_staging)); }
  Ok(m)
 }
 
@@ -113,11 +136,13 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
  //   per interface, sorted by canonical topic path (map iteration order can never leak in):
  //     u8      direction (0 = publish, 1 = consume)
  //     u32 LE  topic_path_len; topic_path bytes (UTF-8)
+ //     [16]u8  schema content hash (schema_hash — architecture §Node Interface Identity requires
+ //             schemas AND layouts; a schema edit with unchanged layout still changes the fingerprint)
  //     [16]u8  canonical layout hash (canon-codec.md)
  //
- // Hash: BLAKE3 over exactly these bytes, truncated to 16 bytes ([u8; 16]).
- // Deliberately EXCLUDED: other nodes, packages, topology, links, build config.
- // ⇒ unrelated schema edits cannot change unaffected nodes (I-D4).
+// Hash: BLAKE3 over exactly these bytes, truncated to 16 bytes ([u8; 16]).
+// Deliberately EXCLUDED: other nodes, packages, topology, links, build config, runtime handles.
+// ⇒ unrelated schema edits cannot change unaffected nodes (I-D4).
 }
 ```
 
@@ -141,6 +166,8 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
 | Link references unknown compute | error |
 | Empty workspace (no topics) | valid, empty model (tools still run) |
 | Manifest TOML syntax error | schema-parser-style diagnostic with location |
+| Rate string not parseable (`"100"`, `"5 furlongs"`) | model error at build with `rate_span` (I-D10) |
+| Two nodes publish one topic | model builds; `drm verify` V-SW fails (I-D12) |
 
 ## Test Matrix
 
@@ -149,6 +176,9 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
 | 3-fixture workspace tree | model matches golden render |
 | shuffled fs order ×100 | byte-identical model |
 | conflict fixtures (dup topic, dup node, dangling placement, unknown link) | rejected with location |
+| two publishers, same topic | model builds; verify V-SW catches (I-D12) |
+| typed-rate fixtures (`100Hz`, `2.5Hz`, invalid unit) | I-D10 parse once / build error |
+| contract-meta fixtures (`read_mode`, `required`, `reliable`) | I-D11 carried in model |
 | communication-loop fixture | builds, no cycle error |
 | fingerprint isolation | I-D4 |
 | fingerprint: shuffled manifest order / map iteration | identical bytes (canonical serialization, sorted inputs) |
@@ -156,6 +186,7 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
 | deployment.json `deployment_id` field | UUID/hex string, never a JSON number (128 bits > JSON-safe range) |
 | external endpoint fixtures | I-D8 (unknown link/topic rejected) |
 | timing/route override fixtures | I-D9 |
+| timing-mode resolution (auto-with-deadline / auto-without / explicit exact / off+deadline conflict) | I-D10 |
 | round-trip ×5 000 | I-D5 |
 | spatial inference matrix (write-only / transform-only / both / neither) | I-D6 |
 | two-writers-one-edge fixture | I-D7 conflict |

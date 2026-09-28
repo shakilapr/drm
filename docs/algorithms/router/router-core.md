@@ -12,10 +12,15 @@ Scope: `drm-router` data path — topic filtering from derived forwarding plans,
 | `REQ-ROUTE-udp-single-packet` | one sample per datagram ≤ `max_datagram_payload`; no IP fragmentation/PMTUD | `REQ-ROUTE-032` |
 | `REQ-ROUTE-tcp-records` | stream transports: one length-framed record per sample | `REQ-ROUTE-029` |
 | `REQ-ROUTE-serial-framing` | serial: COBS + `0x00` delimiter + length + CRC32C | `REQ-ROUTE-027` |
-| `REQ-ROUTE-ingress-ordering` | drop same-epoch `seq ≤ last`; epoch increase ⇒ stream reset | `REQ-ROUTE-011` |
+| `REQ-ROUTE-ingress-ordering` | drop same-epoch `seq ≤ last`; epoch increase ⇒ stream reset (u64 epochs, wrap-free) | `REQ-ROUTE-011` |
 | `REQ-ROUTE-two-way-import` | received frames → local SHM native format, headers stripped | `REQ-ROUTE-031` |
 | `REQ-ROUTE-disconnect-isolation` | link loss affects only topics on that link | `REQ-ROUTE-007` |
 | `REQ-ROUTE-oversize-build-reject` | oversize datagram payload rejected at build time onto stream transports | `REQ-ROUTE-018` |
+| `REQ-ROUTE-link-scheduler` | per-link scheduler shapes all transports; only reliable streams use ordered lanes | `REQ-ROUTE-034` |
+| `REQ-ROUTE-egress-scoped-failure` | one route's egress failure never blocks other routes on the link | `REQ-ROUTE-035` |
+| `REQ-ROUTE-branch-independent` | transit failure never suppresses local import or sibling branches | `REQ-ROUTE-036` |
+| `REQ-ROUTE-branch-session-fail` | exhausted reliable branch ⇒ branch session fails; others continue | `REQ-ROUTE-037` |
+| `REQ-ROUTE-stream-receive-bound` | generated max record length enforced before buffering | `REQ-ROUTE-038` |
 
 ## Data Structures
 
@@ -24,6 +29,7 @@ pub struct RouterConfig {
  plans: BTreeMap<TopicPath, TopicRoutePlan>, // route-derivation.md output (forwarding tree)
  transports: BTreeMap<LinkId, TransportAdapter>, // capability-mapped
  datagram_bound: BTreeMap<LinkId, u16>, // max_datagram_payload per datagram link
+ max_record_bytes: BTreeMap<(LinkId, WireChannelId), u32>, // generated: header + declared topic payload bound + optional e2e CRC (I-RT18)
 }
 
 pub struct WireHeader {
@@ -31,7 +37,7 @@ pub struct WireHeader {
  flags: u8, // bit 0 = end-to-end CRC32C trailer present; remaining bits must be zero
  reserved: u16, // zero
  wire_channel_id: u32, // TRANSPORT id from the route binding — never the runtime topic handle
- stream_epoch: u32, // per-source stream epoch; increments on source/import restart
+ stream_epoch: u64, // per-source stream epoch; increments on source/import restart; plain u64 ordering is wrap-free
  source_seq: u64, // per-source sequence (distinct from the per-link transport seq)
  payload_len: u32,
 }
@@ -44,7 +50,7 @@ pub enum WireFrame {
 // OwnedFrame is a slice into a router-owned bounded buffer; it NEVER aliases DRM shared memory.
 // No DRM-level fragmentation/reassembly — oversize belongs on stream transports (build-rejected).
 
-pub struct StreamKey { epoch: u32, seq: u64 }
+pub struct StreamKey { epoch: u64, seq: u64 }
 pub struct IngressState { newest: Option<StreamKey> } // per (link, wire_channel_id); reset on reconnect
 pub struct EgressState {
  cursor: ReaderCursor,             // per (topic, link), sequential when no export limiter
@@ -62,70 +68,95 @@ pub struct EgressState {
 - **I-RT4 ImportNative**: ingress strips wire headers and deposits the sample in native format — consumers cannot distinguish imported from local data. Test: `import_native_equivalence`.
 - **I-RT5 SessionScope**: `reliable` = ordered loss recovery while the transport session is valid; reconnection starts clean. Test: `tcp_session_scope`.
 - **I-RT6 DisconnectIsolated**: link loss affects only routes over that link; local SHM loops continue. Test: `disconnect_isolation`.
-- **I-RT7 WireHeader**: every frame carries fixed 24-byte little-endian `{version, flags, reserved, wire_channel_id, stream_epoch, source_seq, payload_len}`; unknown version/flags or nonzero reserved bits are rejected. Test: `wire_header`, `wire_id_not_handle`.
+- **I-RT7 WireHeader**: every frame carries fixed 28-byte little-endian `{version, flags, reserved, wire_channel_id, stream_epoch: u64, source_seq, payload_len}`; unknown version/flags or nonzero reserved bits are rejected. Test: `wire_header`, `wire_id_not_handle`.
 - **I-RT8 RouterOwnsBytes**: egress performs `borrow → copy into router-owned bounded buffer → release`, then enqueues; no borrowed DRM sample outlives the borrow scope (external-I/O rule). Test: `router_borrow_scope` (instrumented; lane queue holds zero DRM borrows).
-- **I-RT9 IngressOrdering**: for a given (link, wire_channel_id), a frame with the same epoch and `source_seq ≤ last_seq` is dropped; a higher epoch triggers a stream reset (imported publisher epoch bump). UDP reorder/duplicate can never make older state the new latest. Test: `udp_reorder`, `udp_duplicate`, `remote_restart_reset`.
+- **I-RT9 IngressOrdering**: for a given (link, wire_channel_id), a frame with the same epoch and `source_seq ≤ last_seq` is dropped; a higher epoch triggers a stream reset (imported publisher epoch bump). Epochs are `u64` — plain integer ordering is wrap-free, so a restart is always recognized (test includes the maximal-epoch restart case). UDP reorder/duplicate can never make older state the new latest. Test: `udp_reorder`, `udp_duplicate`, `remote_restart_reset` (incl. `epoch_max → 0`).
 - **I-RT10 SerialFraming**: serial frames use a delimiter + COBS encoding + explicit length + CRC32C, so a dropped byte cannot desynchronize the receiver indefinitely. Test: `serial_resync`.
 - **I-RT13 ForwardOnce**: each route forwards a source key at most once; an unrestricted route advances a per-route sequential cursor, while an export-limited route samples a newer latest key only after its period opens. Test: `egress_cursor`, `export_no_duplicate`.
 - **I-RT14 ValidateBeforeState**: malformed or integrity-failing frames change no ingress ordering/importer state. Test: `ingress_invalid_no_state`.
+- **I-RT15 EgressScopedFailure**: any single route's failure (queue full, oversize, encode error) is counted and scoped to that route; the link scan continues, so a full lower-priority queue never prevents a safety route from being examined. No work ⇒ no reservation is taken. Test: `egress_scoped_failure`.
+- **I-RT16 BranchIndependence**: a validated frame advances ingress ordering state once, then attempts local import and each egress branch as independent outcomes; one branch's failure (counted, never `?`-propagated across the tree) never suppresses local delivery or sibling branches. Test: `fanout_branch_isolation`.
+- **I-RT17 BranchSessionFail**: a reliable branch whose lane stays exhausted past the stall window fails its transport session: pending branch state is discarded, the branch marks down (I-RT5/I-RT6 semantics), and bounded memory holds — never unbounded growth, never source-wide backpressure. Test: `reliable_branch_stall`.
+- **I-RT18 ReceiveBound**: stream/serial receivers enforce the generated per-route `max_record_bytes` before buffering payload; a declared length above it is a protocol error (drop + resync; reliable stream: session reset) — never an oversized allocation. Test: `stream_record_bound`.
 
 ## Functions
 
 ```rust
 // ---- Egress (per link, per tick) ----
-fn egress(&mut self, link: LinkId) -> Result<(), Status> {
+fn egress(&mut self, link: LinkId) -> Status {
  for topic in self.routes_on(link) { // I-RT1: forwarding plan filter
- // Reserve a fixed lane slot first, then copy directly into it. Cursor commits only after reserve.
- let Some(mut reserved) = self.lanes.try_reserve(link, priority_class(topic))? else {
-  return Err(QueueFull);
+  let Some(key) = self.peek_next_or_limited_latest(topic, link) else { continue; }; // no work: no reservation taken
+  match self.admit_and_send(link, topic, key) {
+   Err(e) => { self.count_route_error(topic, link, e); continue; } // I-RT15: scoped to this route, scan continues
+   Ok(()) => {}
+  }
+ }
+ Status::Ok
+}
+
+fn admit_and_send(&mut self, link: LinkId, topic: TopicPath, key: StreamKey) -> Result<(), Status> {
+ // Reserve a fixed scheduler slot first, then copy directly into it. Cursor commits only after reserve.
+ let Some(mut reserved) = self.scheduler.try_reserve(link, priority_class(topic))? else {
+  return Err(QueueFull); // route-scoped (I-RT15) — scheduler spans all transports (REQ-ROUTE-034)
  };
- let Some(owned) = self.copy_next_or_limited_latest(topic, link, &mut reserved)? else {
-  reserved.cancel(); continue; // Empty, unchanged latest, or export period closed
- }; // borrow → copy → release; reserved bytes never alias SHM (I-RT8/I-RT13)
+ let owned = self.copy_into_reserved(topic, link, key, &mut reserved)?; // borrow → copy → release; reserved bytes never alias SHM (I-RT8/I-RT13)
  let header = WireHeader {
- version: 1, flags: self.integrity_flags(topic), reserved: 0,
- wire_channel_id: self.wire_id(topic, link), // I-RT7: transport binding
- stream_epoch: owned.epoch,
- source_seq: owned.seq,
- payload_len: u32::try_from(owned.payload.len()).map_err(|_| OversizeInternal)?,
+  version: 1, flags: self.integrity_flags(topic), reserved: 0,
+  wire_channel_id: self.wire_id(topic, link), // I-RT7: transport binding
+  stream_epoch: owned.epoch,
+  source_seq: owned.seq,
+  payload_len: u32::try_from(owned.payload.len()).map_err(|_| OversizeInternal)?,
  };
  let frame = match self.transport_kind(link) {
- Datagram => {
- if encoded_len(&header, &owned.payload)? > self.datagram_bound[link] as usize { return Err(OversizeInternal); }
- WireFrame::Datagram { header, payload: owned.payload }
- }
- Stream => WireFrame::Record { header, payload: owned.payload },
- Serial => WireFrame::Serial { header, payload: owned.payload },
+  Datagram => {
+   if encoded_len(&header, &owned.payload)? > self.datagram_bound[link] as usize { return Err(OversizeInternal); }
+   WireFrame::Datagram { header, payload: owned.payload }
+  }
+  Stream => WireFrame::Record { header, payload: owned.payload },
+  Serial => WireFrame::Serial { header, payload: owned.payload },
  };
  reserved.commit(frame); // cannot fail after reservation; egress cursor/key commits here
- }
  Ok(())
 }
 
 // ---- Ingress (per link) ----
 fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
  validate_header_and_exact_length(&frame)?; // before lookup, state mutation, or payload access
+ if frame.header.payload_len as u64 + header_len() > self.max_record_bytes(link, frame.header.wire_channel_id) as u64 {
+  return Err(ProtocolError); // I-RT18: generated bound checked before any payload buffering
+ }
  let topic = self.topic_for(frame.header.wire_channel_id, link)?;
  verify_e2e_if_final(topic, &frame)?; // I-RT14: integrity before reset/dedup state mutation
  let st = self.ingress_state(link, frame.header.wire_channel_id);
 
  if let Some(old) = st.newest {
- if frame.header.stream_epoch == old.epoch && frame.header.source_seq <= old.seq { return Ok(()); }
- if frame.header.stream_epoch < old.epoch { return Ok(()); }
- if frame.header.stream_epoch > old.epoch { self.import_publisher(topic)?.reset_stream_epoch(); }
+  if frame.header.stream_epoch == old.epoch && frame.header.source_seq <= old.seq { return Ok(()); }
+  if frame.header.stream_epoch < old.epoch { return Ok(()); } // stale lower epoch
+  if frame.header.stream_epoch > old.epoch { self.import_publisher(topic)?.reset_stream_epoch(); }
+  // u64 epoch: plain < / > is wrap-free (I-RT9)
  }
- self.forward_preserving_origin(link, topic, &frame)?; // reserve/queue transit first; excludes ingress
+ st.newest = Some(StreamKey { epoch: frame.header.stream_epoch, seq: frame.header.source_seq }); // validated frame advances ordering state once (I-RT16)
+
+ // Independent outcomes from here — no `?` spans the forwarding tree (I-RT16):
  if self.has_local_consumers(topic) {
-  if let Err(e) = self.import_publisher(topic)?.publish_copy(&frame.payload) {
-   self.count_import_drop(topic, e); // local pressure never prevents already-routed transit
+  match self.import_publisher(topic) {
+   Ok(publisher) => if let Err(e) = publisher.publish_copy(&frame.payload) {
+    self.count_import_drop(topic, e); // local pressure never affects transit (I-RT4)
+   },
+   Err(e) => self.count_import_drop(topic, e), // authority contention counted; branches unaffected
   }
  }
- st.newest = Some(StreamKey { epoch: frame.header.stream_epoch, seq: frame.header.source_seq });
+ for branch in self.egress_branches(link, topic) { // excludes ingress link (route-derivation I-R7)
+  if let Err(e) = self.forward_branch(branch, topic, &frame) {
+   self.count_branch_error(branch, e); // I-RT16: scoped to this branch
+   if self.reliable_branch_stalled(branch) { self.fail_branch_session(branch); } // I-RT17: bounded failure, others continue
+  }
+ }
  Ok(())
 }
 ```
 
-*Wire encoding:* header integers are little-endian. End-to-end CRC, when flagged, follows the payload. Serial is `COBS{header, payload, optional e2e CRC, serial CRC32C} · 0x00`; the serial CRC covers all decoded preceding bytes.
+*Wire encoding:* header integers are little-endian; the header is 28 bytes (I-RT7). End-to-end CRC, when flagged, follows the payload. Serial is `COBS{header, payload, optional e2e CRC, serial CRC32C} · 0x00`; the serial CRC covers all decoded preceding bytes (header, payload, and e2e trailer — [serial-mcu.md](serial-mcu.md) I-SR3).
 
 ## Protocols
 
@@ -133,8 +164,9 @@ fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
 
 1. Connect → per-peer lanes allocated (realtime + bulk).
 2. Loss recovery operates while session valid (I-RT5).
-3. Disconnect → lanes torn down; routes over that link marked down; local SHM untouched (I-RT6).
-4. Reconnect → fresh session, empty ingress ordering state, importer epoch bump; no historical retransmit.
+3. Reliable branch lane exhausted past the stall window ⇒ branch session fails: pending branch state discarded, branch marked down; other branches and local delivery continue (I-RT17).
+4. Disconnect → lanes torn down; routes over that link marked down; local SHM untouched (I-RT6).
+5. Reconnect → fresh session, empty ingress ordering state, importer epoch bump; no historical retransmit.
 
 *Disconnect isolation (I-RT6):*
 
@@ -151,7 +183,10 @@ fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
 | UDP duplicate | dropped (I-RT9) |
 | Remote publisher restart (higher stream_epoch) | stream reset; local importer epoch bump (I-RT9) |
 | Serial byte loss/corruption | COBS delimiter resync; CRC rejects the bad frame (I-RT10) |
-| Oversize record on stream transport | accepted (stream framing allows large samples) |
+| Record longer than generated `max_record_bytes` | protocol error before buffering: drop + resync; reliable stream: session reset (I-RT18) |
+| One route's queue full during egress scan | route error counted; scan continues — safety routes always examined (I-RT15) |
+| Transit branch failure on a valid frame | local import and sibling branches unaffected (I-RT16) |
+| Reliable branch receiver stalled, lane exhausted | branch session fails, pending discarded; other branches continue (I-RT17) |
 | Importer publisher lock contention on restart | publisher-lifecycle authority protocol applies |
 | Loop of routers (A↔B↔C) | forwarding plan excludes ingress-link re-export (route-derivation I-R7) |
 | Egress tick with no new source key | no frame emitted (I-RT13) |
@@ -175,3 +210,8 @@ fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
 | two-host simulation + physical matrix | all classes and transports |
 | `egress_cursor` / `export_no_duplicate` | I-RT13 |
 | `ingress_invalid_no_state` | I-RT14 |
+| `egress_scoped_failure` (full low-priority route, ready safety route; reversed iteration order) | I-RT15: safety admitted |
+| `fanout_branch_isolation` (branch queue full + local consumer) | I-RT16: local + sibling branches delivered |
+| `reliable_branch_stall` (bounded branch queue, stalled receiver) | I-RT17: branch session fails, others continue, memory bounded |
+| `stream_record_bound` (declared length > generated max) | I-RT18: protocol error, no allocation |
+| `remote_restart_reset` (epoch max → 0) | I-RT9: wrap-free restart recognized |

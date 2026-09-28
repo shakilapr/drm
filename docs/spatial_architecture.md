@@ -84,13 +84,13 @@ A timestamp in DRM carries a clock domain identifier (`TimePoint { value, clock_
 - **Global Time**: PTP or GNSS synchronized clocks.
 - **Simulation and Replay Clocks**: Virtual clocks that can pause, slow down, or replay recorded datasets.
 
-DRM maintains clock mappings with offset, drift, and uncertainty estimates. Timestamps from different clocks are never silently compared; if no valid clock mapping exists, queries return an unresolved clock status.
+DRM maintains affine clock mappings: $t_{to} = t_{to,ref} + r \cdot (t_{from} - t_{from,ref})$, with rate ratio $r$, a reference instant pair, uncertainty at the reference, and bounded uncertainty growth. Every clock has an identity (`kind`, `source`, `epoch`); a device reset or re-time bumps the epoch so an old mapping can never apply to a new clock incarnation. Timestamps from different clocks are never silently compared; if no valid clock mapping exists, queries return an unresolved clock status.
 
 ## Dual Hierarchy: Compiled Base and Runtime Overlay
 
 DRM splits spatial frames into two distinct layers:
-1. **Compiled Base**: Robot bodies, sensor racks, and joint chains declared in `spaces/`. Their static offsets are precomputed at build time for straight-line fast-path execution.
-2. **Runtime Overlay**: Dynamic world objects, detected obstacles, human tracking markers, and temporary tools created while the robot runs (`space.create("object/42")`). Runtime frames are allocated with generational handles (`SpatialHandle { index, generation }`) so that deleting an object invalidates old references immediately without recycling bugs.
+1. **Compiled Base**: Robot bodies, sensor racks, and joint chains declared in `spaces/`. Their static offsets are precomputed at build time for straight-line fast-path execution; queries over the base never traverse the graph at runtime.
+2. **Runtime Overlay**: Dynamic world objects, detected obstacles, human tracking markers, and temporary tools created while the robot runs (`space.create("object/42")`). Runtime frames are allocated with generational handles (`SpatialHandle { index, generation }`) so that deleting an object invalidates old references immediately without recycling bugs. Overlay frames resolve through a **bounded overlay walk** (declared `max_overlay_depth`) from the overlay frame up to its compiled-base attachment frame, followed by the precompiled base plan; the resulting small prefix is cached under a `topology_generation`, and a reparent bumps the generation and re-walks once. Topology events are retained in a bounded history scoped to the retrievable transform-history horizon.
 
 ## Runtime Spatial Index
 
@@ -114,9 +114,9 @@ index:
   max_cells_per_object: 27
 ```
 
-The generated membership table has checked capacity `max_objects × max_cells_per_object`; verification rejects a slack/envelope bound that can touch more cells. Each open-addressed entry stores `{cell_key, object_handle}`. Indexed objects retain generational handles, so deletion invalidates stale references.
+The generated membership pool has checked capacity `max_objects × max_cells_per_object`; verification rejects a slack/envelope bound that can touch more cells. Cells are hashed into a fixed open-addressing table sized $\lceil M/\alpha_{max} \rceil$ with $\alpha_{max} \le 0.70$, keeping probe bounds within the real-time budget at worst-case occupancy; deletion uses backward shift, so no tombstones accumulate. Indexed objects retain generational handles, so deletion invalidates stale references.
 
-Re-bucketing uses a declared motion slack — a fat cell envelope per object. Its center remains fixed until exit; moving it without updating memberships would create false negatives. Mutations publish under a version counter. A query returns only after matching even version reads; bounded retry exhaustion returns `CONCURRENT_UPDATE`, never a partial candidate set.
+Re-bucketing uses a declared motion slack — a fat cell envelope per object. Its center remains fixed until exit; moving it without updating memberships would create false negatives. Updates are **incremental**: only cells whose membership actually changes (`remove` ∪ `add`; the intersection is kept) are touched — $O(k)$ in the object's cell span, never a whole-index copy. Each object record carries its occupied cells and the dependency versions of every transform input feeding its anchor-space pose; a change to any dependency invalidates the object's index location even if its own edge did not move. A global grid epoch (even = stable, odd = updating) makes multi-cell moves transactional: queries accept candidates only when the epoch is unchanged across the scan; bounded retry exhaustion returns `CONCURRENT_UPDATE`, never a partial candidate set.
 
 ### Compiled Static BVH
 
@@ -126,7 +126,7 @@ Static environment geometry compiles into a fixed-layout bounding-volume hierarc
 
 > **The spatial index is a derived cache, not authoritative state. Authoritative object state remains the versioned dynamic edges; each consumer indexes only its declared spatial reads.**
 
-A node builds indexes exactly over the spaces it declares in `[spatial] read`. Updates ride existing version counters: when a cached dynamic edge advances, affected buckets refresh; unchanged versions touch nothing. No polling, no cross-node index protocol, no central registry.
+A node builds indexes exactly over the spaces it declares in `[spatial] read`. Updates ride existing version counters: the index tracks the **full dependency vector** of each object's anchor-space pose — its own edge, all ancestor edges on the conversion path, calibration slots, and the topology generation. A change to any dependency refreshes the affected buckets; an unchanged dependency vector touches nothing. No polling, no cross-node index protocol, no central registry.
 
 ### Proximity Query Semantics
 
@@ -137,7 +137,7 @@ auto hits = space.nearby("map", wrist_pt, 2.0);   // radius query
 auto hits = space.region("map", region_aabb);     // region query
 ```
 
-Results return candidate object handles with status metadata. The candidate set is a deliberate superset; callers perform exact distance checks on typed points through the standard conversion path. Proximity evaluates only the latest indexed state; per-candidate historical state resolves afterward through `at()`. `drm verify` costs the membership table, object records, query scratch sets, BVH nodes, and both calibration banks.
+Results return candidate object handles with status metadata. The candidate set is a deliberate superset; callers perform exact distance checks on typed points through the standard conversion path. The prospective cell count is computed with checked integer arithmetic **before** enumeration; above a declared `max_query_cells` the query falls back to scanning the fixed object table, bounding worst-case work independently of radius. Candidate storage overflow returns an explicit `OutputTooSmall{required}` status — misses and silent truncation are forbidden. Proximity evaluates only the latest indexed state; per-candidate historical state resolves afterward through `at()`. `drm verify` costs the membership pool, cell table, object records, query scratch sets, BVH nodes, and both calibration banks.
 
 ## Authoring Spaces (`spaces/`)
 
@@ -195,21 +195,21 @@ Traditional transform trees repeatedly multiply long chains of static coordinate
 
 Authoritative runtime state consists only of dynamic edges. Each dynamic edge in shared memory has a numeric ID, transform, timestamp, and version counter.
 
-Each process maintains an internal cache for its declared spatial reads. When a node queries `camera.world()`, it verifies whether the version of `world_to_base` has changed:
-- If the version matches, the cached world transform is returned immediately without calculations.
-- If the version has changed, DRM executes the precompiled transform plan, updates the cache, and records the new version.
+Each process maintains an internal cache for its declared spatial reads. When a node queries `camera.world()`, it verifies whether the dependency versions of `world_to_base` have changed:
+- If the versions match, the cached transform **geometry** is returned immediately without recomputation; freshness, staleness, and clock uncertainty are always derived per query from timestamps — version equality never implies `VALID`.
+- If any version has changed, DRM executes the precompiled transform plan, updates the cache, and records the new versions.
 
 ## Query Semantics and History
 
 DRM provides explicit query operations:
-- **`latest(target, reference)`**: Returns the newest valid state currently held in memory.
-- **`at(target, reference, timestamp)`**: Returns the state valid at the specified historical time. Translations are interpolated linearly and rotations via spherical linear interpolation (SLERP).
-- **`predict(target, reference, max_horizon)`**: Explicit forward extrapolation. Historical queries (`at`) never silently extrapolate beyond the newest sample.
-- **`delayed_view(offset)`**: An intentionally delayed view trailing real-time by a fixed duration for smooth rendering and remote monitoring displays.
+- **`latest(target, reference)`**: Returns the transform at the newest timestamp for which every time-varying input on the selected path can be evaluated coherently: with input intervals $I_i = [t_{oldest,i}, t_{newest,i}]$ converted to one clock, $t^* = \max(\bigcap_i I_i) = \min_i(t_{newest,i})$. Every dynamic edge is then evaluated at that same $t^*$ — the composed transform corresponds to a single physical instant, which the result reports as its sample time.
+- **`at(target, reference, timestamp)`**: Returns the state valid at the specified historical time. Translations are interpolated linearly and rotations via spherical linear interpolation (SLERP) between bracketing samples in the sample-time-ordered history.
+- **`predict(target, reference, max_horizon)`**: Explicit forward extrapolation from the newest coherent state. Extrapolation integrates a declared body-frame twist on $SE(3)$ via the exponential map, $T(t+\Delta) = T(t)\operatorname{Exp}(\xi_b \Delta)$; twist frame conventions and adjoint-based conversion between frames are explicit. Historical queries (`at`) never silently extrapolate beyond the newest sample.
+- **`delayed_view(offset)`**: An intentionally delayed view trailing real-time by a fixed duration for smooth rendering and remote monitoring displays; resolves `at(now − offset)`.
 
 These operations resolve state between named frames. Proximity queries (`nearby`, `region`) form the second query family, executing over the Runtime Spatial Index and returning candidate object handles; per-candidate state is then resolved through the operations above.
 
-History ring buffers are allocated only on upstream dynamic edges and live calibration slots needed by declared historical reads. A time requirement also declares a structural `max_samples` bound; `expected_rate` is planning metadata and never sizes correctness-critical history. The compiler verifies that every required interval fits the declared bound. Static constants are never repeated across timestamps. `at()` selects the time-scoped hierarchy plan and resolves every dynamic/calibration input at the requested timestamp before composition.
+History ring buffers are allocated only on upstream dynamic edges and live calibration slots needed by declared historical reads. `history = H` is a **guaranteed sample-time queryability window** behind the newest accepted sample; `max_samples = N` is the fixed memory capacity; and a declared `min_sample_period = P` is the structural producer-density contract — two accepted samples are never closer than P in sample time. Verification requires $N \ge \lfloor H/P \rfloor + 2$ (one predecessor retained below the window floor for boundary interpolation) and rejects declarations that cannot satisfy it; history is never silently shortened. Rings are ordered by sample time: in-window late arrivals insert in order, and anything older than the retained floor is rejected and counted (`LateSampleDropped`). `expected_rate` is planning metadata and never sizes correctness-critical history. Static constants are never repeated across timestamps. `at()` selects the time-scoped hierarchy plan and resolves every dynamic/calibration input at the requested timestamp before composition.
 
 ## Discontinuities and Teleports
 
@@ -224,15 +224,18 @@ When an object is picked up or moved, its parent frame changes (`space.reparent(
 
 Reparenting is temporal: changing a parent at time $t_1$ does not alter history before $t_1$. Queries for earlier timestamps traverse the original parent hierarchy. Hierarchy mutations are executed atomically so readers never observe partially updated trees.
 
+Discontinuities are marked on the local edges whose values jump, not on the object as a whole. `Preserve World` computes $T_{newParent,obj} = T_{anchor,newParent}^{-1} \cdot T_{anchor,obj}$ at $t_1$, so the object's world trajectory remains continuous across the reparent; only local edge values change.
+
 ## Transform Status and Quality
 
 Queries return a result object containing the calculated transform along with explicit status metadata:
-- Status indicators: `VALID`, `STALE`, `DISCONTINUOUS`, `CLOCK_UNRESOLVED`, `OUT_OF_HISTORY`, `EXTRAPOLATED`.
-- Sample age and clock synchronization uncertainty.
+- Hard outcome: a transform, or one `error` — `PATH_NOT_FOUND`, `CLOCK_UNRESOLVED`, `OUT_OF_HISTORY`, `CONCURRENT_UPDATE`.
+- Combinable quality flags: `STALE`, `EXTRAPOLATED`, `DISCONTINUITY_NEARBY`.
+- Sample time, receive age, and clock synchronization uncertainty — derived per query, never cached.
 
 ## Shared Memory and Microcontrollers
 
-- **Host System**: Dynamic edge slots are stored in shared memory with lockless sequence counters, allowing Python, Rust, C++, and TypeScript nodes to read transforms simultaneously without mutex contention.
+- **Host System**: Dynamic edge slots are stored in shared memory with lockless sequence counters, allowing Python, Rust, C++, and TypeScript nodes to read transforms simultaneously without mutex contention. Each slot stores the transform plus both its sample and receive timestamps; the sample clock domain is fixed per edge in channel metadata, not per sample.
 - **Physical Boundaries**: Only changing dynamic edges are transmitted across external links.
 - **Microcontrollers**: An MCU needing camera coordinates receives the pre-calculated `base_to_camera` constant at build time. When it receives the dynamic `world_to_base` transform over serial or network links, it executes a single straight-line multiplication with zero heap allocation, zero string lookups, and zero tree traversal.
 
@@ -241,7 +244,7 @@ Queries return a result object containing the calculated transform along with ex
 In C++:
 ```cpp
 auto camera_res = space.latest("world", "robot/camera/front");
-if (camera_res.status == TransformStatus::Valid) {
+if (!camera_res.error) {
     auto pose = camera_res.transform;
 }
 
@@ -256,7 +259,7 @@ for (auto hit : space.nearby("map", world_pt, 2.0)) {
 In Python:
 ```python
 res = space.latest("world", "robot/camera/front")
-if res.is_valid():
+if res.ok():
     pos = res.transform.translation
 
 for hit in space.nearby("map", gripper_pt, radius=2.0):

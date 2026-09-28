@@ -28,7 +28,7 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 
 | Doc | Phase(s) | Scope |
 |---|---|---|
-| [runtime/shm-backend.md](runtime/shm-backend.md) | 8 | Shared-memory create/open/map, locks, incarnation identity (Linux) |
+| [runtime/shm-backend.md](runtime/shm-backend.md) | 8 | Shared-memory create/classify/map, locks, fork sanitization, mlock precommit (Linux) |
 | [runtime/ring-history.md](runtime/ring-history.md) | 10 | Sequence-history ring, retention, commit/lookup ordering |
 | [runtime/channel-metadata.md](runtime/channel-metadata.md) | 5, 17 | Channel descriptor, attach validation, epoch observe/reset |
 | [runtime/consumer-registration.md](runtime/consumer-registration.md) | 14–16 | Consumer record claim, close, dead takeover, generation-safe reuse |
@@ -37,9 +37,9 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 | [runtime/payload-pool.md](runtime/payload-pool.md) | 13 | Fixed slot pools, offsets, pool invariant, drop-free sizing |
 | [runtime/hazard-protocol.md](runtime/hazard-protocol.md) | 14 | 6-step acquisition, publisher slot selection, ABA, race matrix R1–R6 |
 | [runtime/channel-publish.md](runtime/channel-publish.md) | 12–15 | Integrated publish transaction, linearization, error precedence |
-| [runtime/exhaustion-reclamation.md](runtime/exhaustion-reclamation.md) | 15, 16 | Drop accounting, incarnation-proof reclamation slow path |
+| [runtime/exhaustion-reclamation.md](runtime/exhaustion-reclamation.md) | 15, 16 | Drop accounting, registration-lock reclamation slow path, RT off-path |
 | [runtime/publisher-lifecycle.md](runtime/publisher-lifecycle.md) | 17 | Writer authority, epoch exactly-once, restart protocol, freshness |
-| [runtime/windows-backends.md](runtime/windows-backends.md) | 31 | Sections, `LockFileEx`, signaled identity, `VirtualLock` precommit |
+| [runtime/windows-backends.md](runtime/windows-backends.md) | 31 | Sections, `LockFileEx`, diagnostic identity, `VirtualLock` precommit, Init reinit |
 
 ### toolchain/ — `drm-workspace` + `drm-cli`
 
@@ -58,16 +58,16 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 
 | Doc | Phase(s) | Scope |
 |---|---|---|
-| [router/router-core.md](router/router-core.md) | 29 | Egress/ingress framing, filtering, two-way import, session lifecycle |
-| [router/lanes-shaping.md](router/lanes-shaping.md) | 30 | Realtime/bulk lanes per peer, priority classes, token buckets |
-| [router/serial-mcu.md](router/serial-mcu.md) | 32 | Bounded serial frames, CRC/escaping, MCU freestanding subset, zero-heap audit |
+| [router/router-core.md](router/router-core.md) | 29 | Egress/ingress framing, scoped egress admission, fan-out branch isolation, two-way import, session lifecycle |
+| [router/lanes-shaping.md](router/lanes-shaping.md) | 30 | Per-link scheduler (all transports), bounded priority + DRR, token buckets, ordered lanes for reliable streams |
+| [router/serial-mcu.md](router/serial-mcu.md) | 32 | Bounded serial frames, CRC/escaping, blocking bound, MCU freestanding subset, zero-heap barriers |
 
 ### bindings/ — `drm-ffi` + first-party bindings
 
 | Doc | Phase(s) | Scope |
 |---|---|---|
-| [bindings/c-abi-surface.md](bindings/c-abi-surface.md) | 7, 20–22 | Endpoint handles, validation-once, borrow ABI, status mirror, no-unwind |
-| [bindings/bindings-cpp-rust-python.md](bindings/bindings-cpp-rust-python.md) | 20–22 | C++ RAII, Rust lifetimes, Python context managers, node-scoped APIs |
+| [bindings/c-abi-surface.md](bindings/c-abi-surface.md) | 7, 20–22 | Context/publisher/consumer handles, validate-once, copy + write-loan publish, borrow/copy reads, fixed int32 statuses, fail-stop, one-way ABI compat |
+| [bindings/bindings-cpp-rust-python.md](bindings/bindings-cpp-rust-python.md) | 20–22 | C++ RAII owning accessor, Rust `!Send !Sync` guards, Python owned-reads-only + threading, two-layer codegen |
 
 ### ops/ — `drm-record` / `drm-diag` / `drm-trace` / `drm-rpc`
 
@@ -95,7 +95,7 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 
 | Doc | Phase(s) | Scope |
 |---|---|---|
-| [program/qualification.md](program/qualification.md) | 34 | Traceability matrix, soak, reproducible builds, matrix closure, bench invariants, defect ledger |
+| [program/qualification.md](program/qualification.md) | 34 | Evidence-classed traceability + mutation audit, soak/aging/accelerated gates, per-platform reproducible builds, fuzz resolution gate, matrix closure, defect ledger |
 
 ## Doc Template
 

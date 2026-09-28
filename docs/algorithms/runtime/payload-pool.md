@@ -33,7 +33,7 @@ pub struct PoolLayout {
 
 pub struct PayloadPool {
  layout: PoolLayout,
- busy: AtomicBool, // one in-progress write (hazard-protocol I-HZ6)
+ busy: AtomicBool, // VIEW of ccb.publish_busy (channel-metadata.md sole physical owner; I-HZ6)
  scratch: FixedBitSet, // activation-owned publisher scratch; count bits
 }
 fn slot_offset(layout: &PoolLayout, i: u64) -> Result<usize, Status> {
@@ -81,6 +81,10 @@ ordering is [channel-publish.md](channel-publish.md).
 
 *Drop-free guarantee proof sketch (I-P5; completed with hazard-protocol.md in Phase 14):*
 
+0. `H` is statically known per topic: `H = Σ declared borrowers over consuming nodes + the
+   reserved diagnostic-consumer range` (architecture §Consumer; consumer-registration.md reserves
+   exactly that many records). Dynamic borrower counts would invalidate this proof — they are
+   rejected by the manifest schema.
 1. Pool holds `pool_size` slots; history ring references at most `R` distinct slots.
 2. Up to `H` consumers hold borrows of aged-out samples ⇒ at most `H` additional slots are protected.
 3. Before selection, at most `R + H` slots are unavailable.

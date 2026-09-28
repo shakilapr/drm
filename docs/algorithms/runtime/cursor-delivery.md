@@ -1,6 +1,10 @@
 # Cursor & Delivery Algorithms
 
-Scope: reader cursors, the four access operations (`borrow_latest`, `copy_latest`, `borrow_next`, `copy_next`), independent reader positions, exact `GAP` reporting on lapped sequential readers, and epoch verification around every acquisition. Implements architecture.md §Reader Position, §Memory Ownership, §Orthogonal Sample Access, §Publisher Epoch (first_valid_seq window). Owner: E1 (crate `drm-core::channel`). Phase 11.
+Scope: reader cursors, the four access operations (`borrow_latest`, `copy_latest`, `borrow_next`,
+`copy_next`), independent reader positions, exact `GAP` reporting on lapped sequential readers,
+persistent + in-call epoch verification, and bounded retry primitives. Implements architecture.md
+§Reader Position, §Memory Ownership, §Orthogonal Sample Access, §Publisher Epoch (first_valid_seq
+window). Owner: E1 (crate `drm-core::channel`). Phase 11.
 
 ## REQ Bindings
 
@@ -13,17 +17,23 @@ Scope: reader cursors, the four access operations (`borrow_latest`, `copy_latest
 | `REQ-CORE-cursor-independence` | readers at different speeds never affect each other | `REQ-CORE-011` |
 | `REQ-CORE-borrow-copy` | borrow vs copy is an API choice per call | `REQ-CORE-003` |
 | `REQ-CORE-cursor-epoch-verified` | epoch re-read after acquisition; restart invalidates the read | `REQ-CORE-010` |
+| `REQ-CORE-cursor-epoch-persistent` | observed epoch persists across calls; restart between calls detected | `REQ-CORE-096` |
+| `REQ-CORE-read-bounded` | core read attempts are bounded; unbounded looping is a caller policy | `REQ-CORE-097` |
 
 ## Data Structures
 
 ```rust
-// Reader cursor — LOCAL to each consumer process (never shared, never in SHM)
-pub struct ReaderCursor { last_read: Option<u64> } // required reattach seeds this from ack_seq - 1
+// Reader state — LOCAL to each consumer process (never shared, never in SHM)
+pub struct ReaderState {
+ observed_epoch: u32,    // persisted across calls; publisher-lifecycle.md observe_epoch
+ last_read: Option<u64>, // required reattach seeds this from ack_seq - 1
+}
 
 pub enum ReadOutcome<B> {
  Sample(B), // borrowed or copied payload view
  Gap { missed: u64 }, // exact count of sequences aged out since last_read
  Empty, // nothing published yet / fully caught up
+ WouldRetry, // bounded primitive lost K acquisition races (caller decides to loop)
 }
 
 pub enum ReadPos { Latest, Next }
@@ -39,10 +49,23 @@ pub enum MemOwn { Borrow, Copy }
 - **I-C3 LatestNewest**: `latest()` resolves the newest committed sequence (or `Empty`). Test: `latest_newest`.
 - **I-C4 NextNoSkip**: every committed sequence is delivered exactly once per consumer unless it was already aged out when the cursor reached it (then one `Gap`). After a `Gap`, the cursor resumes at the oldest retained sequence — retained samples are never discarded. Test: `next_no_skip` (property), `next_resume_oldest`.
 - **I-C5 BorrowSemantics**: borrow returns transient view guarded by hazard slot (hazard-protocol.md); copy returns owned bytes and releases immediately. Test: `borrow_copy_lifecycle`.
-- **I-C6 EpochAtomic**: the cursor re-reads the publisher epoch after acquisition; a restart that crosses the read discards the acquired payload, resets the cursor, and retries. Test: `cursor_epoch_restart`.
-- **I-C7 AckAfterCompletion**: on a `reject` topic, a required sequential consumer publishes `ack_seq` only after the sample is fully consumed (copy done, or borrow released) — never before. Test: `ack_after_completion`.
-- **I-C8 SnapshotLinearization**: `Gap` and `Empty` are relative to one epoch-stable `write_seq` snapshot; a crossing restart causes retry. Test: `cursor_snapshot_restart`.
-- **I-C9 CoreCopyNoAlloc**: copy operations write into caller-owned capacity and report required length without allocating. Test: `copy_zero_alloc`.
+- **I-C6 EpochAtomic**: after acquisition the cursor re-reads the publisher epoch; a restart that
+  crosses the read discards the acquired payload, resets the cursor, and retries. Test:
+  `cursor_epoch_restart`.
+- **I-C6b EpochPersistent**: the observed epoch is part of reader state and checked at the start of
+  every operation; a restart that begins and completes entirely between two calls is detected
+  before any acquisition (no stale-`Gap` confusion). Test: `cursor_epoch_restart_between_calls`.
+- **I-C7 AckAfterCompletion**: on a `reject` topic, a required sequential consumer publishes
+  `ack_seq` only after the sample is fully consumed (copy done, or borrow released) — never before.
+  Test: `ack_after_completion`.
+- **I-C8 SnapshotLinearization**: `Gap` and `Empty` are relative to one epoch-stable `write_seq`
+  snapshot; a crossing restart causes retry. Test: `cursor_snapshot_restart`.
+- **I-C9 CoreCopyNoAlloc**: copy operations write into caller-owned capacity and report required
+  length without allocating. Test: `copy_zero_alloc`.
+- **I-C10 BoundedCore**: `try_next(K)` / `try_latest(K)` perform at most `K` acquisition attempts
+  and return `WouldRetry` on exhaustion of the budget instead of looping; only the ergonomic
+  wrapper (`next`/`latest`) loops, and it is not part of the hard-RT WCET surface. Test:
+  `read_bounded_retries`.
 
 ## Functions
 
@@ -52,77 +75,127 @@ fn oldest_retained(ch: &Channel, ws: u64) -> u64 {
  ws.saturating_sub(ch.depth() as u64).max(ch.first_valid_seq().load(Acquire))
 }
 
-fn next<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Status> {
+// Persistent epoch gate: runs at the START of every read operation (I-C6b), so a restart that
+// completed between calls resets state before any acquisition; publisher-lifecycle observe_epoch.
+fn observe_epoch_at_entry(ch: &Channel, st: &mut ReaderState) {
+ let e = ch.epoch().load(Acquire);
+ if e != st.observed_epoch {
+  st.observed_epoch = e;
+  st.last_read = None; // freshness transitions to NoCurrentSample (publisher-lifecycle.md)
+ }
+}
+
+// Adopt the current run: clear sequence state, accept the in-flight epoch.
+fn reset(&mut self, ch: &Channel) {
+ self.state.last_read = None;
+ self.state.observed_epoch = ch.epoch().load(Acquire);
+}
+
+fn try_next<B>(&mut self, ch: &Channel, own: MemOwn, k: u32) -> Result<ReadOutcome<B>, Status> {
+ observe_epoch_at_entry(ch, &mut self.state); // I-C6b: persistent detection first
+ let mut attempts = 0;
  loop {
- let epoch0 = ch.epoch().load(Acquire);
- let ws = ch.write_seq().load(Acquire);
- let fv = ch.first_valid_seq().load(Acquire);
- if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
-
- if ws <= fv { return Ok(Empty); }
-
- let oldest = ws.saturating_sub(ch.depth() as u64).max(fv);
- let wanted = match self.last_read {
- None => oldest, // fresh reader starts at oldest retained
- Some(last) => last.checked_add(1).ok_or(Status::InvalidData)?,
- };
-
- if wanted < oldest { // lapped: [wanted, oldest) aged out
- let missed = oldest - wanted; // I-C2: exact
- if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
- self.last_read = Some(oldest - 1); // I-C4: resume at oldest next call
- ch.overrun_count.fetch_add(missed, Relaxed); // aggregate observed gaps; diagnostics only
- return Ok(Gap { missed });
- }
- if wanted >= ws {
+  let epoch0 = ch.epoch().load(Acquire);
+  let ws = ch.write_seq().load(Acquire);
+  let fv = ch.first_valid_seq().load(Acquire);
   if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
-  return Ok(Empty);
- }
 
- match ch.try_acquire(wanted, own) { // hazard-protocol.md (borrow or copy)
- Ok(payload) => {
- if ch.epoch().load(Acquire) != epoch0 { // I-C6: restart crossed the read
- drop(payload);
- self.reset();
- continue;
+  if ws <= fv { return Ok(Empty); }
+
+  let oldest = ws.saturating_sub(ch.depth() as u64).max(fv);
+  let wanted = match self.state.last_read {
+  None => oldest, // fresh reader starts at oldest retained
+  Some(last) => last.checked_add(1).ok_or(Status::InvalidData)?,
+  };
+
+  if wanted < oldest { // lapped: [wanted, oldest) aged out
+  let missed = oldest - wanted; // I-C2: exact
+  if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
+  self.state.last_read = Some(oldest - 1); // I-C4: resume at oldest next call
+  ch.overrun_count.fetch_add(missed, Relaxed); // aggregate observed gaps; diagnostics only
+  return Ok(Gap { missed });
+  }
+  if wanted >= ws {
+   if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
+   return Ok(Empty);
+  }
+
+  match ch.try_acquire(wanted, own) { // hazard-protocol.md (borrow or copy)
+  Ok(payload) => {
+  if ch.epoch().load(Acquire) != epoch0 { // I-C6: restart crossed the read
+  drop(payload);
+  self.reset();
+  continue;
+  }
+  self.state.last_read = Some(wanted);
+  // I-C7: required consumer acks after completion — Copy now; Borrow on guard drop.
+  if own == MemOwn::Copy && ch.is_required_consumer(self.consumer_id()) {
+   ch.ack_completed(wanted)?;
+  }
+  if own == MemOwn::Borrow && ch.is_required_consumer(self.consumer_id()) {
+   payload.arm_ack_on_drop(wanted);
+  }
+  return Ok(Sample(payload));
+  }
+  Err(AgedOut | Retry) => {
+   attempts += 1; // I-C10: bounded core primitive
+   if attempts >= k { return Ok(WouldRetry); }
+   continue; // publisher advanced; recompute snapshot
+  }
+  Err(e) => return Err(e),
+  }
  }
- self.last_read = Some(wanted);
- // I-C7: required consumer acks after completion — Copy now; Borrow on guard drop.
- if own == MemOwn::Copy && ch.is_required_consumer(self.consumer_id()) {
-  ch.ack_completed(wanted)?;
+}
+
+fn next<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Status> {
+ // Ergonomic wrapper: loops the bounded primitive. NOT part of the hard-RT WCET surface.
+ loop {
+  match self.try_next(ch, own, RETRY_BUDGET)? {
+   WouldRetry => continue,
+   done => return Ok(done),
+  }
  }
- if own == MemOwn::Borrow && ch.is_required_consumer(self.consumer_id()) {
-  payload.arm_ack_on_drop(wanted);
- }
- return Ok(Sample(payload));
- }
- Err(AgedOut | Retry) => continue, // publisher advanced; recompute snapshot
- Err(e) => return Err(e),
- }
+}
+
+fn try_latest<B>(&mut self, ch: &Channel, own: MemOwn, k: u32) -> Result<ReadOutcome<B>, Status> {
+ observe_epoch_at_entry(ch, &mut self.state); // I-C6b
+ let mut attempts = 0;
+ loop {
+  let epoch0 = ch.epoch().load(Acquire);
+  // Unified acquisition: resolve the logical target sequence, then use the SAME
+  // hazard::acquire(target_seq) protocol as next() — no entry-passing side path
+  // (architecture §Lockless Consumer Acquisition Protocol, one primitive/one proof).
+  let ws = ch.write_seq().load(Acquire);
+  let fv = ch.first_valid_seq().load(Acquire);
+  if ws <= fv {
+   if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
+   return Ok(Empty);
+  }
+  match ch.try_acquire(ws - 1, own) { // newest committed sequence
+  Ok(payload) => {
+  if ch.epoch().load(Acquire) != epoch0 { drop(payload); self.reset(); continue; }
+  Ok(Sample(payload))
+  }
+  Err(AgedOut | Retry) => {
+   attempts += 1; // I-C10
+   if attempts >= k { return Ok(WouldRetry); }
+   continue; // rolled during acquisition; recompute ws
+  }
+  Err(e) => return Err(e),
+  }
  }
 }
 
 fn latest<B>(&mut self, ch: &Channel, own: MemOwn) -> Result<ReadOutcome<B>, Status> {
  loop {
- let epoch0 = ch.epoch().load(Acquire);
- let (s, e) = match ch.newest() {
-  Ok(Some(pair)) => pair,
-  Ok(None) => {
-   if ch.epoch().load(Acquire) != epoch0 { self.reset(); continue; }
-   return Ok(Empty);
+  match self.try_latest(ch, own, RETRY_BUDGET)? {
+   WouldRetry => continue,
+   done => return Ok(done),
   }
-  Err(Retry) => continue,
- };
- match ch.try_acquire_entry(s, e, own) {
- Ok(payload) => {
- if ch.epoch().load(Acquire) != epoch0 { drop(payload); self.reset(); continue; }
- Ok(Sample(payload))
- }
- Err(Retry) => continue, // rolled during acquisition
- Err(e) => return Err(e),
- }
  }
 }
+// RETRY_BUDGET: small profile constant (2–4). Bounded memory does not imply bounded read
+// execution time; the bounded primitive is the WCET-claimable surface (I-C10).
 ```
 
 ## Protocols
@@ -142,7 +215,15 @@ release before monotonic acknowledgement on `Drop`. Acquisition creates the guar
 acknowledgement disarmed; the cursor arms it only after the post-acquisition epoch check accepts the
 sample. Retry, restart discard, or failed copy therefore cannot acknowledge delivery.
 
-*Epoch-crossed read (I-C6):* acquire → re-read epoch → mismatch ⇒ drop payload, `reset()`, retry. This makes restart handling intrinsic to the read path rather than a separate poll.
+*Epoch verification (I-C6/I-C6b):* two layers. **Persistent**: `observe_epoch_at_entry` compares the
+shared epoch against `state.observed_epoch` at the start of every operation, so a restart that began
+and finished entirely between two calls resets cursor + freshness before any acquisition. **In-call**:
+acquire → re-read epoch → mismatch ⇒ drop payload, `reset()`, retry — restart handling intrinsic to
+the read path. Both layers are required; neither subsumes the other.
+
+*Bounded core (I-C10):* `try_next`/`try_latest` are the WCET-claimable primitives; `next`/`latest`
+wrap them with an unbounded loop for ergonomics. An adversarial publisher that advances at every
+race point forces `WouldRetry` after `RETRY_BUDGET` attempts, never an open-ended spin.
 
 ## Edge Cases & Errors
 
@@ -154,10 +235,11 @@ sample. Retry, restart discard, or failed copy therefore cannot acknowledge deli
 | Fully caught-up (`next`) | `Empty` (not Gap — nothing aged out) |
 | Lapped (`next`) | `Gap { missed: k }`, then next call continues at oldest retained |
 | `ws < R` (fewer published than depth) | `oldest = 0`; no unsigned underflow |
-| Publisher advances between `ws` load and acquisition | `Err(AgedOut)` ⇒ loop; recompute `ws`/`oldest` |
+| Publisher advances between `ws` load and acquisition | `Err(AgedOut)` ⇒ counted retry; `WouldRetry` after budget |
 | Restart between epoch check and acquisition | epoch re-read differs ⇒ drop + reset + retry |
+| Restart entirely between two calls | detected at entry by `observed_epoch` ⇒ reset, no stale `Gap` (I-C6b) |
 | `last_read` at `u64::MAX` | `checked_add` ⇒ `Status::InvalidData` (practically unreachable) |
-| `latest` during publish commit | ring I3 guarantees newest-or-newer; no torn view |
+| `latest` during publish commit | unified `acquire(ws-1)` SC handshake; ring I3 guarantees no torn view |
 
 ## Test Matrix
 
@@ -170,7 +252,10 @@ sample. Retry, restart discard, or failed copy therefore cannot acknowledge deli
 | `latest_newest` | newest committed |
 | `next_no_skip` property | exactly-once unless aged-out |
 | `borrow_copy_lifecycle` | slot freed on scope exit; copy never pins |
-| `cursor_epoch_restart` | pre-restart payload discarded; cursor reset |
+| `cursor_epoch_restart` (restart crosses in-progress acquisition) | pre-restart payload discarded; cursor reset |
+| `cursor_epoch_restart_between_calls` (restart completes between calls) | I-C6b: next call resets from observed_epoch; no phantom `Gap` |
+| `read_bounded_retries` (adversarial publisher advancing at every race point) | I-C10: ≤ RETRY_BUDGET attempts, then `WouldRetry` |
+| `read_public_api_loom` (all four ops through one `acquire` model) | identical hazard protocol; no entry-passing path |
 | `ack_after_completion` (copy vs borrow release) | I-C7: ack only after completion |
 | fresh-next | oldest retained delivered |
 | `cursor_snapshot_restart` | I-C8 |

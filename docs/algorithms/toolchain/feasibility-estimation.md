@@ -1,29 +1,48 @@
 # Feasibility Estimation Algorithms
 
-Scope: declared-feasibility reports — nominal link utilization from `expected_rate` manifests and per-edge encoded frame sizes, per-link/per-route breakdown, impossible-configuration rejection on integer bounds, and the honest boundary: estimates are engineering numbers, never runtime guarantees. Implements architecture.md §What `drm verify` Estimates. Owner: E2 (crate `drm-workspace::verifier::feasibility`). Phase 27. Depends on [verify-engine.md](verify-engine.md), [canon-codec.md](../canon-codec.md), [route-derivation.md](route-derivation.md).
+Scope: declared-feasibility reports — nominal link utilization from typed `expected_rate` metadata (normalized by workspace-model.md), per-edge encoded frame sizes owned by each transport adapter, route `export_limit` shaping propagated as effective rate, per-link/per-route breakdown, impossible-configuration rejection collected into the verify report, and the honest boundary: estimates are engineering numbers, never runtime guarantees. Implements architecture.md §What `drm verify` Estimates, §Traffic Shaping and Bandwidth Budgeting. Owner: E2 (crate `drm-workspace::verifier::feasibility`). Phase 27. Depends on [verify-engine.md](verify-engine.md), [canon-codec.md](../canon-codec.md), [route-derivation.md](route-derivation.md), [workspace-model.md](workspace-model.md).
 
 ## REQ Bindings
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-TOOL-estimate-utilization` | nominal utilization from expected_rate × packet sizes | `REQ-TOOL-022` |
-| `REQ-TOOL-estimate-per-edge` | frame size computed per route edge (transport-specific overhead) | `REQ-TOOL-020` |
-| `REQ-TOOL-estimate-reject-impossible` | declared traffic > 100% link ⇒ build error (integer bps) | `REQ-TOOL-021` |
+| `REQ-TOOL-estimate-utilization` | nominal utilization from typed expected_rate × per-edge wire sizes | `REQ-TOOL-022` |
+| `REQ-TOOL-estimate-per-edge` | frame size computed per route edge (transport adapter sizing) | `REQ-TOOL-020` |
+| `REQ-TOOL-estimate-reject-impossible` | declared traffic > 100% link ⇒ verify error (integer bps), collected not short-circuiting | `REQ-TOOL-021` |
 | `REQ-TOOL-estimate-headroom` | headroom reported as engineering estimate | `REQ-TOOL-018` |
 | `REQ-TOOL-estimate-not-guarantee` | estimates never presented as guarantees; runtime measured by drm-diag | `REQ-TOOL-019` |
+| `REQ-TOOL-estimate-shaping` | declared `export_limit` caps effective rate along the route branch | `REQ-TOOL-071` |
+| `REQ-TOOL-estimate-sizing` | each transport adapter owns its wire-size function (COBS payload-dependent) | `REQ-TOOL-072` |
+| `REQ-TOOL-estimate-report` | feasibility returns `{estimates, warnings, errors}`; per-link independent | `REQ-TOOL-073` |
 
 ## Data Structures
 
 ```rust
 pub struct LinkEstimate {
  link: LinkId,
- nominal_bps: u128, // Σ over topic edges routed on link
- capacity_bps: u128, // declared link bandwidth
+ nominal_bps: u128, // Σ over topic edges routed on link (shaping-aware)
+ capacity_bps: u128, // declared link bandwidth = physical line capacity (architecture.md)
  utilization_pct: f64, // nominal / capacity × 100 (display only)
  headroom_pct: f64, // 100 − utilization (display only)
- per_topic: Vec<TopicLoad>, // breakdown: {topic, rate_hz, frame_bits, bps}
+ per_topic: Vec<TopicLoad>, // breakdown: {topic, effective_hz, wire_bits, bps}
 }
-pub struct TopicLoad { topic: TopicPath, rate_hz: u64, frame_bits: u128, bps: u128 }
+pub struct TopicLoad { topic: TopicPath, effective_hz: Rational, wire_bits: u128, bps: u128 }
+
+pub struct FeasibilityReport {
+ estimates: Vec<LinkEstimate>,
+ warnings: Vec<VerifyWarning>, // e.g. missing expected_rate; deadline tighter than nominal cadence
+ errors: Vec<VerifyError>, // e.g. OverCapacity, RateOverflow, InvalidCapacity — one per link, never short-circuit
+}
+
+// Each transport adapter owns exactly one sizing implementation (REQ-TOOL-072).
+pub trait TransportSizing {
+ fn max_payload(&self) -> Option<usize>; // datagram bound; None = stream/unbounded
+ fn max_wire_size(&self, drm_frame_bytes: usize) -> usize; // full wire bytes incl. header, CRC, framing, COBS expansion
+ fn capacity_unit(&self) -> CapacityUnit; // Bits/s vs Baud (line encoding factor)
+}
+// Serial sizing: DRM header + payload + CRC32C (+ optional e2e CRC) + COBS worst-case expansion
+// (1 extra byte per ≤254 payload bytes — payload-DEPENDENT) + 0x00 delimiter, baud → bits/s conversion.
+// UDP sizing: DRM frame + UDP + IP headers per declared link semantics.
 ```
 
 ## Invariants

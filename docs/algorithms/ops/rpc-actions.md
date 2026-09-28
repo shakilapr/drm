@@ -1,89 +1,145 @@
 # RPC & Actions Algorithms
 
-Scope: `drm-rpc` — request-response services and long-running, cancellable action workflows built as a clean library layer over correlated topic pairs; no changes to core ring buffers. Implements architecture.md §drm-rpc. Owner: E1 (crate `drm-rpc`). Phase 32. Depends on [cursor-delivery.md](../runtime/cursor-delivery.md), [channel-metadata.md](../runtime/channel-metadata.md), [handle-system.md](../toolchain/handle-system.md).
+Scope: `drm-rpc` — request-response services and long-running, cancellable action workflows built as a clean library layer over correlated topics; single ordered event stream per client; reactor/worker execution with server sessions, admission control, and bounded outboxes; no changes to core ring buffers. Implements architecture.md §drm-rpc. Owner: E1 (crate `drm-rpc`). Phase 32. Depends on [cursor-delivery.md](../runtime/cursor-delivery.md), [channel-metadata.md](../runtime/channel-metadata.md), [handle-system.md](../toolchain/handle-system.md), [overflow-policies.md](../runtime/overflow-policies.md) (reject gating).
 
 ## REQ Bindings
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-OPS-rpc-correlated-pairs` | services over correlated topic pairs; core untouched | `REQ-OPS-012` |
+| `REQ-OPS-rpc-correlated-pairs` | services over correlated topics; one ordered `event/<client>` stream; core untouched | `REQ-OPS-012` |
 | `REQ-OPS-rpc-no-cross-correlation` | concurrent responses never cross-correlate | `REQ-OPS-013` |
-| `REQ-OPS-rpc-cancel-deterministic` | cancellation is deterministic | `REQ-OPS-011` |
-| `REQ-OPS-rpc-action-workflows` | long-running, cancellable actions | `REQ-OPS-010` |
+| `REQ-OPS-rpc-cancel-deterministic` | cancel token observed by the reactor; no new phase after observation; `Terminal(Cancelled)` follows | `REQ-OPS-011` |
+| `REQ-OPS-rpc-action-workflows` | long-running, cancellable actions with cooperative checkpoints | `REQ-OPS-010` |
+| `REQ-OPS-rpc-server-session` | random `server_session` per start; stale-session requests dropped, never executed; no automatic re-execution | `REQ-OPS-020` |
+| `REQ-OPS-rpc-admission` | operation + terminal capacity reserved before a request is consumed; `publish ≠ accepted` | `REQ-OPS-021` |
+| `REQ-OPS-rpc-outbox` | bounded outbox: lifecycle/terminal guaranteed, progress advisory (replaceable) | `REQ-OPS-022` |
+| `REQ-OPS-rpc-deadline-budget` | wire carries relative `remaining_budget_ns`; absolute client deadline never crosses a machine | `REQ-OPS-023` |
+| `REQ-OPS-rpc-reliable-route` | codegen injects `reliability = reliable`; verify rejects best-effort-only routes (`V-RPC`) | `REQ-OPS-024` |
+| `REQ-OPS-rpc-event-order` | per-cid event state machine; the event topic sequence is the total operation order | `REQ-OPS-025` |
 
 ## Data Structures
 
 ```rust
 pub struct CorrelationId { client_id: u32, session_nonce: u64, counter: u64 }
-pub struct Request { correlation_id: CorrelationId, payload: BoundedBytes, deadline_ns: Option<u64> }
+pub struct Request { correlation_id: CorrelationId, target_server_session: u128, // 0 = unknown / first contact
+ payload: BoundedBytes, remaining_budget_ns: Option<u64> } // relative budget, not an absolute clock reading
 pub struct Cancel { correlation_id: CorrelationId }
-pub struct Response { correlation_id: CorrelationId, status: Status, payload: BoundedBytes }
-pub struct ActionState { correlation_id: CorrelationId, phase: ActionPhase, progress_pct: u8 }
-pub struct Phase { max_duration_ns: u64, execute: fn(&mut OwnedActionState) -> Status }
-// Maps and payloads have generated fixed capacities allocated at activation.
+pub struct RpcEvent { correlation_id: CorrelationId, kind: EventKind, payload: BoundedBytes }
+pub enum EventKind { Accepted { server_session: u128 }, Started, Progress, CancelAccepted, CancelRejected,
+ Terminal { outcome: Outcome, status: Status } } // Outcome: Succeeded | Aborted | Cancelled
+pub struct Phase { expected_max_duration_ns: u64, // SLO metadata — middleware cannot preempt user code
+ execute: fn(&mut OwnedActionState, &ActionContext) -> Status }
+pub struct ActionContext<'a> { cancel_requested: &'a AtomicBool } // ctx.cancelled() / ctx.checkpoint()
+// Fixed-capacity structures allocated at activation; sizes verified from declared concurrency (I-R6):
+// operation_table (each reservation includes a guaranteed terminal slot), per-client outboxes,
+// session-scoped cancel table.
 ```
 
 Topic conventions (static, generated from service declarations in manifests):
-- Each client owns `request/<client_id>` and `cancel/<client_id>` topics. This preserves one publisher per canonical topic.
-- The server consumes those topics with `next()` through a deterministic round-robin multiplexer.
-- The server alone publishes generated `response/<client_id>` and `state/<client_id>` topics. Each client reads only its pair and dispatches concurrent calls by full `CorrelationId`.
-- Request and cancel topics use `reject` with the server as a required sequential consumer. Response and state topics use `reject` with their client as the required sequential consumer. Capacity and pending-output slots are verified from declared concurrency; saturation returns `RpcBusy`, never silently loses an accepted request, cancel, response, or terminal state.
+
+- Each client owns `request/<client_id>` and `cancel/<client_id>` (client → server) and consumes `event/<client_id>` (server → client). Cancel keeps an independent topic so a request backlog can never delay cancellation. One publisher per canonical topic everywhere.
+- The server consumes request/cancel through a deterministic round-robin multiplexer and alone publishes `event/<client_id>` — one ordered stream whose topic sequence is the total operation order (no separate `event_seq`).
+- Request/cancel: `reject` with the server as required sequential consumer. Event: `reject` with its client as required sequential consumer.
+- Codegen injects `requires: reliability = reliable` for all three families; `drm verify` (`V-RPC`) rejects RPC over best-effort-only routes.
+- Capacities are verified from declared concurrency; saturation returns `RpcBusy` at admission. Accepted work is never silently lost.
 
 ## Invariants
 
-- **I-R1 NoCrossCorrelation**: with C concurrent in-flight requests, every response is delivered to exactly the requesting client context; `{client_id, session_nonce, counter}` is unique until session close and echoed verbatim. Test: `rpc_no_cross_correlation` (concurrent fixture).
-- **I-R2 DeterministicCancel**: cancel marks are observed in bounded order — server acknowledges cancel at the next phase boundary; after ack, no further phase executes. Test: `rpc_cancel_deterministic`.
-- **I-R3 DeadlineSemantics**: `deadline` expiry ⇒ client raises `RpcTimeout` without removing the server-side request (server may still complete; late responses are dropped as stale by cid+deadline check). Test: `rpc_timeout`.
-- **I-R4 CoreUntouched**: rpc adds zero new channel semantics — only the declared topic pairs. Test: code-audit + verify catalogue unchanged.
+- **I-R1 NoCrossCorrelation**: with C concurrent in-flight requests, every event is delivered to exactly the requesting client context; `{client_id, session_nonce, counter}` is unique until session close and echoed verbatim. Test: `rpc_no_cross_correlation` (concurrent fixture).
+- **I-R2 DeterministicCancel**: the reactor polls cancel topics every loop iteration and applies cancels before dispatching new work; a cancel sets `cancel_requested` and commits `CancelAccepted` (guaranteed class) for non-terminal operations; no new phase starts after the token is observed; the terminal outcome is then `Cancelled`. Test: `rpc_cancel_deterministic` (cancel at every phase point, including mid-phase checkpoints).
+- **I-R3 DeadlineSemantics**: the wire carries relative `remaining_budget_ns`; the server derives `server_deadline = now + budget` in its own clock domain. Client timeout ⇒ `RpcTimeout` plus a best-effort `Cancel` publish (default; documented opt-out); the server treats the budget as SLO metadata and may inject cancellation on expiry. Late terminals are dropped as stale by cid. Clock skew between machines changes nothing. Test: `rpc_timeout` (+ ±seconds clock-offset fixture).
+- **I-R4 CoreUntouched**: rpc adds zero new channel semantics — only the declared topics. Test: code-audit + verify catalogue unchanged.
 - **I-R5 SingleWriter**: every generated RPC topic has exactly one publisher; server fan-in is an explicit deterministic multiplexer. Test: `rpc_single_writer`.
-- **I-R6 BoundedState**: correlation, cancellation, and workflow tables have declared fixed capacities; full returns `RpcBusy`. Test: `rpc_capacity`.
-- **I-R7 AcceptedCompletes**: once a request is accepted, its response/terminal state occupies a fixed pending slot until the client topic accepts it or the session fails. Test: `rpc_response_pressure`.
-- **I-R8 CancelLatencyBounded**: every action phase declares a finite maximum duration; cancellation acknowledgement latency is bounded by the current phase plus one server poll interval. Test: `rpc_cancel_bound`.
+- **I-R6 BoundedState**: operation table, per-client outboxes, and the cancel table have declared fixed capacities; full ⇒ `RpcBusy` at admission; the cancel table is session-scoped and garbage-collected — never unbounded growth. Test: `rpc_capacity`.
+- **I-R7 AcceptedCompletes**: admission reserves the operation and its guaranteed terminal slot **before** a request is consumed; `publish ≠ accepted` — acceptance means admitted to the bounded operation table. Once accepted, lifecycle/terminal events occupy reserved outbox capacity until the client topic accepts them or the session fails. `Progress` is advisory: 0-or-1 pending, replaced by newer progress, discarded on terminal — it never displaces guaranteed capacity. Test: `rpc_response_pressure`, `rpc_outbox_classes`.
+- **I-R8 CancelBoundHonest**: `Phase.expected_max_duration_ns` is SLO metadata — declared, not enforced; middleware cannot preempt user code. Guaranteed: `CancelAccepted` within one reactor loop; no new phase starts after token observation. Intra-phase responsiveness requires cooperative checkpoints. Test: `rpc_cancel_bound` (ack ≤ poll interval; no-phase-start proof), `rpc_handler_overrun` (handler exceeds declared duration: ack still ≤ poll interval; SLO violation reported).
+- **I-R9 ServerSession**: a random `server_session: u128` is regenerated at every server start; requests carrying a non-zero stale session are dropped + counted, never executed; `Accepted` echoes the session. Clients observe the event-topic epoch change and fail open calls with `RpcPeerRestarted`; there is no automatic re-execution — retry is an explicit client decision. Test: `server_crash_restart` (crash before execution / during / after side effect before response / after response publish; restart with retained client request histories).
+- **I-R10 EventOrder**: per-cid validity — `Started` only after `Accepted`, `Progress` only after `Started`, `CancelAccepted`/`CancelRejected` only before `Terminal`, nothing after `Terminal`. The client rejects invalid sequences + counts them (defensive; the single-writer server cannot produce them absent a bug). Test: `rpc_event_order` (injected invalid sequences).
+- **I-R11 ReliableRoute**: request/cancel/event resolve only to reliable routes; `V-RPC` build error otherwise. Test: verify fixture (RPC service over best-effort-only link).
 
 ## Functions
 
 ```rust
-// Client (per service)
-fn call(&mut self, req: BoundedBytes, deadline_ns: Option<u64>) -> Result<BoundedBytes, RpcError> {
+// Client (per service). The async reactor is the primary model; sync call() is a thin wrapper
+// over the same explicit pump.
+fn call(&mut self, req: BoundedBytes, timeout: Option<Duration>) -> Result<BoundedBytes, RpcError> {
  let cid = self.next_cid()?; // counter exhaustion closes the session; never wraps
- let waiter = self.correlation.try_reserve(cid, deadline_ns).map_err(|Full| RpcBusy)?;
- self.request_topic.publish(Request { correlation_id: cid, payload: req, deadline_ns })
- .map_err(|e| { self.correlation.release(waiter); map_publish(e) })?;
- self.wait_bounded(waiter) // response pump fills this fixed slot; expiry returns RpcTimeout
+ let waiter = self.correlation.try_reserve(cid, timeout).map_err(|Full| RpcBusy)?;
+ let request = Request { correlation_id: cid, target_server_session: self.observed_session,
+  payload: req, remaining_budget_ns: timeout.map(dur_to_ns) };
+ self.request_topic.publish(request).map_err(|e| { self.correlation.release(waiter); map_publish(e) })?;
+ loop {
+  self.pump_events()?;
+  if let Some(r) = waiter.take_terminal() { return r; }
+  if self.event_topic.epoch_changed()? { self.fail_open_calls(RpcPeerRestarted); return Err(RpcPeerRestarted); } // I-R9
+  if waiter.expired() { self.publish_cancel_best_effort(cid); return Err(RpcTimeout); } // I-R3
+  park_bounded(POLL_INTERVAL); // bounded, cancellable — never a bare sleep on an undefined pump
+ }
 }
 
-fn poll_responses(&mut self) -> Result<(), RpcError> {
- while let Some(r) = self.response_topic.try_copy_next()? {
- match self.correlation.complete(r.correlation_id, r.status, r.payload) {
- Ok(()) => {}
- Err(UnknownOrExpired) => self.late_response_count += 1,
- }
+fn pump_events(&mut self) -> Result<(), RpcError> {
+ while let Some(ev) = self.event_topic.try_copy_next()? { // reject topic; client is required consumer
+  self.observed_session = ev.accepted_session_or(self.observed_session); // session discovery via Accepted echo
+  match self.correlation.dispatch(ev) { // per-cid state machine (I-R10); Terminal completes the waiter
+  Err(Stale | InvalidOrder) => self.stale_event_count += 1,
+  Ok(()) => {}
+  }
  }
  Ok(())
 }
 
-// Server (per service)
-fn serve(&self, handler: impl Fn(BoundedBytes) -> Result<BoundedBytes, Status>) {
+// Server reactor (one per service; never executes user code)
+fn serve(&mut self) -> Result<(), RpcError> {
+ self.session = random_u128(); // I-R9: new identity per start
  loop {
- self.poll_cancel_inputs_round_robin()?;
- let req = self.request_mux.copy_next_round_robin()?; // explicit fan-in, one input per client
- if self.cancelled.contains(&req.correlation_id) {
- self.state_topic.publish(ActionState { phase: Cancelled, .. }); continue; // I-R2 ack
- }
- let pending = self.pending_outputs.try_reserve(req.correlation_id).map_err(|Full| RpcBusy)?;
- let (status, payload) = split_result(handler(req.payload)); // request payload is owned
- pending.store(Response { correlation_id: req.correlation_id, status, payload });
- self.flush_pending_round_robin()?; // QueueFull retains the slot; retry occurs outside core
+  self.poll_cancels_round_robin()?; // every iteration — never behind request handling or handlers
+  self.apply_cancels(); // non-terminal op: set token + outbox CancelAccepted (guaranteed class);
+   // terminal/unknown cid: drop + counter (nothing after Terminal, I-R10); non-cancellable phase: CancelRejected
+  self.poll_requests()?; // reserve-then-consume admission (I-R7)
+  self.poll_client_health()?; // dead client epoch ⇒ release operation + counters
+  self.flush_outboxes_round_robin()?; // QueueFull retains entries; retried next loop — core never blocks
  }
 }
 
-// Action workflow: phase machine — handler checks cancellation between phases (deterministic boundary)
-fn run_action(&self, cid: CorrelationId, phases: &[Phase; MAX_PHASES], phase_count: usize) {
- for ph in &phases[..phase_count] {
- if self.cancelled.contains(&cid) { self.ack_cancel(cid); return; } // I-R2
- ph.execute(&mut self.owned_action_state(cid)); // bounded by declared max_duration_ns (I-R8)
- self.state_topic.publish(ActionState { correlation_id: cid, phase: ph.done_marker(), .. });
+// Admission — capacity reserved BEFORE a request is consumed (I-R7); publish ≠ accepted
+fn poll_requests(&mut self) -> Result<(), RpcError> {
+ for client in self.clients_fair() { // deterministic round-robin, one input per client
+  let Some(op) = self.operation_table.try_reserve() else { return Ok(()); }; // no free op ⇒ consume nothing
+  let Some(req) = self.request_mux.copy_next(client)? else { self.operation_table.release(op); continue; };
+  if req.target_server_session != 0 && req.target_server_session != self.session {
+   self.operation_table.release(op); self.stale_request_count += 1; continue; } // I-R9: never executed
+  op.accept(req); // reservation includes this operation's guaranteed terminal slot
+  self.outbox(client).commit(Accepted { server_session: self.session, .. });
+  self.workers.schedule(op); // user code runs only on the bounded worker pool
  }
+ Ok(())
+}
+
+// Worker pool (bounded) — the reactor never blocks on handlers
+fn run_unary(op: &mut Operation, ctx: &ActionContext) {
+ let (status, payload) = split_result(handler(op.request.payload)); // owned request bytes
+ op.outbox.commit(Terminal { outcome: from(status), status, payload }); // outbox only — never direct publish (I-R7)
+}
+
+fn run_action(op: &mut Operation, phases: &[Phase], ctx: &ActionContext) {
+ op.outbox.commit(Started);
+ for ph in phases {
+  if ctx.cancelled() { op.outbox.commit(Terminal { outcome: Cancelled, .. }); return; } // I-R2
+  ph.execute(&mut op.state, ctx); // cooperative checkpoints; expected_max_duration_ns = SLO metadata (I-R8)
+  op.outbox.commit(Progress { .. }); // advisory — outbox may coalesce (I-R7)
+ }
+ op.outbox.commit(Terminal { outcome: from_status(op.state), .. });
+}
+
+// Outbox — fixed capacity per operation (I-R6/I-R7)
+fn commit(&mut self, ev: Event) {
+ if ev.is_progress() { self.pending_progress = Some(ev); return; } // replace-on-new, coalesced pre-publication
+ if ev.is_terminal() { self.pending_progress = None; } // unsent progress is obsolete at terminal
+ self.guaranteed.push(ev); // capacity reserved at admission — cannot fail
+}
+fn flush(&mut self, topic: &EventTopic) {
+ if let Some(p) = self.pending_progress { if topic.try_publish(p).is_ok() { self.pending_progress = None; } }
+ while let Some(ev) = self.guaranteed.peek() { if topic.try_publish(ev).is_err() { break; } self.guaranteed.pop(); }
 }
 ```
 
@@ -91,39 +147,61 @@ fn run_action(&self, cid: CorrelationId, phases: &[Phase; MAX_PHASES], phase_cou
 
 *Request/response cycle:*
 
-1. Client `call` → publish Request on its generated input topic (full cid unique per client session).
-2. Server multiplexes client inputs round-robin, reserves a pending-output slot, executes from owned request bytes, and retains the response until its client topic accepts it.
-3. Client consumes responses, dispatches by cid; deadline bookkeeping per I-R3.
+1. Client `call`: reserve correlation waiter → publish `Request` (session, relative budget) → pump the event stream until `Terminal`.
+2. Reactor (every loop): poll cancels → apply tokens/acks → poll requests (reserve-then-consume, session check) → poll client health → flush outboxes.
+3. Bounded workers execute handlers/actions from owned request bytes and commit events to the outbox; workers never publish to topics directly.
+4. Client dispatches by full cid; the per-cid state machine validates order (I-R10); `Terminal` completes the waiter; late terminals drop stale (I-R3).
 
 *Action workflow (cancellable):*
 
-1. Client submits action request (cid, phases hint).
-2. Server publishes `ActionState` per phase (progress).
-3. Cancel: client publishes on its lossless bounded cancel topic; server acknowledges at the next declared-bounded phase boundary (I-R2/I-R8); state → `Cancelled`.
-4. Client observes terminal state; correlation removed.
+1. Submit → `Accepted` → `Started` → `Progress`* → `Terminal(Succeeded | Aborted | Cancelled)`.
+2. Cancel path: client publishes on its cancel topic (independent of request backlog) → reactor sets `cancel_requested` + commits `CancelAccepted` → worker stops at the next checkpoint or phase boundary → `Terminal(Cancelled)`. No new phase starts after token observation (I-R2). Mid-phase responsiveness requires cooperative checkpoints; `expected_max_duration_ns` is SLO metadata only (I-R8).
+3. Non-cancellable phase: reactor commits `CancelRejected`; the operation completes to its natural terminal.
+
+*Server session (I-R9):*
+
+1. `server_session: u128` regenerated at every server start; `Accepted` echoes it.
+2. Client stamps subsequent requests with the observed session; `0` = unknown (first contact — admitted).
+3. Non-zero stale session ⇒ request dropped + counter — never executed. No automatic re-execution; retry is an explicit client decision.
+4. Event-topic epoch change ⇒ client fails open calls with `RpcPeerRestarted` and resets its observed session.
+
+*Cancel-table lifecycle (I-R6):*
+
+1. Entry created when a cancel arrives before its request (or while the request is queued); consumed when that request is admitted.
+2. Evicted when its cid counter window passes or on session/epoch change; bounded capacity; oldest-entry eviction + counter — never unbounded growth.
 
 ## Edge Cases & Errors
 
 | Case | Result |
 |---|---|
-| Two concurrent calls, out-of-order responses | cid dispatch — no cross-correlation (I-R1) |
-| Response after client timeout | dropped as stale (cid unknown post-timeout) + counter |
-| Server crash mid-action | epoch change on topics (publisher-lifecycle); client sees state stop; restart ⇒ cid space resets (per-session) — pending actions fail with `RpcPeerOffline` |
-| Request storm beyond server rate | request publish returns `RpcBusy`; accepted requests are never overwritten |
-| Response/state topic full | pending output retained; server applies RPC-layer backpressure, core thread never blocks |
-| Cancel topic full | client receives `RpcBusy`; no false claim that cancellation was accepted |
+| Two concurrent calls, out-of-order events | cid dispatch — no cross-correlation (I-R1) |
+| Terminal after client timeout | dropped stale by cid + counter (I-R3) |
+| Server crash mid-action | event-topic epoch change ⇒ open calls fail `RpcPeerRestarted` (I-R9) |
+| Restart with retained client requests | stale-session requests dropped + counter; session-0 requests admitted (I-R9) |
+| Request storm beyond server rate | request topic fills (`reject`, server required) ⇒ publish `QueueFull` ⇒ `RpcBusy`; nothing consumed without a reserved operation slot |
+| Client stalls; event topic full | outbox retains lifecycle/terminal (I-R7); pending progress replaced; retention ends at session failure |
+| Cancel before request | cancel-table entry (session-scoped, bounded); applied if the request is admitted; GC per lifecycle |
+| Cancel topic full | client publish fails — no false claim cancellation was accepted |
+| Cancel for terminal/unknown cid | dropped + counter; no event after `Terminal` (I-R10) |
+| Cancel during a non-cancellable phase | `CancelRejected` committed; operation runs to its natural terminal |
 | Duplicate cid (bug) | server drops second + counter; never mis-delivers (I-R1) |
 | Correlation counter exhausted | session closes with `SequenceExhausted`; counter never wraps |
+| Handler exceeds `expected_max_duration_ns` | SLO violation reported; no preemption; cancel ack still ≤ one reactor loop (I-R8) |
+| Cross-machine clock skew | wire carries relative budget only (I-R3) |
+| RPC topic routed best-effort | build error `V-RPC` (I-R11) |
 
 ## Test Matrix
 
 | Case | Expected |
 |---|---|
 | `rpc_no_cross_correlation` (C ∈ 1..=16 concurrent) | I-R1 |
-| `rpc_cancel_deterministic` (cancel per phase) | I-R2 |
-| `rpc_timeout` (deadline expiry + late response) | I-R3 |
-| `rpc_capacity` | full input/table returns `RpcBusy`; no accepted request lost |
-| `rpc_single_writer` | generated graph passes single-writer verification |
-| `rpc_response_pressure` | accepted result retained until delivery/session failure |
-| `rpc_cancel_bound` | acknowledgement within declared phase bound |
-| server-crash-restart fixture | clean failure semantics |
+| `rpc_cancel_deterministic` (cancel at every phase point incl. checkpoints) | I-R2 |
+| `rpc_timeout` (expiry + late terminal + ±s clock offset) | I-R3 |
+| `rpc_capacity` (operation/outbox/cancel-table full) | I-R6 `RpcBusy` at admission; nothing consumed |
+| `rpc_single_writer` | generated graph passes single-writer verification (I-R5) |
+| `rpc_response_pressure` (stalled client fills event history) | I-R7 terminal retained; progress coalesced |
+| `rpc_outbox_classes` | I-R7 progress replaceable; lifecycle/terminal never dropped |
+| `rpc_cancel_bound` + `rpc_handler_overrun` | I-R8 ack ≤ one reactor loop; SLO violation reported |
+| `server_crash_restart` (4 crash points; retained request histories) | I-R9 explicit result — never silent, never re-executed |
+| `rpc_event_order` (injected invalid sequences) | I-R10 rejected + counted |
+| verify: RPC over best-effort-only route | I-R11 build error (`V-RPC`) |

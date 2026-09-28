@@ -8,17 +8,17 @@ Scope: `drm-spatial` foundations — distinct semantic types, compile-time fixed
 |---|---|---|
 | `REQ-SPATIAL-typed-quantities` | Point3/Direction3/Vector3/Pose3/Transform3/Twist3 distinct | `REQ-SPATIAL-036` |
 | `REQ-SPATIAL-compile-spaces` | `space: camera/front` ⇒ `Point3<CameraFront>`; payload carries values only | `REQ-SPATIAL-005` |
-| `REQ-SPATIAL-dynamic-spaces` | `SpatialPoint3` carries numeric `SpatialID`; `Stamped<T>` composition | `REQ-SPATIAL-009` |
+| `REQ-SPATIAL-dynamic-spaces` | `SpatialPoint3` carries numeric `SpatialID` — persistent object identity, not a slot index; `Stamped<T>` composition | `REQ-SPATIAL-009` |
 | `REQ-SPATIAL-forest` | forests, disconnected trees, path-not-found status | `REQ-SPATIAL-010` |
 | `REQ-SPATIAL-conventions` | right-handed, SI, +X fwd/+Y left/+Z up; explicit boundary conversions | `REQ-SPATIAL-007` |
 | `REQ-SPATIAL-geodetic` | WGS84→ECEF→tangent-plane→ENU→SE(3) chain | `REQ-SPATIAL-012` |
-| `REQ-SPATIAL-two-timestamps` | sample time + receive time on every transform sample | `REQ-SPATIAL-035` |
-| `REQ-SPATIAL-clock-domains` | four domains (host monotonic, device hardware, global PTP/GNSS, simulation/replay); mappings carry offset+drift+uncertainty; unresolved ⇒ status, never silent compare | `REQ-SPATIAL-004` |
-| `REQ-SPATIAL-dual-hierarchy` | compiled base (`spaces/`) + runtime overlay (`space.create`) with `SpatialHandle{index,generation}` | `REQ-SPATIAL-008` |
+| `REQ-SPATIAL-two-timestamps` | sample time + receive time on every transform sample, stored in the slot; sample clock domain fixed per edge in channel metadata | `REQ-SPATIAL-035` |
+| `REQ-SPATIAL-clock-domains` | four domains (host monotonic, device hardware, global PTP/GNSS, simulation/replay); affine mappings (reference pair, rate ratio, bounded uncertainty growth) keyed by clock identity with reset epoch; unresolved ⇒ status, never silent compare | `REQ-SPATIAL-004` |
+| `REQ-SPATIAL-dual-hierarchy` | compiled base (`spaces/`) + runtime overlay (`space.create`) with `SpatialHandle{index,generation}`; overlay resolves via bounded overlay walk (`max_overlay_depth`) cached under `topology_generation` | `REQ-SPATIAL-008` |
 | `REQ-SPATIAL-spatial-contracts` | `[spatial] write/read` in drm.toml; single-writer per dynamic edge enforced pre-deployment | `REQ-SPATIAL-030` |
 | `REQ-SPATIAL-static-dynamic-inference` | node declares write ⇒ dynamic; transform given + no writer ⇒ static | `REQ-SPATIAL-031` |
-| `REQ-SPATIAL-time-history` | rings allocated only on upstream dynamic edges with declared requirements (`history = "2s"`) | `REQ-SPATIAL-033` |
-| `REQ-SPATIAL-history-bound` | time histories require structural `max_samples`; planning rates never define retention | `REQ-SPATIAL-037` |
+| `REQ-SPATIAL-time-history` | rings allocated only on upstream dynamic edges with declared requirements; ordered by sample time; in-window late arrivals insert in order | `REQ-SPATIAL-033` |
+| `REQ-SPATIAL-history-bound` | `history = H` guaranteed sample-time window; `max_samples = N` fixed capacity; `min_sample_period = P` producer-density contract; verify `N ≥ ⌊H/P⌋ + 2`; `expected_rate` never defines retention | `REQ-SPATIAL-037` |
 | `REQ-SPATIAL-mcu-constants` | MCU receives pre-calculated static constants at build; straight-line multiply at runtime | `REQ-SPATIAL-017` |
 
 ## Data Structures
@@ -34,6 +34,8 @@ pub struct Twist3 { linear: Vector3, angular: Vector3 }
 // Compile-time space binding (codegen): type Point3CameraFront = Point3 tagged CameraFront;
 // wire payload = raw numerics ONLY — no frame strings or IDs.
 // Dynamic heterogeneous streams: struct SpatialPoint3 { id: SpatialId, p: Point3 }
+// SpatialId = persistent object identity (track id), NOT a slot index; ingestion binds
+// SpatialId → SpatialHandle{index, generation}, so delayed samples never alias a recycled slot.
 pub struct SpatialId(u32);
 
 // Timed measurements: Stamped<Point3<CameraFront>> etc.
@@ -50,7 +52,20 @@ pub enum ClockDomain {
  SimReplay, // simulation/replay virtual clocks (pause, slow, replay)
 }
 pub enum GlobalSource { Ptp, Gnss }
-pub struct ClockMapping { offset_ns: i64, drift_ppm: f64, uncertainty_ns: u64 } // per (from,to) edge
+
+// §Temporal Precision — clock identity: domain + epoch; device reset/re-time bumps epoch,
+// so an old mapping can never apply to a new clock incarnation.
+pub struct ClockIdentity { domain: ClockDomain, epoch: u32 }
+
+// Affine mapping per (from ClockIdentity, to ClockDomain): t_to = to_ref + r * (t_from - from_ref)
+pub struct ClockMapping {
+    from_ref_ns: i64, to_ref_ns: i64,        // reference instant pair (drift reference)
+    rate_ratio: f64,                          // relative rate r
+    uncertainty_at_ref_ns: u64,               // uncertainty at the reference
+    uncertainty_growth: f64,                  // bounded growth (fraction of elapsed time)
+    valid_from_ns: i64, valid_until_ns: i64,  // mapping validity interval
+    generation: u64,
+}
 
 // §Dual Hierarchy — runtime overlay handles
 pub struct SpatialHandle { index: u32, generation: u32 } // delete ⇒ old references invalidate immediately
@@ -136,8 +151,9 @@ fn emit_mcu_constants(plan: &CollapsePlan, target: McuTarget) -> CodeArtifact
 
 *History allocation (time-based):*
 
-1. For each declared consumer requirement `history = "2s", max_samples = N` on an upstream dynamic edge, allocate exactly `N` entries. Verification rejects absent/insufficient structural bounds; `expected_rate` is informational only (sequence-based channel rings remain the transport layer — spatial time-history is a derived cache).
-2. Rings allocated only where needed; static constants never stored across timestamps.
+1. For each declared consumer requirement `history = H, max_samples = N, min_sample_period = P` on an upstream dynamic edge, allocate exactly `N` entries. `P` is a correctness contract: two accepted samples are never closer than P in sample time. Verification requires `N >= floor(H / P) + 2` (one predecessor below the window floor for boundary interpolation) and rejects unsatisfiable declarations — history is never silently shortened. `expected_rate` is informational only (sequence-based channel rings remain the transport layer — spatial time-history is a derived cache).
+2. Rings are ordered by sample time: in-window late arrivals bounded-insert; samples older than the retained floor are rejected and counted (`LateSampleDropped`).
+3. Rings allocated only where needed; static constants never stored across timestamps.
 
 ## Edge Cases & Errors
 
@@ -148,6 +164,8 @@ fn emit_mcu_constants(plan: &CollapsePlan, target: McuTarget) -> CodeArtifact
 | Disconnected tree query | `PathNotFound` status (I-S3) |
 | Boundary type mismatch (NED→ENU direct) | explicit conversion required (I-S4) |
 | Clock chain unknown domain | `CLOCK_UNRESOLVED` (I-S7) |
+| Device clock reset / re-time | identity epoch bump ⇒ old mappings invalid; `CLOCK_UNRESOLVED` until re-estimated (I-S7) |
+| Sample older than retained history floor | rejected + `LateSampleDropped` counter (REQ-SPATIAL-037) |
 | Non-unit quat input | rejected at decode (canon-codec InvalidData) |
 | write+transform both declared | verify conflict (I-S10) |
 | Two writers on one dynamic edge | compiler conflict (I-S11) |

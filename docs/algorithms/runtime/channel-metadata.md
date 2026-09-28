@@ -16,6 +16,7 @@ Scope: channel descriptor block (channel-level metadata) as a naturally aligned 
 | `REQ-CORE-segment-validation` | §Individual Segment Validation — secondary schema/layout check | `REQ-CORE-068` |
 | `REQ-CORE-desc-exact-layout` | exact offsets, counts, and segment size checked with overflow-safe math | `REQ-CORE-016` |
 | `REQ-CORE-runtime-counters` | CCB exposes `drop_count`, `overrun_count`, and `pool_exhausted` for out-of-band diagnostics | `REQ-CORE-093` |
+| `REQ-CORE-ccb-timing-stamps` | timing-enabled CCB variant (`desc.flags` TIMING bit): `last_commit_mono_ns` + per-ring-entry `commit_mono_ns`; layout_hash covers the variant | `REQ-CORE-094` |
 
 ## Data Structures
 
@@ -31,7 +32,7 @@ pub struct SegmentPrefix { // fixed 16-byte bootstrap at offset zero
 // Immutable descriptor follows SegmentPrefix. Dynamic arrays use checked offsets, never pointers.
 #[repr(C, align(8))]
 pub struct ChannelDescriptor {
- flags: u32,
+ flags: u32, // bit TIMING: timing-instrumented CCB + ring-entry variant (observability-plane.md timing modes)
  _pad_header: u32,
  schema_hash: [u8; 16], // 128-bit canonical schema content hash (workspace-model contract inputs)
  layout_hash: [u8; 16], // exact descriptor + CCB + canonical payload layout
@@ -58,15 +59,22 @@ pub struct ChannelDescriptor {
 // Fixed bootstrap/control prefix. Dynamic ring and consumer records follow at descriptor offsets.
 #[repr(C, align(8))]
 pub struct ChannelControlBlock {
- publisher_epoch: AtomicU32,
- _pad_epoch: u32,
- first_valid_seq: AtomicU64, // sole physical owner
- write_seq: AtomicU64,       // next sequence
- drop_count: AtomicU64,      // incoming samples dropped inside DRM (currently pool exhaustion)
- overrun_count: AtomicU64,   // sequences reported missed by consumer Gap outcomes
- pool_exhausted: AtomicU64,
- publish_busy: AtomicBool,
- _pad: [u8; 7],
+  publisher_epoch: AtomicU32,
+  _pad_epoch: u32,
+  first_valid_seq: AtomicU64, // sole physical owner
+  write_seq: AtomicU64,       // next sequence
+  drop_count: AtomicU64,      // incoming samples dropped inside DRM (currently pool exhaustion)
+  overrun_count: AtomicU64,   // sequences reported missed by consumer Gap outcomes
+  pool_exhausted: AtomicU64,
+  reclaim_requested: AtomicBool, // set by RT publisher on exhaustion; consumed by maintenance
+  publish_busy: AtomicBool, // sole physical in-progress-write flag (pool/hazard hold views)
+  _pad: [u8; 6],
+  // TIMING variant only (desc.flags): present iff timing instrumentation is compiled in.
+  // last_commit_mono_ns: monotonic commit stamp of the newest retained sample; lets diag read
+  // exact latest-sample age without touching payload or ring. Per-ring-entry `commit_mono_ns`
+  // (ring-entry variant field) enables retained inter-arrival statistics. Neither joins the
+  // publication handshake beyond one relaxed store on the commit path.
+  // last_commit_mono_ns: AtomicU64,
 }
 // Compile-time asserts:
 // const _: () = assert!(align_of::<ChannelDescriptor>() == 8);
@@ -84,6 +92,7 @@ pub struct ChannelControlBlock {
 - **I-M6 SegmentReady**: attachment returns `NotReady` while the fixed prefix state is not `Ready`; no other bytes are interpreted. Test: `attach_init_refused`.
 - **I-M7 ExactLayout**: attachment accepts only exact immutable fields, zero reserved bytes, valid checked ranges, and non-overlapping aligned regions within `segment_size`. Test: `attach_layout_matrix`.
 - **I-M8 CounterSurface**: the three diagnostic counters are naturally aligned, relaxed atomics; reads never join the publication handshake. Test: `ccb_counter_layout`.
+- **I-M9 TimingVariant**: timing fields (`last_commit_mono_ns`, ring-entry `commit_mono_ns`) exist exactly when `desc.flags` has TIMING; the variant is covered by `layout_hash`, so attachment requires the exact variant; timing reads never join the publication handshake. Test: `ccb_timing_variant`.
 
 ## Functions
 
@@ -126,7 +135,7 @@ fn validate_on_attach(map: &Mapping, expect: &Expectation) -> Result<ChannelView
 }
 // After Ok: steady-state publish/read never re-validates (I-M2). Diag tools may inspect freely.
 
-// Epoch observe (cursor-delivery.md calls around each acquisition)
+// Epoch observe (cursor-delivery.md: persistent gate at operation entry + in-call reread)
 fn epoch_changed(ccb: &ChannelControlBlock, local_epoch: u32) -> bool {
  ccb.publisher_epoch.load(Acquire) != local_epoch
 }
@@ -143,7 +152,8 @@ fn first_valid(ccb: &ChannelControlBlock) -> u64 { ccb.first_valid_seq.load(Acqu
 3. If state is `Init`, wait with a bounded/cancellable startup policy; consumers never repair it.
 4. `validate_on_attach(mapping, expectation)` checks every immutable field and range exactly.
 5. Claim the generated consumer record when applicable (consumer-registration.md).
-6. Snapshot `local_epoch = ccb.publisher_epoch.load(Acquire)`.
+6. Initialize `ReaderState.observed_epoch = ccb.publisher_epoch.load(Acquire)` (cursor-delivery.md —
+   persisted across calls so a restart completing between calls is detected at entry).
 7. Steady state: no further immutable descriptor validation; epoch observation resets local state.
 
 *Epoch observe/reset (consumer, per read loop):*
@@ -177,3 +187,4 @@ fn first_valid(ccb: &ChannelControlBlock) -> u64 { ccb.first_valid_seq.load(Acqu
 | `fingerprint_guard` | I-M4 (with deployment-identity.md) |
 | `attach_layout_matrix` (each field/range/alignment) | I-M7 |
 | `ccb_counter_layout` | I-M8; exact offsets and no data-path diagnostic callback |
+| `ccb_timing_variant` (TIMING on/off fixtures) | I-M9 fields iff flag; attach rejects wrong variant |

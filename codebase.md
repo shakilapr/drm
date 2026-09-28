@@ -156,7 +156,7 @@ Artifact rules:
 | R1 | **Architecture-first** (AGENTS R1): no implementation edit without architecture alignment; architecture-affecting PRs carry the arch edit and the REQ registry diff (§6.2) in the same PR. |
 | R2 | **Traceability**: every public function, error branch, and test cites ≥1 registry ID: `// REQ: REQ-CORE-042 (Hazard slot acquisition and ABA generation check)`. Enforced by `xtask audit-traceability`; untraceable code is rejected at review. |
 | R3 | **Comments**: terse, rationale-only (AGENTS R7). Mandatory: `// SAFETY:` on every unsafe block; `// REQ:` citations. Prohibited: code narration, history comments. |
-| R4 | **Errors**: one status taxonomy in `drm-types`, mirrored 1:1 by stable C ABI codes. Data paths return errors — never panic, `unwrap`, or `expect`. Init/teardown may `expect` with an invariant-stating message. |
+| R4 | **Errors**: one status taxonomy in `drm-types`, mirrored 1:1 by stable fixed-width `int32_t` C codes with explicit values. Data paths return errors — never panic, `unwrap`, or `expect`. Init/teardown may `expect` with an invariant-stating message. |
 | R5 | **Data-path discipline**: steady-state publish/consume performs no allocation, no logging, no blocking locks, no unbounded syscalls. Atomics carry explicitly documented acquire/release ordering. Diagnostics flow only through the observability plane (`drm-trace`, channel counters, `drm-diag`). |
 | R6 | **Generated code**: never hand-edited. Emitted with a `@generated` banner naming the generator version; CI regenerates and fails on diff; unchanged outputs preserve timestamps to avoid rebuild cascades. |
 | R7 | **Naming**: crates `drm-*`; modules/fields `snake_case`; types `UpperCamel`; topics `domain/name` (kebab); REQ IDs `REQ-<AREA>-<NNN>` with areas `CORE \| TOOL \| ROUTE \| SPATIAL \| BIND \| STUDIO \| OPS \| QAL`. |
@@ -169,8 +169,9 @@ Artifact rules:
 - Edition 2024; toolchain pinned via `rust-toolchain.toml`; formatting via rustfmt (`max_width = 100`).
 - Lints via `[workspace.lints]`: all crates deny warnings; runtime crates additionally deny `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic`, `clippy::pedantic`. Init/teardown exceptions use narrow module-level allows with an invariant comment (R4).
 - `unsafe_op_in_unsafe_fn` denied globally; `#![forbid(unsafe_code)]` in toolchain, ops, and facade crates; `unsafe` confined to `drm-core` and `drm-ffi`.
-- Zero-allocation data path proven by a counting `GlobalAlloc` test harness plus `xtask audit-zero-alloc` (linker/symbol audit; MCU gate via linker sections, not review).
+- Zero-allocation data path proven by a counting `GlobalAlloc` test harness plus `xtask audit-zero-alloc` (linker/symbol audit; MCU gates are preventive first — no heap implementation linked, malloc-family symbols are link errors, RTOS dynamic allocation disabled — with the linker-section audit as a secondary assertion, never review).
 - Errors: typed enums via `thiserror`, mapping 1:1 to the status taxonomy (R4).
+- Fail-stop FFI: expected conditions return `Status`; a Rust panic in `drm-core`/`drm-ffi` is an internal invariant violation that terminates the node process (`extern "C"` non-unwinding boundary; release profile `panic = "abort"`; no `catch_unwind`; no `Internal` status — OS/environment failures map to precise codes).
 - API stability: `cargo-semver-checks` on every public crate (§6.4).
 
 ### 3.3 C and C++ (`bindings/c`, `bindings/cpp`)
@@ -182,7 +183,7 @@ Artifact rules:
 
 ### 3.4 Python (`bindings/python`)
 - Python 3.10+; `ruff check` + `ruff format`; `mypy --strict`; pytest.
-- Default reads return owned copies (`latest()`, `next()`); zero-copy only inside `with topic.borrow_latest()/borrow_next()` context managers; `.numpy()` views valid only inside the scope (forced-GC and exception tests per Phase 22).
+- Owned reads only (`latest()`, `next()`, `.numpy()`); no buffer protocol, `memoryview`, or NumPy view ever exposes DRM shared memory; the internal acquire→copy→release completes before control returns to Python (hazard-free after every call). PyO3 classes are `Send + Sync`; per-`Topic` native locks serialize endpoint calls; free-threaded CPython builds supported and tested (Phase 22).
 - The generated API exposes only manifest-declared topics; violations raise `ContractError`.
 
 ### 3.5 TypeScript and React (`apps/studio`, `packages/*`)
@@ -257,7 +258,7 @@ Required checks: all `ci.yml` jobs. Nightly `audit.yml` failures auto-file issue
 
 ### 6.1 Versioning and Release
 1. All `drm-*` crates share one lockstep version (0.x until API freeze); `Cargo.lock` committed.
-2. `drm.h` carries an ABI version with a compatibility suite against previously supported versions (Phase 7 gate).
+2. `drm.h` carries an ABI version with a one-way compatibility suite against previously supported versions (Phase 7 gate): older applications always run against newer libraries; newer applications run against older libraries only when they use no newer symbols (link-time), and node contract fingerprints record the required ABI.
 3. Releases flow only through `release.yml` (§5.2) — never ad-hoc publishing.
 
 ### 6.2 Requirement Registry
