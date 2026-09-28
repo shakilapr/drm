@@ -33,9 +33,9 @@ pub struct SerialLinkConfig { baud: u32, max_frame_bytes: u16 } // max_frame_byt
 - **I-SR2 BoundEnforced**: frames larger than `max_frame_bytes` rejected at build (verify V-RT) and refused at encode (defense-in-depth). Test: `serial_oversize`.
 - **I-SR3 CrcDetects**: the serial CRC32C covers the decoded header, payload, and optional end-to-end trailer — one canonical byte sequence shared by host and MCU encoders; mismatch ⇒ frame dropped + counter. Guaranteed detection: all single-bit errors and all bursts ≤ 32 bits (degree-32 property); longer or arbitrary multi-bit corruption is probabilistic — characterized by the corruption campaign, never claimed zero. Test: `serial_corruption`.
 - **I-SR4 EscapeReversible**: arbitrary bytes, including zero, survive COBS encode→decode byte-exact. Test: `serial_escape` property (random bytes ×10k).
-- **I-SR5 McuNoHeap**: MCU steady-state publish/read path allocates nothing — enforced by preventive barriers, audit secondary: (1) no heap implementation linked; (2) malloc-family symbols are link errors/traps; (3) RTOS dynamic allocation disabled where supported; (4) linker-section audit + target-test allocator hooks assert zero calls; stack high-water measured separately. Test: `mcu_zero_heap_audit` (barrier set green + zero reachable allocation symbols).
+- **I-SR5 McuNoHeap**: MCU steady-state publish/read path allocates nothing — enforced by preventive barriers, audit secondary: (1) no heap implementation linked; (2) malloc-family symbols are link errors/traps; (3) RTOS dynamic allocation disabled where supported; (4) linker-section audit + target-test allocator hooks assert zero calls; (5) stack high-water measured and gated — for every MCU task `measured_min_free_stack ≥ configured_stack_margin`, the margin declared per platform/build profile (never a universal percentage). Test: `mcu_zero_heap_audit` (barrier set green + zero reachable allocation symbols), `mcu_stack_margin`.
 - **I-SR6 ByteForByteInterop**: host encoder output decodes identically by MCU decoder and vice versa. Test: `mcu_host_interop` (cross-decode matrix).
-- **I-SR7 SerialBlockingBound**: UART transmission is non-preemptible; a lower-priority frame already on the wire blocks higher priorities for ≈ `10 × encoded_bytes / baud` (8N1; factor per declared character format). Verify computes `blocking_max = wire_time(max lower-priority frame)` per link and reports it against declared deadlines; unacceptable bounds require a smaller `max_frame_bytes`, higher baud, or a dedicated link — DRM never fragments a sample. Test: `serial_blocking_estimate`.
+- **I-SR7 SerialBlockingBound**: UART transmission is non-preemptible; a lower-priority frame already on the wire blocks higher priorities for ≈ `10 × encoded_bytes / baud` (8N1; factor per declared character format). This is the `T_inflight_lower_priority` term of the link safety latency bound (lanes-shaping I-LS11). Verify computes `blocking_max = wire_time(max lower-priority frame)` per link and reports it against declared deadlines; unacceptable bounds require a smaller `max_frame_bytes`, higher baud, or a dedicated link — DRM never fragments a sample. Test: `serial_blocking_estimate`.
 
 ## Functions
 
@@ -77,7 +77,7 @@ fn frame_decode(cfg: &SerialLinkConfig, buf: &mut ReadBuf) -> Result<Option<Seri
 1. All buffers static (`static` storage / linker-placed pools); no stack-overflow-prone recursion.
 2. Data path loops statically bounded (`for i in 0..MAX_FRAMES_PER_TICK`).
 3. Build prevents allocation: no heap implementation linked; malloc-family calls fail to link/trap; RTOS dynamic allocation off (e.g. `configSUPPORT_DYNAMIC_ALLOCATION=0`); system heap zero-sized by default where applicable.
-4. Linker-section audit + allocator hooks in target CI are secondary assertions: no `malloc/free/calloc/realloc/new` reachable from the publish/read call graph; stack high-water recorded.
+4. Linker-section audit + allocator hooks in target CI are secondary assertions: no `malloc/free/calloc/realloc/new` reachable from the publish/read call graph; stack high-water recorded and gated against the declared per-profile margin (I-SR5).
 
 ## Edge Cases & Errors
 
@@ -102,6 +102,7 @@ fn frame_decode(cfg: &SerialLinkConfig, buf: &mut ReadBuf) -> Result<Option<Seri
 | `serial_cobs_boundary` (decoded 253/254/255/507/508/509; host ↔ MCU byte-identical) | I-SR4/I-SR6 boundary vectors |
 | `serial_escape` property ×10k | I-SR4 |
 | `mcu_zero_heap_audit` (link/trap barriers + hooks) | I-SR5 |
+| `mcu_stack_margin` (measured min free stack vs declared per-profile margin) | I-SR5 |
 | `mcu_host_interop` (cross-decode matrix) | I-SR6 |
 | `serial_blocking_estimate` (verify report vs declared deadlines) | I-SR7 |
 | MCU steady-state suite on target | loop/stack bounds and allocation barriers pass |

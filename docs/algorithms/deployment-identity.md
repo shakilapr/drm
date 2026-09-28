@@ -91,11 +91,11 @@ fn clean(deploy: &DeploymentConfig) -> Result<CleanReport, Status> {
  // Backend-neutral teardown ("destroy/reclaim the deployment's segments"), not POSIX-only:
  // Linux shm_unlink; Windows sections die with their last handle (windows-backends.md I-W4).
  // Collect per-segment results; one failure never aborts the remaining segments.
- let mut failed = Vec::new();
+ let mut incomplete = Vec::new();
  for name in names_from_deployment_metadata(deploy) {
-  if let Err(e) = backend.destroy_segment(name) { failed.push((name, e)); }
+  if let Err(e) = backend.destroy_segment(name) { incomplete.push((name, e)); }
  }
- Ok(CleanReport::Cleaned { failed })
+ Ok(CleanReport::Cleaned) // `incomplete` surfaced as cleanup diagnostics; exclusive lock held throughout
 }
 ```
 
@@ -104,7 +104,7 @@ fn clean(deploy: &DeploymentConfig) -> Result<CleanReport, Status> {
 *Deployment generation (toolchain, `drm deploy`):*
 
 1. `DeploymentId::random()` (CSPRNG); serialized in `deployment.json` as a UUID/hex string (never a JSON number — 128-bit integers are not JSON-interoperable).
-2. Emit `deployment.json` with fingerprint expectations (from workspace-model contract fingerprints), routing tables, budgets, and the topic-slot table: active canonical topic paths sorted lexicographically → consecutive `u32` slots (deterministic, I-D1-aligned; no hash ⇒ no collision can ever block a legitimate channel).
+2. Emit `deployment.json` with fingerprint expectations (from workspace-model contract fingerprints), routing tables, budgets, and the topic-slot table: the stable runtime handle for each deployed topic, taken from the committed assignment lockfile `.drm/ids.json` (handle-system.md) — append-only, tombstones preserved, never re-sorted, so adding a topic never renumbers existing slots (handle-system I-H2/I-H5). A new deployment identity is generated when routing/placement/bandwidth changes or when handle assignment changes (`drm ids compact`/`reconcile`).
 3. Backend-safe opaque names derive from the ID: segments `drm.<encoded-id>.<slot>`, locks `<runtime_root>/<encoded-id>/…` (Linux `/run/drm`, Windows `%ProgramData%\drm`). The exact topic remains in the immutable descriptor. New deployment ⇒ fresh namespace (I-DP2); no live migration ever.
 
 *Node startup sequence:* guard (fingerprint) → shared active hold → per-topic `segment_open` (secondary validation) → run. Publishers additionally execute the restart barrier of [publisher-lifecycle.md](runtime/publisher-lifecycle.md): publish `first_valid_seq = write_seq` (excludes every prior-run sample), then advance `publisher_epoch` last — consumers derive `NoCurrentSample` from the epoch/floor until the first new-epoch sample.

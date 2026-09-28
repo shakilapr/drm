@@ -178,6 +178,7 @@ fn activate_precommitted(mapping: &Mapping, budget: &MemoryBudget) -> Result<(),
 | `precommit: true` on backend without locking | build error (capability check) |
 | Lock succeeds but budget accounting drifts at runtime | `drm-diag` measures RSS/commit live (architecture: runtime reality) — no static guess |
 | pool invariant discovered at attach (stale binary) | `InvalidConfig` (channel-metadata) — belt-and-braces after verify |
+| `pool_size < R+H+1` (H from declared borrowers + diagnostic range) | warning `DropFreeShortfall` (I-MB11); valid, but drop-free is unproven |
 | Nominal estimate exceeding worst case | impossible by construction (nominal ≤ worst); assert in tests |
 
 ## Test Matrix

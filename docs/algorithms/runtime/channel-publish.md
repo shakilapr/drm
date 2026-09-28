@@ -59,7 +59,7 @@ pub struct WriteLoan<'a> { // returned by write_acquire; consumed by commit/abor
 
 ```rust
 fn publish(ch: &Channel, src: &[u8]) -> Result<u64, Status> {
- validate_payload_shape(ch, src)?;                 // InvalidArg; no shared write
+ canon::validate_sample(src, ch.layout())?;        // I3/I-P3: shape+length valid before any write
  let mut guard = ch.try_publish_guard()?;          // Busy; non-blocking
  let seq = ch.write_seq.load(Acquire);
  let next = seq.checked_add(1).ok_or(SequenceExhausted)?;
@@ -109,7 +109,7 @@ fn write_commit(ch: &Channel, loan: WriteLoan<'_>, sample_len: usize) -> Result<
  // into the loan buffer through the generated codec (canon-codec.md two-region). Commit authors
  // no header, but the raw ABI path can bypass the encoder — validate the written sample before it
  // becomes visible (canon-codec I5: value or error, never UB); failure ⇒ nothing committed.
- canon::validate_sample(&loan.bytes()[..sample_len])?;
+ canon::validate_sample(&loan.bytes()[..sample_len], ch.layout())?;
  let ring_stamp = ch.ring.preflight_commit(loan.seq)?;             // RingStampExhausted
  ch.slot_generation(loan.slot).store(loan.generation, Relaxed);
  ring::commit(ch, loan.seq, loan.slot, loan.generation, ring_stamp);

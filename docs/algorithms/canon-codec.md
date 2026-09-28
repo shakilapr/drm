@@ -150,6 +150,20 @@ fn body_range(buf: &[u8], d: Descriptor, sample_len: usize) -> Result<Range<usiz
 // }
 // C callers get the same split: drm_validate_x(...) then drm_write_x(...).
 
+// Whole-sample decoder validation — the runtime entry point for RAW loan bytes written directly
+// into a slot (channel-publish write_commit) and for any untrusted canonical buffer. Given the
+// layout, recompute expected packed offsets and sample_len from the header counts and require exact
+// agreement (I5: value or error, never UB). Requires `buf.len() == derived sample_len` (no trailing
+// bytes); returns the validated sample_len.
+fn validate_sample(buf: &[u8], layout: &CanonLayout) -> Result<u64, Status> {
+ // Per descriptor (canon-codec §Decoder validation): count ≤ declared_max,
+ // offset == expected_packed_offset (canonical, element-aligned, ≥ header_end), bodies pairwise
+ // disjoint + ⊆ [0, sample_len); derived sample_len ≤ sample_max. Any violation ⇒ InvalidData (I5).
+ let sample_len = derived_sample_len(buf, layout)?;
+ for d in layout.descriptors() { body_range(buf, d, sample_len as usize)?; }
+ Ok(sample_len)
+}
+
 // ---- drm-workspace::canon (toolchain) ----
 fn emit_layout_json(model: &WorkspaceModel, topic: &TopicId) -> LayoutJson
 // per-field {name, offset, size, align, region} + header_end + sample_max — the I6 contract
@@ -205,5 +219,6 @@ fn emit_layout_json(model: &WorkspaceModel, topic: &TopicId) -> LayoutJson
 | ≥ 5 hand-computed struct fixtures (incl. multi-variable two-region) | match `layout_struct` |
 | counting-alloc on codec path | 0 allocations (I4) |
 | read-fuzz 5 min + Miri | I5 |
+| `sample_validate_reject` (raw loan bytes: bad count/offset/derived `sample_len` > `sample_max`) | I5 `validate_sample` ⇒ `InvalidData`, no commit |
 | crosscheck layout.json | I6 zero mismatch |
 | alignment fixtures (`T[<=N]` of u64; two-region tail packing on x86-64 + ARM64) | element-aligned bodies |
