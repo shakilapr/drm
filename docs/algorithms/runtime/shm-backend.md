@@ -17,7 +17,8 @@ Scope: Linux OS shared-memory backend — exclusive-create (`O_CREAT|O_EXCL`), o
 ## Data Structures
 
 ```rust
-pub struct SegmentName(Arc<str>); // "drm/<deployment_id>/<topic>" (deployment-identity.md scoping)
+pub struct SegmentName(Arc<str>); // "drm/<deployment_id>/<topic-slot>" (deployment-identity.md scoping;
+                                  // slot index from the toolchain-emitted topic-slot table — no hashing)
 pub struct Mapping { ptr: NonNull<u8>, len: usize } // RAII: Drop ⇒ munmap; fd closes after mmap
 
 pub enum ShmError {
@@ -33,7 +34,8 @@ pub trait ShmBackend {
  fn unlink(&self, name: &SegmentName) -> Result<(), ShmError>;
 }
 
-pub struct LockPaths(PathBuf); // runtime lock dir: /run/drm/<deployment_id> (NOT under /dev/shm)
+pub struct LockPaths(PathBuf); // derived: <runtime_root>/<deployment_id> (deployment-identity.md);
+                               // runtime root is environment config (/run/drm), never per-deployment paths
 impl LockPaths {
  fn active(&self) -> PathBuf { self.0.join("active.lock") } // one per deployment
  fn publisher(&self, topic: &str) -> PathBuf { self.0.join(format!("{topic}.publisher.lock")) }
@@ -43,8 +45,10 @@ impl LockPaths {
 }
 
 pub trait LockBackend {
- fn try_exclusive(&self, path: &Path) -> Result<LockHandle, ShmError>; // LOCK_EX|LOCK_NB
- fn try_shared(&self, path: &Path) -> Result<LockHandle, ShmError>; // LOCK_SH
+ // Lock descriptors are opened O_CLOEXEC (I9): flock binds to the open file description, so a
+ // fork/exec-inherited duplicate would keep a deployment "active" after its node exits.
+ fn try_exclusive(&self, path: &Path) -> Result<LockHandle, ShmError>; // LOCK_EX|LOCK_NB; O_CLOEXEC
+ fn try_shared(&self, path: &Path) -> Result<LockHandle, ShmError>; // LOCK_SH; O_CLOEXEC
  fn release(self, h: LockHandle); // Drop ⇒ release
 }
 // Single lock model (deployment-identity.md): one deployment active.lock (nodes hold shared,
@@ -65,6 +69,7 @@ pub enum CleanReport { Cleaned, ActiveUntouched }
 - **I6 QuotaExplicit**: `/dev/shm` exhaustion ⇒ `QuotaExceeded`, no partial segment. Test: `quota_edge`.
 - **I7 CreateRollback**: every failure after exclusive creation closes the fd and unlinks the incomplete name. Test: `create_failure_matrix`.
 - **I8 ActiveHold**: every running node holds one shared deployment lock for its lifetime. Test: `active_hold_lifecycle`.
+- **I9 LockNonInheritable**: lock descriptors are `O_CLOEXEC`; a `fork`/`exec`-spawned helper can never inherit a DRM lock hold (liveness: an inherited shared hold would block `drm clean` after the owning node exits). Test: `lock_not_inherited` (parent holds shared lock, fork+execs helper, parent exits, helper alive ⇒ `clean` succeeds).
 
 ## Functions
 
@@ -135,6 +140,12 @@ fn identity_dead_proven(id: &ProcessIdentity) -> bool {
 root object until every mapping, publisher lock, and consumer registration is closed. Partial startup
 unwinds mappings first and the active hold last.
 
+*fork handling (architecture §Process Lifecycle (fork)):* lock descriptors are opened `FD_CLOEXEC` (I9);
+`pthread_atfork` child handlers close any still-inherited lock descriptors **without** issuing `LOCK_UN`
+(`flock` binds to the open file description — unlocking one duplicate would release the parent's hold)
+and invalidate every inherited DRM runtime object via the per-process incarnation cookie. Public
+contract: after `fork()`, inherited DRM objects are invalid in the child — `exec` or reattach first.
+
 *Cleanup probe (`drm clean`):*
 
 1. `try_exclusive(paths.active())` = `/run/drm/<deployment_id>/active.lock`; success ⇒ no live holders.
@@ -171,3 +182,4 @@ unwinds mappings first and the active hold last.
 | `shm_kill` (8 scenarios × 100) | recovery each time |
 | `create_failure_matrix` | I7 at truncate/reserve/map/init injection points |
 | `active_hold_lifecycle` | I8 |
+| `lock_not_inherited` (fork+exec helper survives node exit) | I9: `clean` succeeds while helper lives |

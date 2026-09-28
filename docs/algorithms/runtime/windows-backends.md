@@ -64,9 +64,13 @@ fn identity_dead_proven(id: &ProcessIdentity) -> bool {
  WaitForSingleObject(h, 0) == WAIT_OBJECT_0
 }
 
-fn precommit(mapping: &Mapping) -> Result<(), Status> {
+fn precommit_and_prove(mapping: &Mapping) -> Result<(), Status> {
+ // Backend-defined proof (memory-budget.md seam — parity with Linux mlock):
+ // The section was created with PAGE_READWRITE on INVALID_HANDLE_VALUE = fully committed
+ // (SEC_COMMIT parity), so VirtualLock's committed-pages precondition holds by construction;
+ // reservation-only ranges are invalid input, never a DRM state.
  if !VirtualLock(mapping.base, mapping.len) { return Err(LockFailed); } // I-W6: refuse activation upstream
- if !query_working_set_all_resident(mapping) { return Err(LockFailed); }
+ if !query_working_set_all_resident(mapping) { return Err(LockFailed); } // PSAPI_WORKING_SET_EX Valid|Locked
  Ok(())
 }
 ```
@@ -74,10 +78,12 @@ fn precommit(mapping: &Mapping) -> Result<(), Status> {
 ## Protocols
 
 *Cleanup (`drm clean` parity):* exclusive `LockFileEx` on
-`<lock_dir>\<deployment_id>\active.lock` (lock dir: `%ProgramData%\drm\`). Success means every DRM
-node has closed its non-inheritable section handles, so named pagefile sections already ceased to
-exist. Cleanup deletes only the deployment's lock files/directories and reports `Cleaned`. Failure
-returns `ActiveUntouched`. Publisher locks use non-inheritable file handles and a fixed byte range.
+`<runtime_root>\<deployment_id>\active.lock` (runtime root: `%ProgramData%\drm\`; everything below it
+derives solely from the deployment ID — deployment-identity.md, no per-deployment path config).
+Success means every DRM node has closed its non-inheritable section handles, so named pagefile
+sections already ceased to exist. Cleanup deletes only the deployment's lock files/directories and
+reports `Cleaned`. Failure returns `ActiveUntouched`. Publisher locks use non-inheritable file
+handles and a fixed byte range.
 
 *Dead-incarnation proof:* identical contract as [exhaustion-reclamation.md](exhaustion-reclamation.md): reclaim only when `identity_dead_proven` returns true; access or query failure preserves the hazard.
 
@@ -89,7 +95,9 @@ returns `ActiveUntouched`. Publisher locks use non-inheritable file handles and 
 | `VirtualLock` working-set limits | `LockFailed` ⇒ refuse activation (I-W6); runner config documented |
 | Section name length limits (LPCTSTR) | deployment/topic names length-validated at verify |
 | Mandatory locks absent (Windows) | `LockFileEx` = advisory parity; all DRM locks advisory by design |
-| Handle inheritance into children | handles opened `bInheritHandle=false` — no accidental sharing |
+| Handle inheritance into children | handles opened `bInheritHandle=false` — no accidental sharing (Linux parity: shm-backend I9 `O_CLOEXEC`) |
+| Named section still openable after `Cleaned` | external/stale non-DRM holder — reported, never force-reclaimed (pagefile sections have no unlink; I-W4) |
+| `LockFileEx` transiently busy right after process death | OS release lag — treated as active (`Busy`), never as justification to force-destroy the namespace |
 
 ## Test Matrix
 

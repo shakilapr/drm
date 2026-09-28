@@ -55,7 +55,10 @@ pub struct RouteOverrides {
  force: SortedMap<TopicName, Vec<LinkId>>,
 }
 
-pub struct ContractFingerprint([u8; 16]); // hash inputs below — see contract_fingerprint()
+pub struct ContractFingerprint([u8; 16]); // BLAKE3 output truncated to 128 bits (see contract_fingerprint())
+                                          // Width parity: schema_hash/layout_hash are [u8; 16] too
+                                          // (channel-metadata.md); a freak fingerprint collision is
+                                          // still caught by per-segment schema/layout validation at attach.
 ```
 
 Model construction is **total-reload**: every parse rebuilds the full model (no incremental caches — architecture §In-Memory Workspace Model).
@@ -100,11 +103,19 @@ fn build(tree: &FileTree) -> Result<WorkspaceModel, Vec<ModelError>> {
 }
 
 fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerprint {
- // EXACTLY the inputs fixed by architecture §Node Interface Identity:
- hash( ABI_VERSION
- ⊕ for topic in node.publish ∪ node.consume (sorted):
- topic_name ⊕ schema_hash(topic) ⊕ layout(topic) ⊕ direction
- ⊕ node.publish ⊕ node.consume ) // declared interfaces themselves
+ // EXACTLY the inputs fixed by architecture §Node Interface Identity, over a PINNED canonical
+ // serialization (interop-reproducible; the hash is defined over these bytes and nothing else):
+ //
+ //   b"DRM-CONTRACT\0"                domain tag
+ //   u32 LE  FINGERPRINT_FORMAT_VERSION
+ //   u32 LE  ABI_VERSION
+ //   u32 LE  interface_count
+ //   per interface, sorted by canonical topic path (map iteration order can never leak in):
+ //     u8      direction (0 = publish, 1 = consume)
+ //     u32 LE  topic_path_len; topic_path bytes (UTF-8)
+ //     [16]u8  canonical layout hash (canon-codec.md)
+ //
+ // Hash: BLAKE3 over exactly these bytes, truncated to 16 bytes ([u8; 16]).
  // Deliberately EXCLUDED: other nodes, packages, topology, links, build config.
  // ⇒ unrelated schema edits cannot change unaffected nodes (I-D4).
 }
@@ -140,6 +151,9 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
 | conflict fixtures (dup topic, dup node, dangling placement, unknown link) | rejected with location |
 | communication-loop fixture | builds, no cycle error |
 | fingerprint isolation | I-D4 |
+| fingerprint: shuffled manifest order / map iteration | identical bytes (canonical serialization, sorted inputs) |
+| fingerprint: used schema modified / direction changed / ABI bumped / layout changed | different bytes |
+| deployment.json `deployment_id` field | UUID/hex string, never a JSON number (128 bits > JSON-safe range) |
 | external endpoint fixtures | I-D8 (unknown link/topic rejected) |
 | timing/route override fixtures | I-D9 |
 | round-trip ×5 000 | I-D5 |
