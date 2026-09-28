@@ -151,6 +151,7 @@ fn compact(t: &HandleTable, ack: bool) -> Result<HandleTable, Status> {
 | `handle_delete_readd` | I-H3 |
 | `handle_compact_gate` (no `--yes`) | refuses |
 | `handle_compact_scope` (bindings untouched; MCU table consumers rebuilt) | I-H4/I-H7 |
+| `handle_change_no_codegen` (schema/API change never rewrites bindings) | I-H7 |
 | `handle_no_reuse` (tombstone + collision reservation) | I-H5 |
 | `handle_exhaustion` (u32 boundary) | I-H6 typed error, no overflow |
 | `handle_reconcile_collision` (41=different topics) | both reassigned; 41 reserved |

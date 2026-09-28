@@ -45,7 +45,7 @@ pub struct PoolState<'ccb> {
 
 - **I-HZ1 NeverOverwritten**: while a generation-bearing hazard word names slot `s`, publisher reuse of `s` is impossible. Test: `hazard_never_overwritten` (Loom + storm).
 - **I-HZ2 NoABA**: a stale borrow can never validate as fresh; ABA rejection uses the **64-bit** generation carried in the self-describing ring entry, verified on the SC re-read. Test: `hazard_aba` (Loom with deliberately tiny generation width; plus long-run wrap).
-- **I-HZ3 RacePointCoverage**: every race point of the acquisition protocol has a named forcing test. Test: `hazard_race_matrix` + `hazard_loom`.
+- **I-HZ3 RacePointCoverage**: every race point of the acquisition protocol has a named forcing test. Test: `race_r1..r6` (race matrix) + `hazard_loom`.
 - **I-HZ4 MultiReaderShare**: ≥ 2 consumer endpoints borrowing the same latest sample each protect that one slot via their own hazard word; publisher never corrupts it. Test: `hazard_multi_reader`.
 - **I-HZ5 ReleaseFrees**: scope exit clears protection (SeqCst); slot becomes reusable once no history entry references it either. Test: `hazard_release_reusable`.
 - **I-HZ6 SingleInProgress**: at most one publish in progress per topic; concurrent publish ⇒ `Status::Busy`. Test: `publish_busy_guard`.

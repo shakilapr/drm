@@ -7,7 +7,7 @@ Canonical pseudocode for every DRM subsystem, grouped by module. Implementation 
 ## Conventions
 
 1. **Style**: Rust-flavored pseudocode (`fn`, `match`, `Option`, `Result`, `enum`) for functions; **numbered steps** for cross-process protocols (SHM, locks, recovery). Pseudocode is a reviewable contract, not compilable code — implementation details (error paths via `?`, interior mutability) are elided.
-2. **REQ citations**: docs use provisional requirement slugs (`REQ-AREA-<slug>`, areas `CORE|TOOL|ROUTE|SPATIAL|BIND|STUDIO|OPS|QAL` per codebase.md R7). Numeric IDs (`REQ-TOOL-001…`) are bound in `docs/req/registry.csv` during requirement extraction; each doc carries a `## REQ Bindings` table updated in the same PR as extraction.
+2. **REQ citations**: each doc's `## REQ Bindings` table maps its provisional slug (`REQ-AREA-<slug>`, areas `CORE|TOOL|ROUTE|SPATIAL|BIND|STUDIO|OPS|QAL` per codebase.md R7) to a numeric ID (`REQ-TOOL-001…`) in `docs/req/registry.csv`. Bound tables are updated in the same PR as any registry change; the registry is the canonical list.
 3. **Invariants**: `I1, I2, …` — each invariant names the test that proves it. Tests live in the locations fixed by codebase.md §4 (per-crate / `tests/{conformance,stress,soak,fuzz,fixtures}`).
 4. **Error taxonomy**: every error path maps to `drm-types::Status` (codebase R4). Docs state the mapping; no panics on data paths.
 5. **Templates**: every doc follows §Doc Template below.
@@ -30,7 +30,7 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 |---|---|---|
 | [runtime/shm-backend.md](runtime/shm-backend.md) | 8 | Shared-memory create/classify/map, locks, fork sanitization, mlock precommit (Linux) |
 | [runtime/ring-history.md](runtime/ring-history.md) | 10 | Sequence-history ring, retention, commit/lookup ordering |
-| [runtime/channel-metadata.md](runtime/channel-metadata.md) | 5, 17 | Channel descriptor, attach validation, epoch observe/reset |
+| [runtime/channel-metadata.md](runtime/channel-metadata.md) | 5, 17, 18 | Channel descriptor, attach validation, epoch observe/reset |
 | [runtime/consumer-registration.md](runtime/consumer-registration.md) | 14–16 | Consumer record claim, close, dead takeover, generation-safe reuse |
 | [runtime/cursor-delivery.md](runtime/cursor-delivery.md) | 11 | Reader cursors, borrow/copy × latest/next, exact GAP algebra |
 | [runtime/overflow-policies.md](runtime/overflow-policies.md) | 12 | Overwrite lapping, reject gating, required sequential consumers |
@@ -102,7 +102,7 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 ```markdown
 # <Subsystem> Algorithms
 Scope: <one paragraph> · Normative source: architecture.md §<section>
-## REQ Bindings            <!-- provisional slugs → numeric IDs after registry extraction -->
+## REQ Bindings            <!-- slug → numeric ID (docs/req/registry.csv) -->
 ## Data Structures         <!-- field / type / offset / atomic-ordering tables -->
 ## Invariants              <!-- I1..In, each bound to a named test -->
 ## Functions               <!-- Rust-flavored pseudocode blocks -->

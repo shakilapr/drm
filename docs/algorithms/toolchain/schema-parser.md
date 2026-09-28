@@ -1,6 +1,6 @@
 # Schema Parser Algorithms
 
-Scope: lexing, parsing, validation and canonical rendering of `.drm` topic-definition files. Topic attributes use an `@` sigil so any ordinary identifier remains a legal field name. Implements architecture.md §Topic Definitions (grammar, structural bounds, enums, topic attributes). Owner: E2 (crate `drm-workspace::parser`, `drm-workspace::render`). Gate criteria map 1:1 to invariants I1–I4 below.
+Scope: lexing, parsing, validation and canonical rendering of `.drm` topic-definition files. Topic attributes use an `@` sigil so any ordinary identifier remains a legal field name. Implements architecture.md §Topic Definitions (grammar, structural bounds, enums, topic attributes). Owner: E2 (crate `drm-workspace::parser`, `drm-workspace::render`). Phase 2. Gate criteria map 1:1 to invariants I1–I4 below.
 
 ## REQ Bindings
 
@@ -183,3 +183,6 @@ All parse/validation errors are `Err(Vec<Diagnostic>)` — no panic paths. Mappi
 | raw-byte fuzz corpus incl. invalid UTF-8 | no panic/hang; valid-prefix accepted (I3) |
 | proptest round-trip ≥ 10 000 | I4 semantic equality holds |
 | blind spot-check ×10 (test lead) | messages name actual defect |
+| `parser_corpus_valid` | I1: every valid fixture → `Ok` |
+| `parser_corpus_invalid` | I2: every invalid fixture → `Err` with vocabulary reason + span |
+| `roundtrip` (proptest + 30 fixed fixtures) | I4: semantic AST equality |

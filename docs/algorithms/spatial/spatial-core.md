@@ -143,7 +143,7 @@ fn emit_mcu_constants(plan: &CollapsePlan, target: McuTarget) -> CodeArtifact
 2. If any node's `[spatial] write` declares the frame ⇒ **dynamic**.
 3. Else if a `transform` (translation/rotation) is declared ⇒ **static** (nominal offset relative to `parent:`).
 4. Both ⇒ conflict error; neither ⇒ conflict error (dangling frame).
-5. Single-writer rule enforced over dynamic edges at model level (verify V-SPATIAL family).
+5. Single-writer rule enforced over dynamic edges at model level (verify V-SPAT family).
 
 *Static collapse (§Build-Time Static Collapse):*
 

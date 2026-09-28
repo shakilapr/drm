@@ -39,7 +39,7 @@ pub struct FreshnessTracker {
 
 - **I-L1 SingleAuthority**: concurrent publisher opens ⇒ exactly one holds `.publisher.lock`; the loser refuses (no takeover). Test: `publisher_race` (two opens race).
 - **I-L2 KernelRelease**: kill active publisher ⇒ lock released by kernel ⇒ restart re-acquires without heartbeat. Test: `publisher_kill_restart`.
-- **I-L3 EpochOnce**: each successful publisher-authority acquisition advances `publisher_epoch` once before returning an active publisher. A process killed after publication consumed that epoch; its successor advances again. Test: `epoch_increment_once` (100 restart cycles).
+- **I-L3 EpochOnce**: each successful publisher-authority acquisition advances `publisher_epoch` once before returning an active publisher. A process killed after publication consumed that epoch; its successor advances again. Test: `publisher_kill_restart` (100 restart cycles).
 - **I-L4 ConsumerReset**: consumer observing epoch' > epoch resets cursor; no pre-restart sequence is ever returned post-restart. Test: `epoch_consumer_reset`.
 - **I-L5 NoCrossEpochReads**: samples from the previous run are never misattributed to the new run (sequence may continue numerically; epoch disambiguates). Test: `epoch_no_confusion`.
 - **I-L6 FirstValidWatermark**: before activation, a restarting publisher sets `first_valid_seq = write_seq` (the preserved next sequence), excluding every prior-run sample. Test: `epoch_valid_range`.

@@ -286,6 +286,8 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 | `spatial_query_latest` (asynchronous edge rates + update races vs single-instant oracle) | I-Q3: coherent t* |
 | `spatial_query_at/predict/delayed_view` | I-Q4..I-Q6 vs oracle |
 | `spatial_predict_screw` (screw motion vs exponential-map oracle) | I-Q5 |
+| `spatial_query_predict` (body-frame twist integration vs oracle) | I-Q5 |
+| `spatial_delayed_view` (delayed composite vs oracle) | I-Q6 |
 | `spatial_interp_guard` (relocalize + reparent + calibration-jump fixtures) | I-Q7 |
 | `spatial_reparent_temporal` (query t < t₁) | I-Q8: original hierarchy |
 | `spatial_reparent_modes` ×3 vs oracle | I-Q9 |

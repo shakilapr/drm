@@ -5,7 +5,7 @@ reclamation, payload write, generation advance, ring commit, and diagnostics —
 one ordering: copy publish (`src` slice) and loan publish (`write_acquire`/`commit`/`abort`, the
 architecture's bulk direct-write path). Implements architecture.md §Publisher Slot Selection,
 §History Overflow, §Zero Data-Path Allocation, §Bulk Data (direct write into a pre-allocated slot).
-Owner: E1 (`drm-core::channel`). Depends on all runtime storage protocols.
+Owner: E1 (`drm-core::channel`). Phases 12–15. Depends on all runtime storage protocols.
 
 ## REQ Bindings
 
@@ -16,7 +16,7 @@ Owner: E1 (`drm-core::channel`). Depends on all runtime storage protocols.
 | `REQ-CORE-publish-error-effects` | failed publish never changes visible history | `REQ-CORE-050` |
 | `REQ-CORE-publish-zero-alloc` | steady-state data path reuses fixed storage | `REQ-CORE-053` |
 | `REQ-CORE-publish-counter-bounds` | sequence and generation never wrap | `REQ-CORE-049` |
-| `REQ-CORE-publish-loan-form` | loan acquire/commit/abort; abort and failed commit invisible | `REQ-CORE-052` |
+| `REQ-CORE-publish-loan-form` | loan acquire/commit/abort; abort and failed commit invisible | `REQ-CORE-100` |
 
 ## Data Structures
 

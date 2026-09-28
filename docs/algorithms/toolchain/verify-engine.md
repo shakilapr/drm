@@ -119,3 +119,9 @@ fn fail(check: CheckId, msg: impl Display, reqs: &[ReqId]) -> VerifyError {
 | tight deadline vs nominal cadence | warning, labeled estimate |
 | estimate-labeling | `ESTIMATE` prefix present; no "guarantee" wording |
 | example workspaces in CI | `drm verify` green |
+| `verify_catalogue` | I-V1: every check ID has ≥ 1 negative + ≥ 1 positive fixture |
+| `verify_determinism` (×100) | I-V2: identical report |
+| `verify_msg_citations` | I-V3: every message cites ≥ 1 REQ ID + check ID |
+| `verify_boundary_labels` | I-V4: `ESTIMATE` labeled; no "guarantee" wording |
+| `verify_no_shortcircuit` (multiple failures) | I-V5: all failures collected |
+| `verify_deadlines_independent` | I-V6: valid; no `V-CMP` failure |

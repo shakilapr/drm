@@ -97,13 +97,13 @@ Model construction is **total-reload**: every parse rebuilds the full model (no 
 - **I-D2 ConflictRejection**: duplicate topic/node/package identity, unknown topic in publish/consume, dangling placement, unknown link endpoint ⇒ all failures collected with locations; duplicates retained in a staging map (`BTreeMap<Name, Vec<Definition>>`) until reported so every duplicate site is named. Test: `model_conflicts`, `model_all_duplicates_reported`.
 - **I-D3 LoopsHarmless**: A publishes B-consumes, B publishes A-consumes ⇒ model builds fine (no build-cycle error). Test: `communication_loop`.
 - **I-D4 FingerprintIsolation**: edit topic `camera/front` ⇒ `controller` fingerprint unchanged; edit a topic that `controller` itself uses ⇒ changed. Test: `fingerprint_isolation`.
-- **I-D5 ReproducibleModel**: `render_model(parse(tree))` round-trips byte-identically (feeds property test).
+- **I-D5 ReproducibleModel**: `render_model(parse(tree))` round-trips byte-identically (feeds property test). Test: `model_roundtrip` (×5 000).
 - **I-D6 SpatialInference**: static/dynamic edge classification is deterministic — node declares `[spatial] write` ⇒ dynamic; `transform` given + no writer ⇒ static; both ⇒ conflict error; neither ⇒ dangling-frame error (spatial-core I-S10). Test: `spatial_inference`.
 - **I-D7 SpatialSingleWriter**: two nodes writing one dynamic spatial edge ⇒ compiler conflict before deployment (spatial-core I-S11). Test: `spatial_single_writer`.
 - **I-D8 ExternalVertices**: `[external.*]` endpoints with `link` + `consume`/`produce` are first-class graph vertices; unknown link or topic ⇒ error. Test: `model_external`.
 - **I-D9 TimingOverrides**: publisher `expected_rate`, consumer `deadline`, and `[routing]` overrides (prefer/deny/force/export_limit) are parsed into the model, normalized to typed values, and preserved by render. Test: `model_timing_overrides`.
 - **I-D10 TypedRates**: dimensioned rate/duration strings are parsed exactly once at model build into checked rational `Rate`s; downstream algorithms never re-parse strings; `rate_span` retained for diagnostics only. Invalid dimension ⇒ model error at build. Test: `model_typed_rates`, `model_bad_rate_unit`.
-- **I-D11 ContractMetadata**: consumer `read_mode`, `required`, and `reliability` requirement are model data (REQ-TOOL-069); `reject`-topic required-sequential counts (overflow-policies.md) derive from `consume_meta`.
+- **I-D11 ContractMetadata**: consumer `read_mode`, `required`, and `reliability` requirement are model data (REQ-TOOL-069); `reject`-topic required-sequential counts (overflow-policies.md) derive from `consume_meta`. Test: `model_contract_meta`.
 - **I-D12 Layering**: model build enforces structural/referential integrity only (REQ-TOOL-070). Single-writer, route policy, reliability-vs-transport, budgets, and compatibility are exclusively `drm verify` checks (verify-engine.md). Test: `model_no_policy_checks` (two publishers ⇒ model builds; verify fails).
 - **I-D13 TimingModeResolution**: topic `timing` parses (default `Auto`, REQ-OPS-016); `Auto` resolves deterministically from the consumer set; explicit `Off` + declared consumer deadline ⇒ single conflict error with location. Test: `model_timing_resolution`.
 
@@ -205,3 +205,15 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
 | round-trip ×5 000 | I-D5 |
 | spatial inference matrix (write-only / transform-only / both / neither) | I-D6 |
 | two-writers-one-edge fixture | I-D7 conflict |
+| `model_conflicts` / `model_all_duplicates_reported` | I-D2 |
+| `communication_loop` | I-D3: builds, no cycle error |
+| `fingerprint_isolation` | I-D4 |
+| `model_roundtrip` (×5 000) | I-D5 |
+| `spatial_inference` | I-D6 |
+| `spatial_single_writer` | I-D7 |
+| `model_external` | I-D8 |
+| `model_timing_overrides` | I-D9 |
+| `model_typed_rates` / `model_bad_rate_unit` | I-D10 |
+| `model_contract_meta` | I-D11 |
+| `model_no_policy_checks` (two publishers ⇒ model builds; verify fails) | I-D12 |
+| `model_timing_resolution` | I-D13 |

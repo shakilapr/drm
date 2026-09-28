@@ -217,3 +217,4 @@ fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
 | `reliable_branch_stall` (bounded branch queue, stalled receiver) | I-RT17: branch session fails, others continue, memory bounded |
 | `stream_record_bound` (declared length > generated max) | I-RT18: protocol error, no allocation |
 | `remote_restart_reset` (epoch max → 0) | I-RT9: wrap-free restart recognized |
+| `e2e_integrity_profile` (CRC32C over `stream_epoch`/`source_seq`/`payload_len`/payload; transit remap preserves covered fields + trailer) | I-RT12 |
