@@ -37,8 +37,8 @@ pub struct WriteLoan<'a> { // returned by write_acquire; consumed by commit/abor
  next: u64,
  generation: u64, // reserved (current + 1); stored only at commit
  capacity: usize, // acquired sample bound <= codec sample_max (canon-codec two-region)
-} // the loan exposes `data` = the canonical sample buffer at the slot; the caller writes fixed
-  // fields and variable bodies through generated codec accessors (no fixed-offset length header)
+} // `bytes()` = the writable canonical sample buffer at the slot; the caller writes fixed fields
+  // and variable bodies through generated codec accessors (no fixed-offset length header)
 ```
 
 ## Invariants
@@ -95,7 +95,9 @@ fn write_acquire(ch: &Channel, requested: usize) -> Result<WriteLoan<'_>, Status
  };
  let generation = ch.slot_generation(slot)
   .load(Relaxed).checked_add(1).ok_or(GenerationExhausted)?;
- Ok(WriteLoan { guard, slot, seq, next, generation, capacity: requested })
+ // Fixed-size topics acquire the exact sample size; variable topics acquire the request (I-A10).
+ let capacity = if ch.is_fixed_size() { ch.fixed_len() } else { requested };
+ Ok(WriteLoan { guard, slot, seq, next, generation, capacity })
 }
 
 // Commit = the ONLY step that touches ring/generation/write_seq. Ring preflight lives here:
@@ -103,10 +105,12 @@ fn write_acquire(ch: &Channel, requested: usize) -> Result<WriteLoan<'_>, Status
 fn write_commit(ch: &Channel, loan: WriteLoan<'_>, sample_len: usize) -> Result<u64, Status> {
  if sample_len > loan.capacity { return Err(InvalidArg); }         // never committed (I-PB2)
  if ch.is_fixed_size() && sample_len != ch.fixed_len() { return Err(InvalidArg); }
- let ring_stamp = ch.ring.preflight_commit(loan.seq)?;             // RingStampExhausted
  // The canonical header (fixed fields + descriptor block) and tail bodies were already written
- // into the loan buffer through the generated codec (canon-codec.md two-region) — commit authors
- // no header and assumes no fixed-offset length; it only validates the final sample_len.
+ // into the loan buffer through the generated codec (canon-codec.md two-region). Commit authors
+ // no header, but the raw ABI path can bypass the encoder — validate the written sample before it
+ // becomes visible (canon-codec I5: value or error, never UB); failure ⇒ nothing committed.
+ canon::validate_sample(&loan.bytes()[..sample_len])?;
+ let ring_stamp = ch.ring.preflight_commit(loan.seq)?;             // RingStampExhausted
  ch.slot_generation(loan.slot).store(loan.generation, Relaxed);
  ring::commit(ch, loan.seq, loan.slot, loan.generation, ring_stamp);
  ch.write_seq.store(loan.next, Release);                           // linearization point
@@ -153,8 +157,9 @@ in-progress loan slot is unreachable until commit, exactly like the copy form's 
 | 4 | required consumer gates retirement | `QueueFull` | none |
 | 5 | no reusable slot; `publish_exhausted` after the drop decision (RT: flag only) | `PoolExhausted` | both drop counters +1 only |
 | 6 | selected slot generation/ring stamp exhausted | counter-exhaustion status | none |
-| 7 | loan `write_abort` or failed `write_commit` | per case | none (I-PB2) |
-| 8 | success | — | one committed sample |
+| 7 | loan commit with malformed canonical sample | `InvalidData` | none (I-PB2) |
+| 8 | loan `write_abort` or failed `write_commit` | per case | none (I-PB2) |
+| 9 | success | — | one committed sample |
 
 ## Test Matrix
 

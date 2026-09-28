@@ -63,14 +63,13 @@ typedef struct drm_consumer drm_consumer;   // opaque
 
 typedef struct drm_borrow_view { // caller-owned; caller stack/heap, never drm-owned
  const void *data; // points into the consumer's LOCAL mapping; valid until release
- size_t len; // observable sample length: bulk byte topics = stored u32 header;
-             // struct-variable topics = derived from canonical counts (canon-codec)
+ size_t len; // committed canonical sample length (codec-defined; canon-codec)
  uint64_t token; // opaque; 0 = invalid
 } drm_borrow_view;
 
 typedef struct drm_write_view { // publisher loan; valid until commit/abort
- void *data; // slot bytes in the publisher's LOCAL mapping
- size_t capacity; // acquired capacity <= structural max
+ void *data; // slot start in the publisher's LOCAL mapping (canonical sample buffer)
+ size_t capacity; // caller's max write size: fixed size for fixed topics, else acquired request
  uint64_t token; // opaque; 0 = invalid
 } drm_write_view;
 
@@ -103,7 +102,7 @@ pub struct PublisherBox { auth: EndpointAuth, core: drm_core::Publisher }
 - **I-A7 HandleThreadSafety**: thread-safety is per handle. A publisher endpoint is shared-safe: concurrent `drm_publish_copy`/`drm_write_*` on one publisher produce exactly one in-progress write; losers get `Busy` with no data race and no corrupted slot (core guard, hazard-protocol I-HZ6). A consumer endpoint serves one borrower (one cursor, one outstanding borrow); concurrent borrowers claim distinct records via `drm_consumer_open` (lease, REQ-BIND-010). `drm_context` is shared-safe for concurrent endpoint opens. A close is never concurrent with other calls on the same handle. Tests: `ffi_publish_storm` (TSan; exactly one winner, zero races), `ffi_consumer_lease`, debug misuse assertions.
 - **I-A8 OneWayCompat**: symbols are append-only, never renamed; a layout change bumps the ABI major. Older applications always run against newer libraries. Newer applications run against older libraries only when they use no newer symbols (link failure otherwise); node contract fingerprints record the required ABI (deployment-identity.md). Test: `abi_compat` (v0 golden suite × current exports) + symbol-presence lint.
 - **I-A9 StatusRep**: C `drm_status` is a fixed `int32_t` with explicit values; language bindings map unknown codes to `UnknownStatus(code)` — an old binding never materializes a future code as a `repr(C)` enum. Tests: `status_rep_static_asserts` (GCC/Clang/MSVC), `status_unknown_code`.
-- **I-A10 LoanDiscipline**: `drm_write_acquire` validates the requested capacity against the structural max **before** the publish guard; `write_commit(len)` accepts `len ≤ acquired capacity` (fixed-size topics: `len ==` fixed size) and is the only step that touches ring/generation/`write_seq`; `write_abort` and a failed commit leave visible channel state unchanged (channel-publish I-PB2); a slot acquired but never committed holds junk no sequence references. Tests: `ffi_loan_discipline`, `ffi_loan_abort_invisible`.
+- **I-A10 LoanDiscipline**: `drm_write_acquire` validates the requested bound against the codec `sample_max` **before** the publish guard; the acquired `capacity` is the topic's fixed size for fixed-size topics (request is a hint) or `requested` for variable topics; the caller writes the complete canonical sample through the generated codec; `write_commit(len)` validates the written sample (canon-codec I5) and accepts `len ≤ acquired capacity` (fixed-size topics: `len ==` fixed size) as the only step that touches ring/generation/`write_seq`; write tokens follow borrow discipline (0 ⇒ `InvalidArg`, stale/foreign/double ⇒ `InvalidBorrow`); `write_abort` and a failed commit leave visible channel state unchanged (channel-publish I-PB2); a slot acquired but never committed holds junk no sequence references. Tests: `ffi_loan_discipline`, `ffi_loan_abort_invisible`.
 
 ## Functions
 
@@ -179,7 +178,8 @@ pub unsafe extern "C" fn drm_write_acquire(
 {
  zero_out(out)?; // I-A2: writes drm_write_view zeros
  if p.is_null() { return DRM_ERR_INVALID_ARG; }
- // requested > structural max ⇒ InvalidArg BEFORE guard (I-A2/I-A10);
+ // requested > structural max ⇒ InvalidArg BEFORE guard (I-A2/I-A10); capacity = topic fixed
+ // size for fixed-size topics (request is a hint), else requested;
  // then guard CAS → Busy loser, seq/overflow checks, slot select, generation reserve.
  // At most ONE loan is outstanding per publisher at any instant — the busy guard is the
  // registry; a second acquire while a loan is open ⇒ Busy (no per-loan allocation).
@@ -190,11 +190,11 @@ pub unsafe extern "C" fn drm_write_commit(
  p: *mut drm_publisher, token: u64, len: usize) -> drm_status
 {
  if p.is_null() { return DRM_ERR_INVALID_ARG; } // I-A2
- // token lookup; len <= acquired capacity else InvalidArg (I-A10);
- // bulk byte topics: write the u32 length header; struct-variable topics: caller-encoded
- // counts are part of the canonical sample — nothing extra to write, sample_len is derived
- // (canon-codec);
- // ring preflight/commit + generation store + write_seq release (channel-publish.md).
+ // token discipline (I-A10): token 0 ⇒ InvalidArg; stale/foreign/double ⇒ InvalidBorrow;
+ // len <= acquired capacity else InvalidArg;
+ // validate the caller-written canonical sample (canon-codec I5) — the raw ABI can bypass the
+ // generated encoder, so malformed bytes ⇒ InvalidData and nothing is committed;
+ // then ring preflight/commit + generation store + write_seq release (channel-publish.md).
 }
 
 #[no_mangle]
@@ -304,9 +304,9 @@ Every export shares the same boundary rules: null/length checks first (I-A2), st
 
 *Publisher write-loan (bulk zero-copy):*
 
-1. `drm_write_acquire(p, cap)` — capacity checked against the structural max before the guard (I-A10); then channel-publish.md loan steps: guard CAS (`Busy` loser), sequence/overflow checks, slot select, generation reserve. Returns `drm_write_view` into the publisher's local mapping.
-2. Application writes payload bytes directly into `view.data` (no DRM copy).
-3. `drm_write_commit(p, token, len)` finalizes: bulk byte topics write the u32 length header; struct-variable topics need nothing extra (caller-encoded counts are part of the canonical sample; sample_len is derived per canon-codec); then ring preflight/commit, generation store, `write_seq` release.
+1. `drm_write_acquire(p, cap)` — the requested bound is checked against the codec `sample_max` before the guard (I-A10); then channel-publish.md loan steps: guard CAS (`Busy` loser), sequence/overflow checks, slot select, generation reserve. Returns `drm_write_view` at the slot start.
+2. Application writes the complete canonical sample into `view.data` through the generated codec (canon-codec two-region; no DRM copy, no DRM-authored header).
+3. `drm_write_commit(p, token, len)` validates the written sample (canon-codec I5), then ring preflight/commit, generation store, `write_seq` release (`len ≤ capacity`).
 4. `drm_write_abort` on any failure path. A crash before commit leaves the slot unreachable; restart order applies (publisher-lifecycle.md I-L7).
 
 *Thread-safety summary (I-A7):*
@@ -332,7 +332,9 @@ Every export shares the same boundary rules: null/length checks first (I-A2), st
 | Concurrent publish on one publisher | exactly one proceeds; others `DRM_ERR_BUSY`, no race, no corruption (I-A7 / I-HZ6) |
 | second borrow before release | `DRM_ERR_BUSY` (I-A5) |
 | borrow/copy of empty channel, or caught-up `next` | `DRM_ERR_NO_SAMPLE` |
-| copy with `cap < required` | `InvalidArg`, `*out_len = required`, no partial copy (I-C9) |
+| copy with `cap < required` (incl. `cap == 0` query) | `InvalidArg`, `*out_len = required`, no partial copy (I-C9); retry with `cap ≥ required` |
+| write token 0 / stale / foreign / double | `InvalidArg` / `InvalidBorrow` (I-A10) |
+| loan commit with malformed canonical sample | `InvalidData`; nothing committed (canon-codec I5, I-PB2) |
 | read retry budget exhausted under adversarial publisher | `DRM_ERR_RETRY` — bounded core primitive (I-C10); caller may loop |
 | lapped sequential read | `DRM_ERR_GAP` + exact `*out_missed` (I-C2); view/copy skipped |
 | stale/foreign/double release token | `DRM_ERR_INVALID_BORROW` (I-A5) |

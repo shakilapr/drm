@@ -1,6 +1,6 @@
 # Memory Budget & Precommit Algorithms
 
-Scope: deterministic memory verification against configured deployment budgets — overflow-checked worst-case capacity calculation, budget comparison rules, warning band, per-region lockable accounting (page-rounded, conservative), per-process locked working set — and the hard-real-time precommit protocol (backend-defined lock proof, refuse-on-failure at activation). Implements architecture.md §Memory Budgets as Build-Time Verification, §Hard Real-Time Precommitment, §Payload Pool Invariant (sizing rules). Owner: E2 (verifier math in `drm-workspace::verifier`) + E1 (activation in `drm-core::channel`). Phase 19. Depends on [payload-pool.md](runtime/payload-pool.md) (invariant), [channel-metadata.md](runtime/channel-metadata.md) (attach check), [shm-backend.md](runtime/shm-backend.md) (platform locking), [windows-backends.md](runtime/windows-backends.md) (Windows proof), [router-core.md](router/router-core.md) (lane buffers).
+Scope: deterministic memory verification against configured deployment budgets — overflow-checked worst-case capacity calculation, budget comparison rules, drop-free shortfall warning (statically known `H`), warning band, per-region lockable accounting (page-rounded, conservative), per-process locked working set — and the hard-real-time precommit protocol (backend-defined lock proof, refuse-on-failure at activation). Implements architecture.md §Memory Budgets as Build-Time Verification, §Hard Real-Time Precommitment, §Payload Pool Invariant (sizing rules). Owner: E2 (verifier math in `drm-workspace::verifier`) + E1 (activation in `drm-core::channel`). Phase 19. Depends on [payload-pool.md](runtime/payload-pool.md) (invariant), [channel-metadata.md](runtime/channel-metadata.md) (attach check), [shm-backend.md](runtime/shm-backend.md) (platform locking), [windows-backends.md](runtime/windows-backends.md) (Windows proof), [router-core.md](router/router-core.md) (lane buffers).
 
 ## REQ Bindings
 
@@ -30,7 +30,7 @@ pub struct MemoryBudget {
 
 pub struct MemoryReport { // returned, never a Result — one run reports ALL errors (verify-engine I-V5)
  errors: Vec<VerifyError>, // empty ⇒ V-MEM passes; any entry ⇒ build failure. The only gate.
- warnings: Vec<VerifyWarning>, // e.g. OverPhysicalRam — printed, never failing
+ warnings: Vec<VerifyWarning>, // e.g. OverPhysicalRam, DropFreeShortfall — printed, never failing
  estimates: Vec<ComputeMemoryReport>, // nominal + per-class worst cases; informational only
 }
 impl MemoryReport {
@@ -66,6 +66,7 @@ impl MemoryReport {
 - **I-MB8 RouterBuffersBudgeted**: router-owned lane buffers (router-core I-RT8) are added to `worst_case` for the compute where the router runs. Test: `budget_router_buffers`.
 - **I-MB9 SpatialIndexesBudgeted**: fixed cell-hash table, membership pool, object records, query scratch, and BVH banks are included for every deployed spatial index. Test: `spatial_index_memory_verified`.
 - **I-MB10 LockedSpanRounding**: each region's locked cost is its page-rounded span (length rounded up to the target's declared page granularity); per-region rounding keeps the sum ≥ the true locked-page total even when regions share OS pages. The static locked sum is a conservative estimate — exact residency is proven at activation (I-MB5) and measured live by `drm-diag`; static checks never model OS virtual-memory policy (architecture §Memory Budgets). Test: `locked_span_rounding`.
+- **I-MB11 DropFreeShortfall**: the verifier computes `H_topic = Σ declared borrowers + diagnostic-consumer range` (payload-pool.md proof step 0) and emits a **warning** (never an error) when `pool_slots < R + H_topic + 1`, naming the shortfall; `R+1` remains the hard minimum (I-MB4). A shortfall means the drop-free guarantee is unproven, not that the configuration is invalid. Test: `budget_dropfree_warning` (REQ-CORE-042).
 
 ## Functions
 
@@ -81,6 +82,13 @@ fn verify_memory(model: &WorkspaceModel, deploy: &DeploymentConfig) -> MemoryRep
   let Some(min_pool) = ch.history_depth.checked_add(1)
    else { r.errors.push(CapacityOverflow { compute, channel: ch.id }); continue; };
   if ch.pool_slots < min_pool { r.errors.push(PoolInvariantViolation(ch)); } // I-MB4
+  // I-MB11: drop-free is a warning, not a gate (R+1 is the floor). H is static.
+  let h = declared_borrowers(model, ch).saturating_add(diagnostic_range(ch));
+  let Some(dropfree_pool) = ch.history_depth.checked_add(h).and_then(|x| x.checked_add(1))
+   else { r.errors.push(CapacityOverflow { compute, channel: ch.id }); continue; };
+  if ch.pool_slots < dropfree_pool {
+   r.warnings.push(DropFreeShortfall { channel: ch.id, have: ch.pool_slots, need: dropfree_pool });
+  }
   let ch_bytes = match ch.pool_slots.checked_mul(ch.slot_bytes) // I-MB6
    .and_then(|b| b.checked_add(ch.control_block)) {
    Some(b) => b,
@@ -182,6 +190,7 @@ fn activate_precommitted(mapping: &Mapping, budget: &MemoryBudget) -> Result<(),
 | `budget_overflow` (0, 1, `u32::MAX`, `u64::MAX` on every quantity) | I-MB6 `CapacityOverflow` collected, no wrap-pass |
 | `budget_warning_band` | I-MB3 |
 | `budget_pool_invariant` | I-MB4 |
+| `budget_dropfree_warning` (R+H+1 shortfall, incl. borrowers>0) | I-MB11 warning, not error |
 | `precommit_refusal` (injected failure) | I-MB5 |
 | `node_locked_set` (per-process mapping) | I-MB7 |
 | `budget_router_buffers` (incl. precommit compute) | I-MB8 + locked coverage |

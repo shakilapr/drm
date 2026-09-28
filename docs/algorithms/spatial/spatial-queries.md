@@ -38,10 +38,12 @@ pub struct TransformPlan { steps: &'static [PlanStep], max_stack: u16 } // gener
 pub struct AtomicTransformSlot {
     version: AtomicU64,                 // odd while writing, even when stable
     fields: [AtomicU64; 7],             // f64 bits: translation + quaternion
-    sample_ns: AtomicU64,               // sample time; clock domain fixed per edge (channel metadata)
+    sample_ns: AtomicU64,               // sample time; sample ClockIdentity (domain+epoch) tracked per edge metadata
     receive_ns: AtomicU64,              // host-monotonic receive time (I-S6, staleness)
     flags: AtomicU32,
 }
+// A device reset bumps the edge's clock epoch; samples written after the bump never resolve
+// against a mapping of the previous incarnation (I-S7).
 
 // Calibration slot (shared memory; updated live — spatial_architecture §Calibration Without Recompilation)
 pub struct CalibrationSlot {
@@ -95,7 +97,7 @@ pub enum ReparentMode { PreserveWorld, PreserveLocal, Snap }
 
 - **I-Q1 PlanExecution**: runtime query = execute the compiled plan (multiply steps + cache reads); graph traversal happens only at compile time, plus the bounded overlay walk for overlay frames (I-Q16). Test: `spatial_plan_execution` (no traversal instrumented).
 - **I-Q2 CacheGeometryOnly**: exact input-version vector unchanged ⇒ reuse cached transform geometry with zero multiplications; freshness/staleness/uncertainty are still derived per query from timestamps — version equality never implies `VALID`; any input change ⇒ re-execute. Test: `spatial_cache_shortcircuit`, `spatial_cache_aging`.
-- **I-Q3 LatestCoherent**: `latest()` evaluates every dynamic input at one common timestamp `t* = min_i(t_newest,i)` (after clock conversion) — the composed transform corresponds to a single physical instant, reported as `sample_time`. Test: `spatial_query_latest` (asynchronous rates + races vs single-instant oracle).
+- **I-Q3 LatestCoherent**: `latest()` evaluates every dynamic input at one common timestamp `t* = min_i(t_newest,i)` (after clock conversion) — the composed transform corresponds to a single physical instant, reported as `sample_time`. If the input intervals have no common intersection (`max_i t_oldest,i > min_i t_newest,i`) ⇒ `OUT_OF_HISTORY`. Test: `spatial_query_latest` (asynchronous rates + races vs single-instant oracle).
 - **I-Q4 AtExactOrInterpolated**: `at(t)` returns exact sample at t; otherwise linear translation + SLERP rotation between bracketing samples of the sample-time-ordered ring; **never silently extrapolates beyond the newest sample** (`OUT_OF_HISTORY`). Test: `spatial_query_at`.
 - **I-Q5 PredictExplicitOnly**: only `predict` extrapolates; within the declared horizon it sets `EXTRAPOLATED`, beyond it returns `OUT_OF_HISTORY`. Extrapolation integrates the body-frame twist on SE(3) via the exponential map, `T(t+Δ) = T(t)·Exp(ξ_b Δ)`; twist frames convert via the SE(3) adjoint. Test: `spatial_query_predict`, `spatial_predict_screw` (screw-motion oracle).
 - **I-Q6 DelayedViewBound**: `delayed_view(offset)` resolves `now − offset` through `at`; offset beyond retained history ⇒ `OUT_OF_HISTORY`. Test: `spatial_delayed_view`.
@@ -105,7 +107,7 @@ pub enum ReparentMode { PreserveWorld, PreserveLocal, Snap }
 - **I-Q10 ReparentAtomic**: hierarchy mutations execute atomically; readers never observe partially updated trees. Test: `spatial_reparent_atomic`.
 - **I-Q11 CalibrationLive**: calibration-slot update invalidates dependent caches live — no recompilation, no node restart; Effective = Nominal × Correction composed via the plan's `CalibrationSlot` step. Test: `spatial_calibration_live`.
 - **I-Q12 GenerationalEdges**: overlay edge handles generational; delete invalidates immediately; single-writer per dynamic edge. Test: `spatial_generational_edges`.
-- **I-Q13 HistoryProvable**: `history = H` is a guaranteed sample-time window; capacity is the declared structural `max_samples = N`; the producer contract `min_sample_period = P` lets verification require `N ≥ ⌊H/P⌋ + 2` (one predecessor below the window floor) and reject unsatisfiable declarations — never silent shrinkage. Rings ordered by sample time; in-window late arrivals bounded-insert; older-than-floor rejected ⇒ `LateSampleDropped` counter. `expected_rate` never sizes correctness storage. Static constants are never stored across timestamps. Test: `spatial_history_sizing`, `spatial_history_order`.
+- **I-Q13 HistoryProvable**: `history = H` is a guaranteed sample-time window; capacity is the declared structural `max_samples = N`; the producer contract `min_sample_period = P` lets verification require `N ≥ ⌊H/P⌋ + 2` (one predecessor below the window floor) and reject unsatisfiable declarations — never silent shrinkage. At runtime a sample closer than P to the previous accepted sample is **rejected** and counted (`DensityViolation`), so the bound always holds. Rings ordered by sample time; in-window late arrivals bounded-insert; older-than-floor rejected ⇒ `LateSampleDropped` counter. `expected_rate` never sizes correctness storage. Static constants are never stored across timestamps. Test: `spatial_history_sizing`, `spatial_history_order`.
 - **I-Q14 CoherentSlots**: transform fields are fixed-width atomics guarded by an odd/even version; the slot stores sample + receive timestamps; bounded snapshot failure returns `ConcurrentUpdate`, never torn geometry. The single-writer seqlock protocol is model-checked (all interleavings, x86-64 + ARM64); a fixed double-bank + atomic selector is the approved alternative where the proof does not close. Test: `spatial_slot_coherence` (model-checked).
 - **I-Q15 ZeroAllocQuery**: latest/at/predict/delayed execution uses generated plans, fixed stacks, and preallocated histories; no query-time heap allocation. Test: `spatial_query_zero_alloc`.
 - **I-Q16 OverlayPlans**: runtime overlay frames resolve via a bounded overlay walk (≤ `max_overlay_depth` parent steps) to a compiled-base attachment frame, then the precompiled base plan; the prefix is cached under `topology_generation`. Test: `spatial_overlay_plan_bound`.
@@ -149,10 +151,12 @@ fn execute_at(plan: &TransformPlan, t_ns: TimePoint,
     }
     Ok(stack.pop()?)
 }
+// Convention: in query functions, `?` on a Status maps to a TransformResult carrying that
+// hard error; the resolver closures also set quality flags (STALE/EXTRAPOLATED/DISCONTINUITY_NEARBY).
 
 fn latest(&mut self, target: FrameId, reference: FrameId) -> TransformResult {
     let plan = self.plan_for(target, reference);            // compiled; overlay prefix bounded (I-Q16)
-    let t_star = self.newest_common_time_bounded(plan)?;    // min_i(t_newest,i) in query clock (I-Q3)
+    let t_star = self.newest_common_time_bounded(plan)?;    // min_i(t_newest,i); empty intersection ⇒ OutOfHistory (I-Q3)
     let x = if self.cache.matches(plan.input_versions_at(t_star)) {
         self.cache.cached                                   // geometry reuse ONLY (I-Q2)
     } else {
@@ -229,10 +233,12 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 
 *History ingestion (sample-time ordered, REQ-SPATIAL-037):*
 
-1. New sample with sample time `T ≥ head` ⇒ append.
-2. `T` inside the retained window ⇒ bounded ordered insert (cost ≤ N).
-3. `T` equals a retained sample time ⇒ deterministic: keep the newer receive time; drop the other (counted).
-4. `T` older than the retained floor ⇒ reject ⇒ `LateSampleDropped` counter.
+1. New sample with sample time `T`:
+   - `T − previous accepted sample < P` ⇒ reject, count `DensityViolation` (preserves the `N ≥ ⌊H/P⌋ + 2` proof).
+   - `T ≥ head` ⇒ append.
+   - `T` inside the retained window ⇒ bounded ordered insert (cost ≤ N).
+   - `T` equals a retained sample time ⇒ deterministic: keep the newer receive time; drop the other (counted).
+   - `T` older than the retained floor ⇒ reject ⇒ `LateSampleDropped` counter.
 
 *Transactional reparenting (§Transactional Reparenting):*
 
@@ -252,6 +258,7 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 | Case | Result |
 |---|---|
 | `at(t)` before first sample | `OUT_OF_HISTORY` |
+| `latest()` with no common input interval | `OUT_OF_HISTORY` (I-Q3) |
 | `at(t)` beyond newest sample | `OUT_OF_HISTORY` — `predict` is the only extrapolation path (I-Q4/I-Q5) |
 | `predict` within / beyond max_horizon | `EXTRAPOLATED` flag with value / `OUT_OF_HISTORY` without value |
 | Query spanning discontinuity | interpolation refused; `DISCONTINUITY_NEARBY` flag; t within the jump gap ⇒ `OUT_OF_HISTORY` + flag (I-Q7) |
@@ -286,7 +293,7 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 | `spatial_reparent_atomic` (concurrent readers) | I-Q10 |
 | `spatial_calibration_live` (slot bump → cache invalidation) | I-Q11 |
 | `spatial_generational_edges` | I-Q12 |
-| `spatial_history_sizing` (N ≥ ⌊H/P⌋ + 2 enforced; unsatisfiable rejected) | I-Q13 |
+| `spatial_history_sizing` (N ≥ ⌊H/P⌋ + 2 enforced; unsatisfiable rejected; faster-than-P ⇒ `DensityViolation`) | I-Q13 |
 | `spatial_history_order` (shuffled + duplicate timestamps vs oracle) | I-Q13 |
 | `spatial_slot_coherence` (writer/readers) | I-Q14: coherent or `ConcurrentUpdate` |
 | `spatial_slot_model` (model-checked interleavings, x86-64 + ARM64) | I-Q14 |

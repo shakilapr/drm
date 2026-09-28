@@ -60,7 +60,7 @@ DRM implements this using a generalized bounded history pool, independent reader
   If readers hold borrows across all available slots and exhaust the pool, DRM preserves real-time guarantees:
   - Active borrowed slots are never overwritten or corrupted.
   - The publisher thread never blocks waiting for slow readers.
-  - The publisher drops the incoming sample, increments an atomic `pool_exhausted` counter for `drm-diag` reporting, and preserves the current latest sample. Once a reader finishes or dead process cleanup reclaims a slot, publishing resumes instantly.
+  - The publisher drops the incoming sample, increments an atomic `pool_exhausted` counter for `drm-diag` reporting, and preserves the current latest sample. Once a reader finishes or dead-endpoint reclamation returns a slot, publishing resumes instantly.
 
 - **Reader Cursor vs Hazard Slot**:
   - **Reader Cursor**: Tracks logical sequence progress (*Which sequence should I read next?*). Maintained locally by each consumer.

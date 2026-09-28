@@ -26,7 +26,7 @@ pub struct LinkEstimate {
  headroom_pct: f64, // 100 − utilization (display only)
  per_topic: Vec<TopicLoad>, // breakdown: {topic, effective_hz, wire_bits, bps}
 }
-pub struct TopicLoad { topic: TopicPath, effective_hz: Rational, wire_bits: u128, bps: u128 }
+pub struct TopicLoad { topic: TopicPath, effective_hz: Rate, wire_bits: u128, bps: u128 }
 
 pub struct FeasibilityReport {
  estimates: Vec<LinkEstimate>,
@@ -68,10 +68,12 @@ fn estimate(model: &WorkspaceModel, routes: &RouteResult) -> FeasibilityReport {
   rep.warnings.push(MissingRate { topic }); // excluded from nominal; documented
   continue;
  };
- let src_eff = rate;
- for hop in plan.hops_bfs_from_source() { // deterministic tree order (BTreeMap)
+ let mut eff_at: BTreeMap<VertexId, Rate> = BTreeMap::new();
+ eff_at.insert(plan.source.clone(), rate); // root branch rate
+ for hop in plan.hops_bfs_from_source() { // deterministic tree order; parent emitted before child
+  let incoming = eff_at[&hop.from]; // parent's effective rate (NOT always the source rate)
   let limit = hop.edge.export_limit; // I-R14: declared per-(topic, link) shaping
-  let eff = min_checked(src_eff, limit, &mut rep.errors); // I-F6: cap propagates downstream
+  let eff = min_checked(incoming, limit, &mut rep.errors); // I-F6: cap propagates downstream
   let sizing = adapter_for(hop.link).sizing(); // I-F7: adapter-owned wire size
   let wire_bytes = sizing.max_wire_bytes(drm_frame_bytes(model, topic, hop.link)); // incl. COBS
   let wire_bits = wire_bytes as u128 * 8;
@@ -79,7 +81,7 @@ fn estimate(model: &WorkspaceModel, routes: &RouteResult) -> FeasibilityReport {
    rep.errors.push(RateOverflow { topic, link: hop.link }); continue; // I-F8: collected
   };
   per_link[hop.link].push(TopicLoad { topic: topic.clone(), effective_hz: eff, wire_bits, bps });
-  if let VertexId::Compute(next) = hop.to { src_eff_at(next) = eff; } // branch-effective rate
+  eff_at.insert(hop.to.clone(), eff); // branch-effective rate flows to the child
  }
  }
  for (link, rows) in per_link {

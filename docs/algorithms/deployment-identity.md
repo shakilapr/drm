@@ -88,8 +88,14 @@ fn clean(deploy: &DeploymentConfig) -> Result<CleanReport, Status> {
  Err(WouldBlock) => return Ok(CleanReport::ActiveUntouched), // shared hold exists ⇒ live nodes
  Err(e) => return Err(e),
  };
- for name in names_from_deployment_metadata(deploy) { shm_unlink(name)?; }
- Ok(CleanReport::Cleaned)
+ // Backend-neutral teardown ("destroy/reclaim the deployment's segments"), not POSIX-only:
+ // Linux shm_unlink; Windows sections die with their last handle (windows-backends.md I-W4).
+ // Collect per-segment results; one failure never aborts the remaining segments.
+ let mut failed = Vec::new();
+ for name in names_from_deployment_metadata(deploy) {
+  if let Err(e) = backend.destroy_segment(name) { failed.push((name, e)); }
+ }
+ Ok(CleanReport::Cleaned { failed })
 }
 ```
 

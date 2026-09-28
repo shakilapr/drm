@@ -52,8 +52,10 @@ pub enum WireFrame {
 
 pub struct StreamKey { epoch: u64, seq: u64 }
 pub struct IngressState { newest: Option<StreamKey> } // per (link, wire_channel_id); reset on reconnect
+pub struct EgressCursor { next: Option<StreamKey> } // router-private per (topic, link) sequential position;
+ // distinct from a consumer ReaderState (cursor-delivery.md) — the router tracks its own egress position
 pub struct EgressState {
- cursor: ReaderCursor,             // per (topic, link), sequential when no export limiter
+ cursor: EgressCursor,             // per (topic, link), sequential when no export limiter
  last_exported: Option<StreamKey>, // latest-sampling routes never resend an unchanged sample
 }
 ```
@@ -85,7 +87,7 @@ pub struct EgressState {
 // ---- Egress (per link, per tick) ----
 fn egress(&mut self, link: LinkId) -> Status {
  for topic in self.routes_on(link) { // I-RT1: forwarding plan filter
-  let Some(key) = self.peek_next_or_limited_latest(topic, link) else { continue; }; // no work: no reservation taken
+  let Some(key) = self.peek_next_or_limited_latest(topic, link) else { continue; }; // metadata-only peek (no payload borrow, I-RT8); no work: no reservation taken
   match self.admit_and_send(link, topic, key) {
    Err(e) => { self.count_route_error(topic, link, e); continue; } // I-RT15: scoped to this route, scan continues
    Ok(()) => {}

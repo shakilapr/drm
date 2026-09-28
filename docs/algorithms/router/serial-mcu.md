@@ -21,7 +21,7 @@ pub struct SerialFrame {
  header: WireHeader, // router-core fixed little-endian header; channel is generated u32 wire ID
  payload: BoundedBytes,
 }
-pub struct SerialLinkConfig { baud: u32, max_frame_bytes: u16 } // declared per link in drm.toml
+pub struct SerialLinkConfig { baud: u32, max_frame_bytes: u16 } // max_frame_bytes = decoded frame bound per link (wire size = decoded + COBS overhead)
 // Wire: COBS{header, payload, optional e2e CRC32C, serial CRC32C} 0x00.
 // serial CRC covers the exact decoded byte sequence preceding it: header + payload + optional e2e trailer (I-SR3).
 // max_encoded = decoded_len + ceil(decoded_len / 254) + 1 delimiter — standard COBS overhead for nonempty input.

@@ -47,6 +47,12 @@ pub struct ForwardingRule {
  pub egress: BTreeSet<ForwardingEdge>, // links to forward on (deterministic order)
  pub local_delivery: bool, // deliver to local consumers on this compute
 }
+pub struct Overrides { // explicit per-topic intent; every map keyed by canonical topic path
+ pub prefer: BTreeMap<TopicPath, LinkId>,
+ pub deny: BTreeMap<TopicPath, BTreeSet<LinkId>>,
+ pub force: BTreeMap<TopicPath, BTreeSet<LinkId>>, // ≥ 2 links ⇒ ConflictingRouteOverride (I-R9)
+ pub export_limit: BTreeMap<(TopicPath, LinkId), Rate>,
+}
 pub struct ForwardingEdge { pub link: LinkId, pub export_limit: Option<Rate> } // declared shaping carried into plan (I-R14)
 pub struct Hop { pub from: VertexId, pub link: LinkId, pub to: VertexId } // explicit hop — plans are built from hops, never reconstructed from link indices
 
@@ -80,11 +86,13 @@ fn derive(graph: &RouteGraph) -> RouteResult {
  let mut res = RouteResult::default();
 
  // 1. Validate explicit overrides first (I-R9) — contradictory intent is an error, not precedence.
- for (topic, ov) in &graph.overrides {
- if ov.force.len() > 1
- || ov.force.iter().any(|f| ov.deny.get(topic).map_or(false, |d| d.contains(f))) {
- res.errors.push(ConflictingRouteOverride { topic: topic.clone() });
- }
+ for topic in graph.overrides.topics() { // force/deny/prefer keys, deterministic BTree order
+  let forced = graph.overrides.force.get(topic);
+  let denied = graph.overrides.deny.get(topic);
+  if forced.map_or(0, |f| f.len()) > 1
+   || forced.map_or(false, |f| f.iter().any(|l| denied.map_or(false, |d| d.contains(l)))) {
+   res.errors.push(ConflictingRouteOverride { topic: topic.clone() });
+  }
  }
 
  let producers: BTreeMap<TopicPath, BTreeSet<VertexId>> = collect_producers(graph); // nodes ∪ external producers

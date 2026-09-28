@@ -27,6 +27,8 @@ endpoint's OS registration lock. Implements architecture.md §Safe Handling of P
 // In CCB: pool_exhausted: AtomicU64 — monotonic counter, surfaced to drm-diag.
 // In CCB: reclaim_requested: AtomicBool — set by an RT publisher on exhaustion; consumed by the
 // maintenance context (non-RT) which then performs scan_requested(ch).
+// ch.profile.is_hard_rt() ⇔ the channel declares the hard-real-time profile
+// (architecture §Hard Real-Time Precommitment, `precommit: true`) — a static, verifier-known fact.
 ```
 
 ## Invariants
@@ -123,6 +125,12 @@ of the proof (I-E5).
    selectable (I-E4).
 5. **Placement**: hard-RT publishers only set `reclaim_requested` (I-E7); general-purpose profiles
    may run one bounded pass inline as an optimization.
+
+*Maintenance context:* for RT-profile channels the deferred scan is drained by the node runtime's
+own non-RT housekeeping task — an in-process thread of `drm-core`, never a separate daemon or broker
+(architecture §Brokerless). While `reclaim_requested` is set it calls `scan_requested(ch)`; the flag
+is a coalescing wakeup, so a burst of exhaustion events costs one scan. General-purpose channels
+need no maintenance task because `publish_exhausted` scans inline.
 
 ## Edge Cases & Errors
 

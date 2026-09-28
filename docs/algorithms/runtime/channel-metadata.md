@@ -139,8 +139,8 @@ fn validate_on_attach(map: &Mapping, expect: &Expectation) -> Result<ChannelView
 // After Ok: steady-state publish/read never re-validates (I-M2). Diag tools may inspect freely.
 
 // Epoch observe (cursor-delivery.md: persistent gate at operation entry + in-call reread)
-fn epoch_changed(ccb: &ChannelControlBlock, local_epoch: u32) -> bool {
- ccb.publisher_epoch.load(Acquire) != local_epoch
+fn epoch_changed(ccb: &ChannelControlBlock, observed_epoch: u32) -> bool {
+ ccb.publisher_epoch.load(Acquire) != observed_epoch
 }
 // first_valid_seq is read on the read path to bound the addressable window (ring-history I5).
 fn first_valid(ccb: &ChannelControlBlock) -> u64 { ccb.first_valid_seq.load(Acquire) }
@@ -161,7 +161,7 @@ fn first_valid(ccb: &ChannelControlBlock) -> u64 { ccb.first_valid_seq.load(Acqu
 
 *Epoch observe/reset (consumer, per read loop):*
 
-1. `if epoch_changed(desc, local_epoch)`: reset local cursor state (cursor-delivery.md), adopt `local_epoch = e`.
+1. `if epoch_changed(ccb, state.observed_epoch)`: reset `ReaderState` (cursor-delivery.md; clears `last_read`, adopts the new epoch), so no prior-run sample is addressable.
 2. The restarted publisher has already advanced `first_valid_seq` (publisher-lifecycle.md), so no prior-run sample is addressable (ring-history I5).
 3. Freshness transitions handled by publisher-lifecycle.md.
 

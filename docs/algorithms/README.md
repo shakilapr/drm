@@ -47,12 +47,12 @@ All 36 algorithm documents are **written**. Grouped by module; three cross-cutti
 |---|---|---|
 | [toolchain/schema-parser.md](toolchain/schema-parser.md) | 2 | `.drm` lexing/parsing, diagnostics vocabulary, deterministic render |
 | [toolchain/workspace-model.md](toolchain/workspace-model.md) | 23 | WorkspaceModel construction, contracts, fingerprints, determinism |
-| [toolchain/handle-system.md](toolchain/handle-system.md) | 6 | Stable runtime handles, tombstones, explicit compaction |
-| [toolchain/codegen-invalidation.md](toolchain/codegen-invalidation.md) | 24 | Generators, fingerprints, atomic writes, timestamp preservation, reconciliation |
-| [toolchain/build-orchestration.md](toolchain/build-orchestration.md) | 25 | Orchestrator flow, native adapters, two-event watch mode |
+| [toolchain/handle-system.md](toolchain/handle-system.md) | 6 | Stable runtime handles, committed lockfile, merge reconciliation, explicit compaction |
+| [toolchain/codegen-invalidation.md](toolchain/codegen-invalidation.md) | 24 | Generators, directed fingerprints, content-compared atomic writes, reconciliation |
+| [toolchain/build-orchestration.md](toolchain/build-orchestration.md) | 25 | Orchestrator flow, native adapters, watch mode + event-loss recovery |
 | [toolchain/verify-engine.md](toolchain/verify-engine.md) | 26 | Deterministic-fact check catalogue (V-*), facts/estimates boundary |
-| [toolchain/route-derivation.md](toolchain/route-derivation.md) | 28 | Graph routing, ambiguity detection, prefer/deny/force, external endpoints |
-| [toolchain/feasibility-estimation.md](toolchain/feasibility-estimation.md) | 27 | Link-utilization math, impossible-configuration rejection, honest labels |
+| [toolchain/route-derivation.md](toolchain/route-derivation.md) | 28 | Graph routing, ambiguity detection, prefer/deny/force/export_limit, external vertices |
+| [toolchain/feasibility-estimation.md](toolchain/feasibility-estimation.md) | 27 | Link-utilization math, route shaping, adapter wire sizing, honest labels |
 
 ### router/ — `drm-router` + transports
 

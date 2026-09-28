@@ -12,7 +12,7 @@ Scope: `drm-spatial` foundations — distinct semantic types, compile-time fixed
 | `REQ-SPATIAL-forest` | forests, disconnected trees, path-not-found status | `REQ-SPATIAL-010` |
 | `REQ-SPATIAL-conventions` | right-handed, SI, +X fwd/+Y left/+Z up; explicit boundary conversions | `REQ-SPATIAL-007` |
 | `REQ-SPATIAL-geodetic` | WGS84→ECEF→tangent-plane→ENU→SE(3) chain | `REQ-SPATIAL-012` |
-| `REQ-SPATIAL-two-timestamps` | sample time + receive time on every transform sample, stored in the slot; sample clock domain fixed per edge in channel metadata | `REQ-SPATIAL-035` |
+| `REQ-SPATIAL-two-timestamps` | sample time + receive time on every transform sample, stored in the slot; sample clock identity (domain + epoch) tracked per edge, reset bumps epoch | `REQ-SPATIAL-035` |
 | `REQ-SPATIAL-clock-domains` | four domains (host monotonic, device hardware, global PTP/GNSS, simulation/replay); affine mappings (reference pair, rate ratio, bounded uncertainty growth) keyed by clock identity with reset epoch; unresolved ⇒ status, never silent compare | `REQ-SPATIAL-004` |
 | `REQ-SPATIAL-dual-hierarchy` | compiled base (`spaces/`) + runtime overlay (`space.create`) with `SpatialHandle{index,generation}`; overlay resolves via bounded overlay walk (`max_overlay_depth`) cached under `topology_generation` | `REQ-SPATIAL-008` |
 | `REQ-SPATIAL-spatial-contracts` | `[spatial] write/read` in drm.toml; single-writer per dynamic edge enforced pre-deployment | `REQ-SPATIAL-030` |
@@ -113,7 +113,7 @@ fn geodetic_to_enu(wgs84: Lla, anchor: Lla) -> Enu {
 // Clock mapping (§Temporal Precision) — resolved per full ClockIdentity (domain + epoch)
 fn map_timestamp(t: TimePoint, to: ClockDomain) -> Result<TimePoint, Status> {
  match resolve_mapping(t.clock, to)? { // no valid mapping ⇒ CLOCK_UNRESOLVED (I-S7)
- Some(m) => Ok(TimePoint { value_ns: to_ref_ns(m) + m.rate_ratio * (t.value_ns - from_ref_ns(m)),
+ Some(m) => Ok(TimePoint { value_ns: m.to_ref_ns + m.rate_ratio * (t.value_ns - m.from_ref_ns),
                            clock: identity_of(to) }), // affine: t_to = to_ref + r * (t_from - from_ref)
  None => Err(ClockUnresolved),
  }
@@ -153,7 +153,7 @@ fn emit_mcu_constants(plan: &CollapsePlan, target: McuTarget) -> CodeArtifact
 
 *History allocation (time-based):*
 
-1. For each declared consumer requirement `history = H, max_samples = N, min_sample_period = P` on an upstream dynamic edge, allocate exactly `N` entries. `P` is a correctness contract: two accepted samples are never closer than P in sample time. Verification requires `N >= floor(H / P) + 2` (one predecessor below the window floor for boundary interpolation) and rejects unsatisfiable declarations — history is never silently shortened. `expected_rate` is informational only (sequence-based channel rings remain the transport layer — spatial time-history is a derived cache).
+1. For each declared consumer requirement `history = H, max_samples = N, min_sample_period = P` on an upstream dynamic edge, allocate exactly `N` entries. `P` is a correctness contract: two accepted samples are never closer than P in sample time — a closer sample is rejected and counted (`DensityViolation`), so the bound holds at runtime. Verification requires `N >= floor(H / P) + 2` (one predecessor below the window floor for boundary interpolation) and rejects unsatisfiable declarations — history is never silently shortened. `expected_rate` is informational only (sequence-based channel rings remain the transport layer — spatial time-history is a derived cache).
 2. Rings are ordered by sample time: in-window late arrivals bounded-insert; samples older than the retained floor are rejected and counted (`LateSampleDropped`).
 3. Rings allocated only where needed; static constants never stored across timestamps.
 

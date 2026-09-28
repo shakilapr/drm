@@ -26,6 +26,8 @@ Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fi
 //   cell_size: 0.5       # meters — declared statically, never tuned at runtime
 //   max_objects: 4096
 //   max_cells_per_object: 27
+//   load_factor: 0.70    # physical cell-hash slots = ceil(M / load_factor)
+//   max_query_cells: 512 # enumeration bound before object-table fallback
 
 // Fixed-capacity incremental hash grid — zero heap allocation in steady state (§Hash Grid)
 pub struct HashGrid {
@@ -78,7 +80,7 @@ pub struct BvhNode { aabb: Aabb, left: u32, right: u32, leaf: Option<StaticEntit
 - **I-X9 MemoryVerified**: worst-case index memory (cell-hash table, membership pool, object records, query scratch, guarded BVH banks) is part of the compute-unit budget math, verified exactly like channel buffers. Test: `spatial_index_memory_verified`.
 - **I-X10 RejectedStructures**: octrees/k-d/sweep-and-prune absent from the codebase. Test: audit.
 - **I-X11 CoherentQuery**: query reads `grid_epoch` (must be even), scans cells, rereads `grid_epoch`; unchanged ⇒ accept, else bounded retry ⇒ `ConcurrentUpdate` — never a data race or a partial multi-cell transaction. Cell reads additionally honor per-cell version handshakes. Test: `spatial_query_concurrent`.
-- **I-X12 UpdateAtomic**: a move mutates only the `remove ∪ add` cells under an odd epoch and publishes the even epoch with one release store; failure/crash leaves the previous epoch state coherent. Update cost is `O(k)` in the object's cell span — never a whole-index copy. Test: `spatial_update_atomic`, `spatial_rebucket_scaling`.
+- **I-X12 UpdateAtomic**: a move mutates only the `remove ∪ add` cells under an odd epoch and restores the even epoch with one release store — including on failure, so the grid can never latch odd. Failure/crash leaves the previous epoch state coherent. Update cost is `O(k)` in the object's cell span — never a whole-index copy. Test: `spatial_update_atomic`, `spatial_rebucket_scaling`.
 - **I-X13 QueryBound**: the prospective cell count is computed with checked arithmetic before enumeration; above `max_query_cells` the query falls back to scanning the fixed object table. Worst-case query work is `O(min(C_q, max_objects))`, independent of radius. Test: `spatial_huge_radius`.
 - **I-X14 NumericCellBounds**: `cell_size > 0` verified at activation; NaN/±inf coordinates and out-of-i32-range cell indices are rejected (`InvalidArgument`), never silently clamped or misclassified; floor is toward −∞ with the tie rule tested at ±ULP boundaries. Test: `spatial_numeric_grid`.
 
@@ -105,9 +107,9 @@ fn rebucket(&mut self, id: EntityId, p: Point3, deps: &DependencyVersions) -> Re
     let (remove, add) = (old_cells − new_cells, new_cells − old_cells);   // intersection kept
     self.preflight_capacity(&remove, &add)?;                    // IndexFull before mutation
     let e = self.grid_epoch.fetch_add(1, AcqRel) + 1;           // odd: update in progress (I-X12)
-    self.apply(remove, add, id, &next, deps)?;                  // touches ONLY affected cells — O(k)
-    self.grid_epoch.store(e + 1, Release);                      // even: stable, one publication
-    Ok(())
+    let res = self.apply(remove, add, id, &next, deps);         // touches ONLY affected cells — O(k)
+    self.grid_epoch.store(e + 1, Release);                      // even again — even on failure
+    res
 }
 
 // ---- Proximity queries (§Proximity Query Semantics — frame + typed geometry) ----
@@ -182,7 +184,7 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 | Historical proximity requested | unsupported: proximity is latest-only; resolve returned candidates through `at()` |
 | Grid memory vs budget | verify rejects config exceeding declared budget (I-X9) |
 | BVH swap with no free unread bank | `Busy`; active geometry unchanged, updater retries later |
-| Update fails mid-move | previous epoch state coherent (I-X12) |
+| Update fails mid-move | even epoch restored; previous epoch state coherent (I-X12) |
 
 ## Test Matrix
 

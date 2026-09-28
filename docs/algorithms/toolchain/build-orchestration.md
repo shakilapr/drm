@@ -72,30 +72,31 @@ fn watch(ws: PathBuf, mut on_event: impl FnMut(WatchEvent)) -> Result<(), Status
  Ok(batch) => batch,
  Err(WatchOverflow | WatchError) => { st.pending_rescan = true; on_event(RescanRequired); continue; } // I-BO7
  };
- if st.pending_rescan { recover_by_rescan(&mut st)?; } // full declaration + conservative source rescan (I-BO7)
+ if st.pending_rescan { recover_by_rescan(&mut st, &ws)?; } // full declaration + conservative source rescan (I-BO7)
 
  // I-BO5: apply declaration changes (reload) BEFORE mapping source events
+ let mut reload_failed = false;
  let declarations: Vec<_> = evs.iter().filter(|e| is_declaration(e)).cloned().collect();
  if !declarations.is_empty() {
  match workspace_model::build(tree(&ws)) {
  Ok(next) => { st.model = next; on_event(DrmDeclarationChanged(declarations)); }
- Err(e) => { on_event(DeclarationError(e)); /* fall through: keep last valid model */ }
+ Err(e) => { on_event(DeclarationError(e)); reload_failed = true; } // keep last valid model
  }
  }
  // I-BO6: map source events (this batch + pending) via the current valid model
  let mut source_evs: SortedSet<PathBuf> = evs.iter().filter(|e| !is_declaration(e)).cloned().collect();
  source_evs.extend(st.pending_source.drain()); // retained dirty paths (I-BO6)
- for ev in source_evs {
- if let Some(node) = owner_of(&ev, &st.model) { // ownership from the current model (I-BO8: path only)
- on_event(AppSourceChanged { node, path: ev });
+ for ev in source_evs.iter() {
+ if let Some(node) = owner_of(ev, &st.model) { // ownership from the current model (I-BO8: path only)
+ on_event(AppSourceChanged { node, path: ev.clone() });
  } // unmappable ⇒ retain as pending if a reload failed this batch, else drop (only two categories tracked)
+ if reload_failed { st.pending_source.insert(ev.clone()); } // retry after next valid reload
  }
- if reload_failed_this_batch { st.pending_source = source_evs; } // retry after next valid reload
  }
 }
 
-fn recover_by_rescan(st: &mut WatchState) -> Result<(), Status> {
- st.model = workspace_model::build(tree_all_declarations(&ws))?; // full declaration rescan
+fn recover_by_rescan(st: &mut WatchState, ws: &Path) -> Result<(), Status> {
+ st.model = workspace_model::build(tree(&ws))?; // full declaration rescan (all declarations)
  st.pending_source = all_node_source_paths(&st.model); // conservative: dirty every owned source tree
  st.pending_rescan = false;
  Ok(())
