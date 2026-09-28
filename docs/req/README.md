@@ -27,3 +27,14 @@ Examples: `REQ-CORE-042`, `REQ-TOOL-011`.
 ## Sync Rule
 
 The registry changes in the same PR as its architecture statement or its implementation (work-plan risk register: prevents false 100% coverage). `xtask audit-traceability` fails when a cited ID is missing from the registry or a registry row has no implementation/test mapping.
+
+## Schema Normalization (separate mechanical migration)
+
+Registry schema is normalized by one idempotent transform, kept **out of** semantic/algorithm changesets:
+
+- `area` ∈ `CORE | TOOL | ROUTE | SPATIAL | BIND | STUDIO | OPS | QAL` (codebase.md R7).
+- `phase` ∈ integers `1..34` (work-plan). A legacy area-name in `phase` is resolved from the owning document's declared `Phase N`; a row resolvable to more than one/or no phase is **flagged for manual resolution, never guessed**.
+- `status` ∈ `open | specified | implemented | verified`.
+- `id` unique; every `REQ-*` cited anywhere under `docs/` exists in the registry (no dangling citations).
+
+`migrate-registry.ps1` performs the transform; `-Check` validates only and writes nothing. The migration is accepted only when the validator reports **0 duplicate IDs, 0 dangling citations, and all `area`/`phase`/`status` valid**; otherwise it refuses to write and lists the offending rows. Land it as a standalone commit so routing/algorithm semantics are verifiably unchanged before and after.
