@@ -10,6 +10,8 @@ license.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+drm-core = { path = "../crates/drm-core" }
+drm-types = { path = "../crates/drm-types" }
 
 [lints]
 workspace = true

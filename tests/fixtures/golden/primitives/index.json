@@ -1,0 +1,172 @@
+{
+  "vectors": [
+    {
+      "case": "zero",
+      "file": "001_u8_zero",
+      "len": 1,
+      "type": "u8",
+      "value": 0
+    },
+    {
+      "case": "max_signed",
+      "file": "002_u8_max_signed",
+      "len": 1,
+      "type": "u8",
+      "value": 127
+    },
+    {
+      "case": "max",
+      "file": "003_u8_max",
+      "len": 1,
+      "type": "u8",
+      "value": 255
+    },
+    {
+      "case": "zero",
+      "file": "004_i8_zero",
+      "len": 1,
+      "type": "i8",
+      "value": 0
+    },
+    {
+      "case": "min",
+      "file": "005_i8_min",
+      "len": 1,
+      "type": "i8",
+      "value": -128
+    },
+    {
+      "case": "max",
+      "file": "006_i8_max",
+      "len": 1,
+      "type": "i8",
+      "value": 127
+    },
+    {
+      "case": "zero",
+      "file": "007_u16_zero",
+      "len": 2,
+      "type": "u16",
+      "value": 0
+    },
+    {
+      "case": "max_signed",
+      "file": "008_u16_max_signed",
+      "len": 2,
+      "type": "u16",
+      "value": 32767
+    },
+    {
+      "case": "max",
+      "file": "009_u16_max",
+      "len": 2,
+      "type": "u16",
+      "value": 65535
+    },
+    {
+      "case": "zero",
+      "file": "010_i16_zero",
+      "len": 2,
+      "type": "i16",
+      "value": 0
+    },
+    {
+      "case": "min",
+      "file": "011_i16_min",
+      "len": 2,
+      "type": "i16",
+      "value": -32768
+    },
+    {
+      "case": "max",
+      "file": "012_i16_max",
+      "len": 2,
+      "type": "i16",
+      "value": 32767
+    },
+    {
+      "case": "zero",
+      "file": "013_u32_zero",
+      "len": 4,
+      "type": "u32",
+      "value": 0
+    },
+    {
+      "case": "max",
+      "file": "014_u32_max",
+      "len": 4,
+      "type": "u32",
+      "value": 4294967295
+    },
+    {
+      "case": "zero",
+      "file": "015_i32_zero",
+      "len": 4,
+      "type": "i32",
+      "value": 0
+    },
+    {
+      "case": "min",
+      "file": "016_i32_min",
+      "len": 4,
+      "type": "i32",
+      "value": -2147483648
+    },
+    {
+      "case": "max",
+      "file": "017_i32_max",
+      "len": 4,
+      "type": "i32",
+      "value": 2147483647
+    },
+    {
+      "case": "zero",
+      "file": "018_f32_zero",
+      "len": 4,
+      "type": "f32",
+      "value": 0.0
+    },
+    {
+      "case": "one",
+      "file": "019_f32_one",
+      "len": 4,
+      "type": "f32",
+      "value": 1.0
+    },
+    {
+      "case": "smallest_normal",
+      "file": "020_f32_smallest_normal",
+      "len": 4,
+      "type": "f32",
+      "value": 1.1754943508222875e-38
+    },
+    {
+      "case": "max",
+      "file": "021_f32_max",
+      "len": 4,
+      "type": "f32",
+      "value": 3.4028234663852886e+38
+    },
+    {
+      "case": "neg_max",
+      "file": "022_f32_neg_max",
+      "len": 4,
+      "type": "f32",
+      "value": -3.4028234663852886e+38
+    },
+    {
+      "case": "false",
+      "file": "023_bool_false",
+      "len": 1,
+      "type": "bool",
+      "value": false
+    },
+    {
+      "case": "true",
+      "file": "024_bool_true",
+      "len": 1,
+      "type": "bool",
+      "value": true
+    }
+  ]
+}

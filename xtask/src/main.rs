@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod golden;
 mod layering;
 
 use std::process::Command;
@@ -37,6 +38,7 @@ fn run(args: &[String]) -> Result<()> {
         "test" => test(flags),
         "check-layering" => layering::check(flags),
         "audit-traceability" => audit_traceability(flags),
+        "golden-gen" => golden::generate(flags),
         other => bail!("unknown command `{other}`; see xtask/README.md"),
     }
 }

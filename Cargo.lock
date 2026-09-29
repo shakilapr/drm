@@ -455,6 +455,8 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "drm-core",
+ "drm-types",
  "serde",
  "serde_json",
 ]
