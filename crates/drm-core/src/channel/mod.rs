@@ -820,7 +820,7 @@ mod tests {
             assert_eq!(c.overrun_count(), k, "k={k}");
             match c.next(&mut st, 0, &mut buf) {
                 Ok(ReadOutcome::Sample) => {
-                    assert_eq!(buf, pat(6_u8 + u8::try_from(k).unwrap_or(0)))
+                    assert_eq!(buf, pat(6_u8 + u8::try_from(k).unwrap_or(0)));
                 }
                 other => unreachable!("k={k} want oldest, got {other:?}"),
             }

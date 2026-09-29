@@ -24,13 +24,23 @@ fn main() -> std::process::ExitCode {
 }
 
 /// REQ: REQ-CORE-072 — spike driver; every probe below is failure-reporting,
-/// never panicking (clippy::panic denied).
+/// never panicking (`clippy::panic` denied).
 #[cfg(unix)]
 fn run() -> Result<(), String> {
+    let name = format!("/drm.spike.{}", std::process::id());
+    roundtrip_and_recreate(&name)?;
+    race_probe()?;
+    println!("SPIKE_OK");
+    Ok(())
+}
+
+/// REQ: REQ-CORE-072 — probes 1–2: parent/child round-trip, then unlink +
+/// re-create. Consumers open-only (REQ: REQ-CORE-071).
+#[cfg(unix)]
+fn roundtrip_and_recreate(name: &str) -> Result<(), String> {
     use std::ffi::CString;
 
-    let name = format!("/drm.spike.{}", std::process::id());
-    let c_name = CString::new(name.clone()).map_err(|e| e.to_string())?;
+    let c_name = CString::new(name.to_string()).map_err(|e| e.to_string())?;
 
     // Probe 1: round-trip. REQ: REQ-CORE-072.
     let fd = unsafe {
@@ -76,11 +86,11 @@ fn run() -> Result<(), String> {
     }
     if child_pid == 0 {
         // Child: open-only (never create), read 42, write 43. REQ: REQ-CORE-071.
-        let ok = child_roundtrip(&name);
-        unsafe { libc::exit(if ok { 0 } else { 1 }) };
+        let ok = child_roundtrip(name);
+        unsafe { libc::exit(i32::from(!ok)) };
     }
     let mut status = 0;
-    if unsafe { libc::waitpid(child_pid, &mut status, 0) } != child_pid {
+    if unsafe { libc::waitpid(child_pid, std::ptr::from_mut(&mut status), 0) } != child_pid {
         return Err(format!("waitpid errno={}", std::io::Error::last_os_error()));
     }
     if !libc_ok_status(status) {
@@ -116,7 +126,15 @@ fn run() -> Result<(), String> {
     // SAFETY: unmapping the mapping created above.
     unsafe { libc::munmap(ptr, 4096) };
 
-    // Probe 3: EEXIST race ×100 — per iteration exactly one creator. REQ: REQ-CORE-072.
+    Ok(())
+}
+
+/// REQ: REQ-CORE-072 — probe 3: EEXIST race ×100 — per iteration exactly one
+/// creator among 8 forked participants.
+#[cfg(unix)]
+fn race_probe() -> Result<(), String> {
+    use std::ffi::CString;
+
     for i in 0..100 {
         let race = format!("/drm.spike.race.{i}");
         let c_race = CString::new(race.clone()).map_err(|e| e.to_string())?;
@@ -131,12 +149,12 @@ fn run() -> Result<(), String> {
             }
             if pid == 0 {
                 let created = race_try_create(&race);
-                unsafe { libc::exit(if created { 1 } else { 0 }) };
+                unsafe { libc::exit(i32::from(created)) };
             }
         }
         for _ in 0..8 {
             let mut st = 0;
-            if unsafe { libc::waitpid(-1, &mut st, 0) } < 0 {
+            if unsafe { libc::waitpid(-1, std::ptr::from_mut(&mut st), 0) } < 0 {
                 return Err(format!(
                     "race waitpid errno={}",
                     std::io::Error::last_os_error()
@@ -153,8 +171,6 @@ fn run() -> Result<(), String> {
         }
         unsafe { libc::shm_unlink(c_race.as_ptr()) };
     }
-
-    println!("SPIKE_OK");
     Ok(())
 }
 

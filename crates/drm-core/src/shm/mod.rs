@@ -15,6 +15,20 @@ use std::sync::Arc;
 
 use drm_types::Status;
 
+#[cfg(unix)]
+mod lock;
+#[cfg(unix)]
+mod process;
+#[cfg(unix)]
+mod segment;
+
+#[cfg(unix)]
+pub use lock::FlockBackend;
+#[cfg(unix)]
+pub use process::{current_identity, is_alive};
+#[cfg(unix)]
+pub use segment::PosixShm;
+
 /// POSIX `NAME_MAX` upper bound for `shm_open` names (shm-backend.md I0).
 const NAME_MAX: usize = 255;
 
@@ -116,18 +130,36 @@ impl From<ShmError> for Status {
 }
 
 /// RAII mapping view: `Drop` ⇒ munmap; the descriptor closes right after mmap.
-/// Bodies W2–W3. REQ: REQ-CORE-072.
+/// REQ: REQ-CORE-072.
 pub struct Mapping {
-    #[expect(dead_code, reason = "Linux backend body lands W2-W3 (shm-backend.md)")]
     ptr: NonNull<u8>,
     len: usize,
 }
 
 impl Mapping {
-    /// Backend-internal constructor (Linux backend, W2–W3).
-    #[expect(dead_code, reason = "Linux backend body lands W2-W3 (shm-backend.md)")]
+    /// Backend-internal constructor (Linux backend, unix only).
+    #[cfg_attr(
+        not(unix),
+        expect(
+            dead_code,
+            reason = "platform mmap body lands with the OS backend (windows-backends.md)"
+        )
+    )]
     pub(crate) fn from_raw_parts(ptr: NonNull<u8>, len: usize) -> Self {
         Self { ptr, len }
+    }
+
+    /// Base pointer of the mapping (backend precommit/attachment paths).
+    #[cfg_attr(
+        not(unix),
+        expect(
+            dead_code,
+            reason = "platform mmap body lands with the OS backend (windows-backends.md)"
+        )
+    )]
+    #[must_use]
+    pub(crate) fn ptr(&self) -> NonNull<u8> {
+        self.ptr
     }
 
     /// Mapped byte length.
@@ -140,6 +172,19 @@ impl Mapping {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        if self.len == 0 {
+            return;
+        }
+        // SAFETY: `ptr` was produced by `mmap(PROT_READ | PROT_WRITE, MAP_SHARED)`
+        // over exactly `len` bytes and is exclusively owned by this `Mapping`;
+        // dropping releases it exactly once.
+        unsafe { libc::munmap(self.ptr.cast().as_ptr(), self.len) };
     }
 }
 
@@ -205,10 +250,14 @@ pub trait ShmBackend {
 }
 
 /// Opaque held OS lock; `Drop` releases (flock binds to the open file description
-/// and the kernel releases it on process death — I4). Body W2–W3.
+/// and the kernel releases it when the last duplicate closes — I4). The handle
+/// owns the lock-file descriptor, opened `O_CLOEXEC`.
 /// REQ: REQ-CORE-073, REQ-CORE-069.
 #[derive(Debug)]
 pub struct LockHandle {
+    #[cfg(unix)]
+    fd: std::os::fd::OwnedFd,
+    #[cfg(not(unix))]
     _priv: (),
 }
 
