@@ -1,5 +1,8 @@
 [toolchain]
-# Pinned for reproducible builds across Linux x86_64/aarch64 and Windows (codebase.md §3.2).
-channel = "1.89.0"
+# Pinned for reproducible builds across Linux x86_64/aarch64 and Windows (codebase.md 3.2).
+# Bumped 1.89.0 -> 1.94.0: the 1.89.0 rustfmt tarball is quarantined by Microsoft
+# Defender on dev hosts (false positive); 1.94.0 is functionally equivalent for
+# edition 2024.
+channel = "1.94.0"
 profile = "minimal"
 components = ["clippy", "rustfmt"]
