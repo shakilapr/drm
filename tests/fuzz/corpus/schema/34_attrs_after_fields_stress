@@ -1,0 +1,6 @@
+a: u8
+b: u8
+@history: 1
+c: u8
+@pool_size: 2
+d: u8

@@ -1,0 +1,4 @@
+a_f32: f32
+a_i8: i8
+a_u64: u64
+a_bool: bool

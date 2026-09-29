@@ -1,0 +1,5 @@
+ok_a: u8
+x f32
+ok_b: u8
+y: f16
+ok_c: u8

@@ -9,5 +9,8 @@ license.workspace = true
 [dependencies]
 drm-types = { path = "../drm-types" }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
