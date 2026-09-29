@@ -20,12 +20,14 @@ pub fn check_bounds(len: usize, off: usize, size: usize) -> Result<(), Status> {
 /// REQ: REQ-TOOL-043, REQ-TOOL-044, REQ-CORE-083 — primitive read/write family.
 /// Every accessor bounds-checks first (`I3`) and never panics (`I5`).
 mod prim {
-    use super::{check_bounds, Status};
+    use super::{Status, check_bounds};
 
     macro_rules! le_pair {
         ($read:ident, $write:ident, $t:ty, $n:expr, $doc:expr) => {
-            /// REQ: REQ-TOOL-043 — bounds-checked LE read ($doc).
-            #[must_use]
+            /// REQ: REQ-TOOL-043 — bounds-checked LE read.
+            ///
+            /// # Errors
+            /// [`Status::InvalidArg`] when the read would pass the buffer end.
             pub fn $read(buf: &[u8], off: usize) -> Result<$t, Status> {
                 let b = <$t>::from_le_bytes(match buf.get(off..off + $n) {
                     Some(s) => s.try_into().ok().ok_or(Status::InvalidData)?,
@@ -33,7 +35,7 @@ mod prim {
                 });
                 Ok(b)
             }
-            /// REQ: REQ-TOOL-043, REQ-CORE-081 — bounds-checked LE write ($doc).
+            /// REQ: REQ-TOOL-043, REQ-CORE-081 — bounds-checked LE write.
             ///
             /// # Errors
             /// [`Status::InvalidArg`] before any write on short buffer.
@@ -58,9 +60,9 @@ mod prim {
 }
 
 pub use prim::{
-    read_f32, read_f64, read_i16, read_i32, read_i64, read_i8, read_u16, read_u32, read_u64,
-    read_u8, write_f32, write_f64, write_i16, write_i32, write_i64, write_i8, write_u16, write_u32,
-    write_u64, write_u8,
+    read_f32, read_f64, read_i8, read_i16, read_i32, read_i64, read_u8, read_u16, read_u32,
+    read_u64, write_f32, write_f64, write_i8, write_i16, write_i32, write_i64, write_u8, write_u16,
+    write_u32, write_u64,
 };
 
 /// REQ: REQ-TOOL-044, REQ-CORE-083 — `bool` is byte 0/1; anything else ⇒ `InvalidData`.
@@ -108,10 +110,13 @@ pub fn body_range(buf_len: u64, d: &Descriptor, sample_len: u64) -> Result<(u64,
     if d.count > d.max {
         return Err(Status::InvalidData);
     }
-    if d.offset < d.header_end || d.elem_align == 0 || d.offset % d.elem_align != 0 {
+    if d.offset < d.header_end || d.elem_align == 0 || !d.offset.is_multiple_of(d.elem_align) {
         return Err(Status::InvalidData);
     }
-    let bytes = d.count.checked_mul(d.elem_size).ok_or(Status::InvalidData)?;
+    let bytes = d
+        .count
+        .checked_mul(d.elem_size)
+        .ok_or(Status::InvalidData)?;
     let end = d.offset.checked_add(bytes).ok_or(Status::InvalidData)?;
     if end > sample_len || sample_len > buf_len {
         return Err(Status::InvalidData);
@@ -226,7 +231,10 @@ mod tests {
         let d_misaligned = Descriptor { offset: 25, ..d_ok };
         assert_eq!(body_range(128, &d_misaligned, 60), Err(Status::InvalidData));
         let d_before_header = Descriptor { offset: 16, ..d_ok };
-        assert_eq!(body_range(128, &d_before_header, 60), Err(Status::InvalidData));
+        assert_eq!(
+            body_range(128, &d_before_header, 60),
+            Err(Status::InvalidData)
+        );
         let d_overflow = Descriptor {
             count: u64::MAX,
             max: u64::MAX,
@@ -235,12 +243,18 @@ mod tests {
             elem_size: 8,
             elem_align: 8,
         };
-        assert_eq!(body_range(128, &d_overflow, u64::MAX), Err(Status::InvalidData));
+        assert_eq!(
+            body_range(128, &d_overflow, u64::MAX),
+            Err(Status::InvalidData)
+        );
         let d_past_sample = Descriptor { offset: 24, ..d_ok };
-        assert_eq!(body_range(128, &d_past_sample, 30), Err(Status::InvalidData));
+        assert_eq!(
+            body_range(128, &d_past_sample, 30),
+            Err(Status::InvalidData)
+        );
     }
 
-    /// REQ: REQ-TOOL-042, REQ-CORE-083 — validate_sample rejects bad lengths/headers.
+    /// REQ: REQ-TOOL-042, REQ-CORE-083 — `validate_sample` rejects bad lengths/headers.
     #[test]
     fn sample_validate() {
         let layout = CanonLayout {
@@ -260,6 +274,9 @@ mod tests {
         assert!(validate_sample(&buf, &layout, 26).is_ok());
         assert_eq!(validate_sample(&buf, &layout, 18), Err(Status::InvalidData));
         assert_eq!(validate_sample(&buf, &layout, 80), Err(Status::InvalidData));
-        assert_eq!(validate_sample(&buf, &layout, 100), Err(Status::InvalidData));
+        assert_eq!(
+            validate_sample(&buf, &layout, 100),
+            Err(Status::InvalidData)
+        );
     }
 }

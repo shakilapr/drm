@@ -4,5 +4,6 @@
 
 pub mod canon;
 pub mod channel;
+pub mod hazard;
 pub mod ring;
 pub mod shm;

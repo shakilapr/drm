@@ -8,13 +8,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use drm_types::Status;
 
-/// Segment layout state (SegmentPrefix).
+/// Segment layout state constant for `SegmentPrefix`.
 /// REQ: REQ-CORE-015.
 pub const SEGMENT_ZERO: u32 = 0;
-/// Segment layout state (SegmentPrefix).
+/// Segment layout state constant for `SegmentPrefix`.
 /// REQ: REQ-CORE-015.
 pub const SEGMENT_INIT: u32 = 1;
-/// Segment layout state (SegmentPrefix).
+/// Segment layout state constant for `SegmentPrefix`.
 /// REQ: REQ-CORE-015.
 pub const SEGMENT_READY: u32 = 2;
 

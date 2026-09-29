@@ -1,7 +1,7 @@
 //! Circular sequence-history ring (docs/algorithms/runtime/ring-history.md).
 //! REQ: REQ-CORE-063 (handle entries), REQ-CORE-066 (exact retention),
 //! REQ-CORE-067 (wrap), REQ-CORE-065 (release ordering), REQ-CORE-062
-//! (first_valid watermark), REQ-CORE-064 (portable fixed-width atomics),
+//! (`first_valid` watermark), REQ-CORE-064 (portable fixed-width atomics),
 //! REQ-CORE-061 (no sequence wrap).
 
 use std::mem::{align_of, size_of};
@@ -23,7 +23,7 @@ const _: () = assert!(align_of::<RingCell>() == 8);
 /// REQ: REQ-CORE-064, REQ-CORE-065.
 #[repr(C, align(8))]
 pub struct RingBank {
-    /// SeqCst version stamp (even = stable, odd = writer active).
+    /// `SeqCst` version stamp (even = stable, odd = writer active).
     pub stamp: AtomicU64,
     /// Sequence this entry describes (self-describing re-read guard).
     pub sequence: AtomicU64,
@@ -57,13 +57,13 @@ pub enum LookupErr {
     AgedOut,
 }
 
-/// Reader-ordering bundle: stamp check is SeqCst, fields Acquire.
+/// Reader-ordering bundle: stamp check is `SeqCst`, fields `Acquire`.
 /// REQ: REQ-CORE-065.
 #[derive(Debug, Clone, Copy)]
 pub struct ReadOrder;
 
 impl ReadOrder {
-    /// Stamp ordering (SeqCst — participates in the hazard handshake).
+    /// Stamp ordering (`SeqCst` — participates in the hazard handshake).
     #[must_use]
     pub fn stamp(self) -> Ordering {
         Ordering::SeqCst
@@ -106,6 +106,21 @@ impl HistoryRing {
         self.r
     }
 
+    /// Cell index for sequence `s` (total: depth is bounded by `usize::MAX`
+    /// at activation and the modulo result is smaller than the depth).
+    // Narrowing is total after the activation bound check.
+    #[allow(clippy::cast_possible_truncation)]
+    fn cell_index(r: u64, s: u64) -> usize {
+        (s % r) as usize
+    }
+
+    /// Lap-selected bank index.
+    // Narrowing is total: the index is 0 or 1.
+    #[allow(clippy::cast_possible_truncation)]
+    fn bank_index(r: u64, s: u64) -> usize {
+        ((s / r) & 1) as usize
+    }
+
     /// Activation gate: shared atomics must be lock-free (codebase R11). Best-effort
     /// structural probe — single-width atomics on supported targets (x86-64/aarch64)
     /// compile to single instructions; the std lock-free introspection API is not
@@ -114,7 +129,9 @@ impl HistoryRing {
     /// REQ: REQ-CORE-064.
     #[must_use]
     pub fn atomics_lock_free() -> bool {
-        size_of::<AtomicU64>() == 8 && align_of::<AtomicU64>() == 8 && AtomicU32::new(0).load(Ordering::Relaxed) == 0
+        size_of::<AtomicU64>() == 8
+            && align_of::<AtomicU64>() == 8
+            && AtomicU32::new(0).load(Ordering::Relaxed) == 0
     }
 
     /// Preflight: target bank must be stable and stamp must advance by 2.
@@ -124,8 +141,10 @@ impl HistoryRing {
     /// [`Status::InvalidData`] on odd (writer-active) stamp;
     /// [`Status::RingStampExhausted`] when the stamp space is exhausted.
     pub fn preflight_commit(&self, s: u64) -> Result<u64, Status> {
-        let cell = &self.entries[(s % self.r) as usize];
-        let stable = cell.banks[((s / self.r) & 1) as usize].stamp.load(Ordering::Relaxed);
+        let cell = &self.entries[Self::cell_index(self.r, s)];
+        let stable = cell.banks[Self::bank_index(self.r, s)]
+            .stamp
+            .load(Ordering::Relaxed);
         if stable & 1 != 0 {
             return Err(Status::InvalidData);
         }
@@ -136,8 +155,8 @@ impl HistoryRing {
     /// Single-publisher commit: prepare the lap-selected bank (other bank untouched).
     /// REQ: REQ-CORE-065.
     pub fn commit(&self, s: u64, slot: u32, generation: u64, stable: u64) {
-        let i = (s % self.r) as usize;
-        let bank = &self.entries[i].banks[((s / self.r) & 1) as usize];
+        let i = Self::cell_index(self.r, s);
+        let bank = &self.entries[i].banks[Self::bank_index(self.r, s)];
         bank.stamp.store(stable + 1, Ordering::SeqCst);
         bank.sequence.store(s, Ordering::Relaxed);
         bank.slot.store(slot, Ordering::Relaxed);
@@ -148,15 +167,16 @@ impl HistoryRing {
     /// Publisher restart: exclude every prior-run sequence (sole owner is the CCB).
     /// REQ: REQ-CORE-062.
     pub fn reset_run(&self, ccb: &ChannelControlBlock, first_valid_seq: u64) {
-        ccb.first_valid_seq.store(first_valid_seq, Ordering::Release);
+        ccb.first_valid_seq
+            .store(first_valid_seq, Ordering::Release);
     }
 
     /// Read one bank coherently; `Err(())` = Retry (odd/moved stamp).
     /// REQ: REQ-CORE-065.
-    fn read_bank(bank: &RingBank, order: ReadOrder) -> Result<RingEntry, ()> {
+    fn read_bank(bank: &RingBank, order: ReadOrder) -> Option<RingEntry> {
         let a = bank.stamp.load(order.stamp());
         if a & 1 != 0 {
-            return Err(());
+            return None;
         }
         let entry = RingEntry {
             sequence: bank.sequence.load(order.fields()),
@@ -165,18 +185,18 @@ impl HistoryRing {
         };
         let b = bank.stamp.load(order.stamp());
         if a != b || b & 1 != 0 {
-            return Err(());
+            return None;
         }
-        Ok(entry)
+        Some(entry)
     }
 
     /// Resolve a target sequence to its entry.
     /// REQ: REQ-CORE-066, REQ-CORE-062.
-    pub fn lookup(
-        &self,
-        ccb: &ChannelControlBlock,
-        s: u64,
-    ) -> Result<RingEntry, LookupErr> {
+    ///
+    /// # Errors
+    /// [`LookupErr::Future`] for unpublished sequences; [`LookupErr::AgedOut`] for
+    /// retired/prior-run sequences or unstable banks.
+    pub fn lookup(&self, ccb: &ChannelControlBlock, s: u64) -> Result<RingEntry, LookupErr> {
         let ws = ccb.write_seq.load(Ordering::Acquire);
         let fv = ccb.first_valid_seq.load(Ordering::Acquire);
         if s < fv {
@@ -188,35 +208,73 @@ impl HistoryRing {
         if s < ws.saturating_sub(self.r) {
             return Err(LookupErr::AgedOut);
         }
-        let cell = &self.entries[(s % self.r) as usize];
-        let bank = &cell.banks[((s / self.r) & 1) as usize];
-        let e = Self::read_bank(bank, ReadOrder).map_err(|_| LookupErr::AgedOut)?;
+        let cell = &self.entries[Self::cell_index(self.r, s)];
+        let bank = &cell.banks[Self::bank_index(self.r, s)];
+        let e = Self::read_bank(bank, ReadOrder).ok_or(LookupErr::AgedOut)?;
         if e.sequence != s {
             return Err(LookupErr::AgedOut);
         }
         Ok(e)
     }
 
+    /// Hazard-handshake variant: fully `SeqCst` loads (steps 1/3 of acquisition).
+    /// REQ: REQ-CORE-030.
+    ///
+    /// # Errors
+    /// [`LookupErr`] per the window bounds; unstable banks report `AgedOut` (retry).
+    pub fn lookup_sc(&self, ccb: &ChannelControlBlock, s: u64) -> Result<RingEntry, LookupErr> {
+        let ws = ccb.write_seq.load(Ordering::SeqCst);
+        let fv = ccb.first_valid_seq.load(Ordering::SeqCst);
+        if s < fv {
+            return Err(LookupErr::AgedOut);
+        }
+        if s >= ws {
+            return Err(LookupErr::Future);
+        }
+        if s < ws.saturating_sub(self.r) {
+            return Err(LookupErr::AgedOut);
+        }
+        let cell = &self.entries[Self::cell_index(self.r, s)];
+        let bank = &cell.banks[Self::bank_index(self.r, s)];
+        let a = bank.stamp.load(Ordering::SeqCst);
+        if a & 1 != 0 {
+            return Err(LookupErr::AgedOut);
+        }
+        let entry = RingEntry {
+            sequence: bank.sequence.load(Ordering::SeqCst),
+            slot: bank.slot.load(Ordering::SeqCst),
+            generation: bank.generation.load(Ordering::SeqCst),
+        };
+        let b = bank.stamp.load(Ordering::SeqCst);
+        if a != b || b & 1 != 0 || entry.sequence != s {
+            return Err(LookupErr::AgedOut);
+        }
+        Ok(entry)
+    }
+
     /// Newest committed entry, if any.
     /// REQ: REQ-CORE-066.
-    pub fn newest(
-        &self,
-        ccb: &ChannelControlBlock,
-    ) -> Result<Option<(u64, RingEntry)>, ()> {
+    ///
+    /// # Errors
+    /// [`Status::Retry`] when the newest bank was mid-commit.
+    pub fn newest(&self, ccb: &ChannelControlBlock) -> Result<Option<(u64, RingEntry)>, Status> {
         let ws = ccb.write_seq.load(Ordering::Acquire);
         let fv = ccb.first_valid_seq.load(Ordering::Acquire);
         if ws <= fv {
             return Ok(None);
         }
         let s = ws - 1;
-        self.lookup(ccb, s).map(|entry| Some((s, entry))).map_err(|_| ())
+        self.lookup(ccb, s)
+            .map(|entry| Some((s, entry)))
+            .map_err(|_| Status::Retry)
     }
 
-    /// Oldest retained sequence for `ws` (window floor; never below first_valid).
+    /// Oldest retained sequence for `ws` (window floor; never below `first_valid`).
     /// REQ: REQ-CORE-062.
     #[must_use]
     pub fn oldest_retained(&self, ccb: &ChannelControlBlock, ws: u64) -> u64 {
-        ws.saturating_sub(self.r).max(ccb.first_valid_seq.load(Ordering::Acquire))
+        ws.saturating_sub(self.r)
+            .max(ccb.first_valid_seq.load(Ordering::Acquire))
     }
 
     /// Restart repair: make every odd stamp even (caller holds the publisher lock).
@@ -225,13 +283,14 @@ impl HistoryRing {
     /// # Errors
     /// [`Status::RingStampExhausted`] when a stamp cannot advance.
     pub fn repair_incomplete_banks(&self) -> Result<(), Status> {
-        for cell in self.entries.iter() {
-            for bank in cell.banks.iter() {
+        for cell in &self.entries {
+            for bank in &cell.banks {
                 let stamp = bank.stamp.load(Ordering::SeqCst);
                 if stamp & 1 != 0 {
-                    bank
-                        .stamp
-                        .store(stamp.checked_add(1).ok_or(Status::RingStampExhausted)?, Ordering::SeqCst);
+                    bank.stamp.store(
+                        stamp.checked_add(1).ok_or(Status::RingStampExhausted)?,
+                        Ordering::SeqCst,
+                    );
                 }
             }
         }
@@ -248,10 +307,11 @@ impl RingCell {
             slot: AtomicU32::new(0),
             pad: 0,
         };
-        Self { banks: [mk(), mk()] }
+        Self {
+            banks: [mk(), mk()],
+        }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -349,20 +409,14 @@ mod tests {
     fn assert_ok(r: Result<HistoryRing, drm_types::Status>) -> HistoryRing {
         match r {
             Ok(ring) => ring,
-            Err(e) => {
-                assert!(false, "ring alloc failed: {e:?}");
-                unreachable!()
-            }
+            Err(e) => unreachable!("ring alloc failed: {e:?}"),
         }
     }
 
     fn assert_preflight(ring: &HistoryRing, s: u64) -> u64 {
         match ring.preflight_commit(s) {
             Ok(stable) => stable,
-            Err(e) => {
-                assert!(false, "preflight s={s}: {e:?}");
-                unreachable!()
-            }
+            Err(e) => unreachable!("preflight s={s}: {e:?}"),
         }
     }
 }
