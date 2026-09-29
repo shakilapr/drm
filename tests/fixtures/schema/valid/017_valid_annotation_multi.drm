@@ -1,0 +1,1 @@
+v: f32 {unit: m/s, gain: 2, range: [-1, 1]}

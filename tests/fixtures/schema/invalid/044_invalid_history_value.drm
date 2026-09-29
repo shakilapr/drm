@@ -1,0 +1,3 @@
+# reason: bad-attribute-value
+@history: sometimes
+speed: f32

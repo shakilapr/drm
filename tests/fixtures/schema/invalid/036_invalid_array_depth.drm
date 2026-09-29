@@ -1,0 +1,2 @@
+# reason: array-depth-exceeded
+m: u8[2][3]

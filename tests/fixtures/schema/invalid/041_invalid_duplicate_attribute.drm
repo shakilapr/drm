@@ -1,0 +1,4 @@
+# reason: duplicate-attribute
+@history: 4
+@history: 8
+speed: f32

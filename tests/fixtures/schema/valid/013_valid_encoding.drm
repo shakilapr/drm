@@ -1,0 +1,2 @@
+@encoding: {type: i16, scale: 0.01}
+temp_c: i16

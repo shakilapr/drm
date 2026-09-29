@@ -1,0 +1,3 @@
+# reason: duplicate-field
+x: u8
+x: u16

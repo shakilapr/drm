@@ -1,0 +1,5 @@
+@history: 4
+@pool_size: 2
+@overflow: reject
+@encoding: {type: u16, scale: 0.5}
+level: u16

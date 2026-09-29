@@ -1,0 +1,6 @@
+@history: 2
+@pool_size: 8
+@overflow: overwrite
+name: string[24] {description: "device name"}
+pose: f32[3] {unit: rad}
+flag: bool

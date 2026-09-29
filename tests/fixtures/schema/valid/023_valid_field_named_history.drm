@@ -1,0 +1,4 @@
+history: u32
+pool_size: u8
+overflow: bool
+encoding: u16

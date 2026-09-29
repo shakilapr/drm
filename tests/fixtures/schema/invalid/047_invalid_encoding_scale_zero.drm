@@ -1,0 +1,3 @@
+# reason: encoding-invalid
+@encoding: {type: i16, scale: 0}
+t: i16
