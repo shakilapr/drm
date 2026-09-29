@@ -15,6 +15,11 @@
 *.so binary
 *.dylib binary
 
+# Byte-exact test fixtures: schema corpus / golden vectors must not be
+# EOL-normalized (CRLF and BOM fixtures are semantic test inputs)
+*.drm -text
+*.hex -text
+
 # Generated code: never committed here; suppress diffs if it ever appears locally
 **/@generated/** -diff
 *.gen.* -diff
