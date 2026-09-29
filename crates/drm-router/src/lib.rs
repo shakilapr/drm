@@ -6,7 +6,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod crc32c;
 pub mod mtu;
+pub mod wire;
 
 #[cfg(test)]
 mod tests {
