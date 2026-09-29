@@ -1,0 +1,13 @@
+[package]
+name = "drm-workspace"
+description = "Toolchain: parser, WorkspaceModel, verifier, codegen, topology."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+drm-types = { path = "../drm-types" }
+
+[lints]
+workspace = true

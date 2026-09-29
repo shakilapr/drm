@@ -1,0 +1,13 @@
+[package]
+name = "drm-router"
+description = "Boundary router: framing, priority lanes, traffic shaping."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+drm-types = { path = "../drm-types" }
+
+[lints]
+workspace = true

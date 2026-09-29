@@ -1,5 +1,5 @@
-# Merge gate — codebase.md §5.2 (ci.yml).
-# Placeholder jobs are disabled (`if: false`) until the first crates land (W1 Phase 2+).
+# Merge gate - codebase.md 5.2 (ci.yml).
+# Frontend and docs jobs stay disabled (`if: false`) until their trees land.
 name: ci
 
 on:
@@ -7,21 +7,37 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust:
-    if: false
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v4
-      - name: fmt + lint + test + layering
-        run: |
-          cargo xtask lint
-          cargo xtask test
-          cargo xtask check-layering
+      - uses: dtolnay/rust-toolchain@stable # honors rust-toolchain.toml
+      - uses: mozilla/sccache-action@v0.0.11
+      - name: sccache setup
+        shell: bash
+        run: echo "RUSTC_WRAPPER=$(which sccache || echo sccache)" >> "$GITHUB_ENV"
+      - name: fmt
+        run: cargo xtask fmt --check
+      - name: lint
+        run: cargo xtask lint
+      - name: test
+        run: cargo xtask test
+      - name: layering
+        run: cargo xtask check-layering
+      - name: traceability
+        run: cargo xtask audit-traceability --registry
 
   frontend:
     if: false

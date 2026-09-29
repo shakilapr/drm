@@ -1,0 +1,17 @@
+[package]
+name = "drm-core"
+description = "Runtime core: SHM backends, channels, rings, hazard pools, epochs, precommit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+drm-types = { path = "../drm-types" }
+thiserror.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.178"
+
+[lints]
+workspace = true

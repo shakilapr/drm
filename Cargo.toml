@@ -1,0 +1,41 @@
+# Virtual workspace; crate layers and rules: codebase.md 2.1-2.2.
+[workspace]
+resolver = "3"
+members = [
+    "crates/drm-types",
+    "crates/drm-core",
+    "crates/drm-workspace",
+    "crates/drm-router",
+    "crates/drm-cli",
+    "crates/drm-ffi",
+    "xtask",
+]
+exclude = ["tests/fuzz"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+thiserror = "2.0.17"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+anyhow = "1.0.100"
+
+# Universal gates (codebase.md 3.1 R4/R9); unsafe confined to drm-core and drm-ffi.
+[workspace.lints.rust]
+missing_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[profile.release]
+panic = "abort"
+incremental = false

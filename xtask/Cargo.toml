@@ -1,0 +1,15 @@
+[package]
+name = "xtask"
+description = "Repository automation entry point (codebase.md 5.1); command registry: xtask/README.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

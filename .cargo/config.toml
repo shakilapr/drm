@@ -1,0 +1,6 @@
+# Build configuration (codebase.md 1). CI supplies sccache and CARGO_INCREMENTAL=0
+# through environment; no local overrides are required.
+
+# xtask is the single automation entry point (codebase.md 5.1).
+[alias]
+xtask = "run -p xtask --"

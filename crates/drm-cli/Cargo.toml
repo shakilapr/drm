@@ -1,0 +1,13 @@
+[package]
+name = "drm-cli"
+description = "`drm` executable + `drm studio --stdio` host (facade layer)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+drm-types = { path = "../drm-types" }
+
+[lints]
+workspace = true
