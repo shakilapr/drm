@@ -26,7 +26,7 @@ Scope: the stable C ABI (`drm.h`, crate `drm-ffi`) — opaque context/publisher/
 ## Data Structures
 
 ```c
-// bindings/c/include/drm/drm.h — handwritten, single source of truth (ADR 0001)
+// bindings/c/include/drm/drm.h — handwritten, single source of truth (ADR 0002)
 #include <stdint.h>
 
 typedef int32_t drm_status; // fixed width — no C enum in the ABI, so compiler enum
