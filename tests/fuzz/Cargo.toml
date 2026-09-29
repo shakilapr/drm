@@ -1,0 +1,17 @@
+[package]
+name = "drm-fuzz"
+publish = false
+edition = "2024"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "dummy"
+path = "fuzz_targets/dummy.rs"
+test = false
+doc = false
+bench = false
+
+[package.metadata.cargo-fuzz]
+name = "drm-fuzz"
