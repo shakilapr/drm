@@ -19,6 +19,8 @@
 # EOL-normalized (CRLF and BOM fixtures are semantic test inputs)
 *.drm -text
 *.hex -text
+tests/fuzz/corpus/** -text
+tests/fixtures/** -text
 
 # Generated code: never committed here; suppress diffs if it ever appears locally
 **/@generated/** -diff
