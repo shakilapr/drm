@@ -15,12 +15,26 @@
 extern "C" {
 #endif
 
-/* ABI version: bump on layout change only; additions do not bump. */
+/* ABI version: bump on layout change only; additions do not bump.
+ * The status vocabulary below is complete for month 1 (work-plan M01W3-E4-T5);
+ * new codes are appended with explicit values only (docs/spec/abi-policy.md). */
 #define DRM_ABI_VERSION 0
 
 typedef struct drm_context drm_context;     /* opaque deployment context */
 typedef struct drm_publisher drm_publisher; /* opaque publisher endpoint */
 typedef struct drm_consumer drm_consumer;   /* opaque consumer endpoint */
+
+/* Handle validity (REQ-BIND-004, ABI policy):
+ * - Handles are opaque; a client never dereferences, copies semantics of, or
+ *   synthesizes a handle value. Invalid (freed/foreign/NULL) handle input is a
+ *   caller contract violation; only NULL is checked (non-null dangling stays
+ *   caller UB and is never claimed detectable).
+ * - A handle is valid from a successful open until its matching close call.
+ *   Close is never concurrent with other calls on the same handle.
+ * - drm_context must be closed only after all endpoints derived from it.
+ * - Views (drm_borrow_view / drm_write_view) are caller-owned structs whose
+ *   data pointer validity is bounded by the matching release/commit/abort.
+ */
 
 /* Status: fixed int32_t — no C enum, so -fshort-enums cannot alter the ABI.
  * Append-only: explicit values forever; never renumbered, never reused.
@@ -68,7 +82,7 @@ typedef struct drm_write_view {
     uint32_t token; /* opaque; 0 = invalid */
 } drm_write_view;
 
-/* ABI probe (W1 skeleton export; vocabulary grows with drm-ffi, W2+). */
+/* ABI probe; the canonical export is drm-ffi drm_abi_version. */
 int32_t drm_abi_version(void);
 
 #ifdef __cplusplus
