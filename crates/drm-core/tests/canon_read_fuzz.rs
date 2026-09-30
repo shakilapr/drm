@@ -52,21 +52,20 @@ fn read_fuzz_no_panic() {
         }
         for off in 0..buf.len() {
             match drm_core::canon::read_bool(&buf, off) {
-                Ok(_) => {}
-                Err(drm_types::Status::InvalidData) => {}
+                Ok(_) | Err(drm_types::Status::InvalidData) => {}
                 Err(other) => unreachable!("bool read status {other:?}"),
             }
-            let r = match rng.next() % 10 {
-                0 => drm_core::canon::read_u8(&buf, off).map(|v| v as u128),
-                1 => drm_core::canon::read_i8(&buf, off).map(|v| v as i128 as u128),
-                2 => drm_core::canon::read_u16(&buf, off).map(|v| v as u128),
-                3 => drm_core::canon::read_i16(&buf, off).map(|v| v as i128 as u128),
-                4 => drm_core::canon::read_u32(&buf, off).map(|v| v as u128),
-                5 => drm_core::canon::read_i32(&buf, off).map(|v| v as i128 as u128),
-                6 => drm_core::canon::read_f32(&buf, off).map(|v| v.to_bits() as u128),
+            let r: Result<u128, drm_types::Status> = match rng.next() % 10 {
+                0 => drm_core::canon::read_u8(&buf, off).map(u128::from),
+                1 => drm_core::canon::read_i8(&buf, off).map(|v| v.cast_unsigned()),
+                2 => drm_core::canon::read_u16(&buf, off).map(u128::from),
+                3 => drm_core::canon::read_i16(&buf, off).map(|v| v.cast_unsigned()),
+                4 => drm_core::canon::read_u32(&buf, off).map(u128::from),
+                5 => drm_core::canon::read_i32(&buf, off).map(|v| v.cast_unsigned()),
+                6 => drm_core::canon::read_f32(&buf, off).map(|v| u128::from(v.to_bits())),
                 7 => drm_core::canon::read_u64(&buf, off).map(u128::from),
-                8 => drm_core::canon::read_i64(&buf, off).map(|v| v as i128 as u128),
-                _ => drm_core::canon::read_f64(&buf, off).map(|v| v.to_bits() as u128),
+                8 => drm_core::canon::read_i64(&buf, off).map(|v| v.cast_unsigned()),
+                _ => drm_core::canon::read_f64(&buf, off).map(|v| u128::from(v.to_bits())),
             };
             match r {
                 Ok(_) => ok += 1,
