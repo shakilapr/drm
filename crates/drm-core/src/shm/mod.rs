@@ -201,7 +201,12 @@ impl fmt::Debug for Mapping {
 /// `create_exclusive` succeeds (I1); `open_existing` never creates (I2) and
 /// validates size only after stale classification (I3); every failure after
 /// exclusive creation rolls back fd and name (I7).
+/// Frozen v1 (work-plan M01W3-E1-T2): trait shape and method set are stable;
+/// breaking changes require a drm-core version bump. Linux impl:
+/// [`super::segment::PosixShm`]; Windows contract: windows-backends.md.
 /// REQ: REQ-CORE-072, REQ-CORE-098.
+#[doc(alias = "shm create")]
+#[doc(alias = "shm open")]
 pub trait ShmBackend {
     /// `O_CREAT|O_EXCL` create + exact-size establish; loser observes
     /// [`ShmError::AlreadyExists`] with no silent fallback.
@@ -265,7 +270,11 @@ pub struct LockHandle {
 /// `LOCK_SH`, release). Locks bind to the open file description; all lock
 /// descriptors open `O_CLOEXEC` and are sanitized at fork (I5). NFS/flock
 /// semantics are out of scope (documented exclusion).
+/// Frozen v1 (work-plan M01W3-E1-T2): trait shape and method set are stable;
+/// breaking changes require a drm-core version bump. Linux impl:
+/// [`super::lock::FlockBackend`]; Windows contract: windows-backends.md.
 /// REQ: REQ-CORE-073, REQ-CORE-069.
+#[doc(alias = "shm lock")]
 pub trait LockBackend {
     /// Exclusive, non-blocking acquisition of the lock file at `path`.
     /// REQ: REQ-CORE-073.
