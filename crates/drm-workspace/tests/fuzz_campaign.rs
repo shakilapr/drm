@@ -10,6 +10,7 @@
 //! REQ: REQ-QAL-007, REQ-CORE-004.
 #![allow(clippy::cast_possible_truncation)] // mutation arithmetic stays in u8/u32 ranges
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -147,12 +148,13 @@ fn hour_campaign() {
         }
     }
 
-    log.push_str("TOTAL ");
-    log.push_str(&format!(
-        "cases={cases} accepted={accepted} rejected={rejected} seeds={} seconds={}\n",
+    let _ = write!(
+        log,
+        "TOTAL cases={cases} accepted={accepted} rejected={rejected} \
+         seeds={} seconds={}\n",
         seeds.len(),
         budget().as_secs()
-    ));
+    );
     print!("{log}");
     let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metrics");
     std::fs::create_dir_all(&out_dir).unwrap_or_else(|e| unreachable!("metrics dir: {e:?}"));
