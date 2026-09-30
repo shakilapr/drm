@@ -5,10 +5,18 @@ edition = "2024"
 
 [dependencies]
 libfuzzer-sys = "0.4"
+drm-workspace = { path = "../../crates/drm-workspace" }
 
 [[bin]]
 name = "dummy"
 path = "fuzz_targets/dummy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "schema"
+path = "fuzz_targets/schema.rs"
 test = false
 doc = false
 bench = false

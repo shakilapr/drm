@@ -39,6 +39,42 @@ jobs:
       - name: traceability
         run: cargo xtask audit-traceability --registry
 
+  corpus:
+    # Blocking parser-corpus matrix (work-plan M01W3-E4-T1): counts must print
+    # 30/30 valid + 30/30 invalid in the log. REQ: REQ-TOOL-001.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: corpus matrix
+        run: cargo test -p drm-workspace --test fixtures_valid --test parser_corpus -- --nocapture
+
+  conformance:
+    # Golden primitive parity across decoders (tests/conformance/README.md).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: rust canon reader
+        run: cargo test -p drm-core --test golden_primitives
+      - name: C11 independent reader
+        run: |
+          cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
+            -o golden_read bindings/c/tests/golden/golden_read.c
+          ./golden_read tests/fixtures/golden/primitives
+
+  fuzz-pr:
+    # 2-minute libFuzzer smoke per PR (work-plan M01W3-E4-T2); full budget in
+    # fuzz-nightly.yml. Linux-only: libFuzzer does not build on MSVC.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz
+      - name: fuzz smoke (schema, 120s)
+        run: cargo fuzz run schema -- -max_total_time=120 -timeout=5
+        working-directory: tests/fuzz
+
   frontend:
     if: false
     runs-on: ubuntu-latest

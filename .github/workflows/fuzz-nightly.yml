@@ -1,0 +1,20 @@
+# Nightly deep fuzz (work-plan M01W3-E4-T2): 1-hour libFuzzer budget per target,
+# new target types graduate to permanent gates only when two consecutive
+# nightly runs find no issues (codebase.md 4.1).
+name: fuzz-nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz
+      - name: schema (3600s)
+        run: cargo fuzz run schema -- -max_total_time=3600 -timeout=5
+        working-directory: tests/fuzz

@@ -1,31 +1,53 @@
-# Sanitizer validation — codebase.md §5.2 (sanitizers.yml).
-# Placeholder jobs disabled until drm-core exists (W2).
+# Sanitizer suite (work-plan M01W3-E1-T1b).
+#
+# ASan over the platform conformance suite (Linux-only, cfg(unix)) with
+# ASAN_OPTIONS=abort_on_error=1, plus Miri on the pure-safe test set. The
+# shm platform suite must stay syscall-clean: no raw syscalls, no
+# mmap-adjacent tricks (SHM-03; P8 spec forbids raw-syscall mmaps), so Miri
+# and ASan can co-exist on the same sources.
+#
+# Cross-process note (TSan): shm_ring/hazard suites exercise cross-process
+# ordering that TSan cannot model (no TSan-instrumented fork model);
+# concurrency coverage rides the rmw hazard tests + Miri + the PR fuzz gate
+# instead. Revisit when TSan gains a supported fork model.
+#
+# Blocking when green: this suite graduates to a required check after two
+# consecutive green nightly runs, like the fuzz matrix.
 name: sanitizers
 
 on:
   pull_request:
-    paths:
-      - "crates/drm-core/**"
-      - "crates/drm-ffi/**"
-      - "tests/stress/**"
+  push:
+    branches: [main]
   schedule:
     - cron: "0 3 * * *"
 
+env:
+  RUSTFLAGS: "-D warnings"
+
 jobs:
-  asan-tsan:
-    if: false
+  asan:
+    if: runner.os == 'Linux'
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: ASan
-        run: RUSTFLAGS="-Zsanitizer=address" cargo test --workspace
-      - name: TSan
-        run: RUSTFLAGS="-Zsanitizer=thread" cargo test --workspace
+    steps:      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - env:
+          RUSTFLAGS: "-Zsanitizer=address"
+          ASAN_OPTIONS: "abort_on_error=1:handle_abort=2"
+          RUSTDOCFLAGS: "-Zsanitizer=address"
+        run: cargo test --workspace
+      - name: ASan 0 findings required
+        if: failure()
+        run: exit 1
 
   miri:
-    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Miri (lock-free modules; OS SHM excluded)
-        run: cargo +nightly miri test -p drm-core --features miri-only
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - name: Miri on pure-safe targets (parser, codec)
+        run: |
+          cargo +nightly miri test -p drm-core --test canon_primitives
+          cargo +nightly miri test -p drm-workspace --lib
