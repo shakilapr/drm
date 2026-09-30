@@ -38,6 +38,7 @@ __pycache__/
 *.bak
 *.tmp
 *.log
+!docs/metrics/*.log
 *.swp
 *~
 
