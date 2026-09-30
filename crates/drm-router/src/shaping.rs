@@ -12,7 +12,7 @@ pub struct TokenBucket {
     pub rate_bps: u64,
     /// Maximum burst in bytes; also the credit ceiling.
     pub burst_bytes: u64,
-    /// Accumulated credit in bit·ns (0..=burst_bytes·8e9).
+    /// Accumulated credit in bit·ns (0..=`burst_bytes` · 8e9).
     credit_bit_ns: u128,
     /// Last refill timestamp in ns (monotonic clock domain).
     last_ns: u64,
@@ -51,18 +51,19 @@ impl TokenBucket {
     }
 
     /// Admission attempt at `now_ns`: refill, then either debit the charge
-    /// (`Ok`) or leave state untouched and deny (`Err`). A frame larger than
-    /// the burst can never be admitted — verify rejects that config upstream
-    /// (I-LS9), so denial here is always eventual-admission-deferred.
+    /// (`true`) or leave state untouched and deny (`false`). A frame larger
+    /// than the burst can never be admitted — verify rejects that config
+    /// upstream (I-LS9), so denial here is always
+    /// eventual-admission-deferred.
     /// REQ: REQ-ROUTE-030, REQ-ROUTE-039.
-    pub fn try_consume(&mut self, charge_bytes: u64, now_ns: u64) -> Result<(), ()> {
+    pub fn try_consume(&mut self, charge_bytes: u64, now_ns: u64) -> bool {
         self.refill(now_ns);
         let cost = u128::from(charge_bytes).saturating_mul(8_000_000_000);
         if self.credit_bit_ns >= cost {
             self.credit_bit_ns -= cost;
-            Ok(())
+            true
         } else {
-            Err(())
+            false
         }
     }
 
@@ -72,7 +73,6 @@ impl TokenBucket {
     #[must_use]
     pub fn eligible_at(&self, charge_bytes: u64, now_ns: u64) -> u64 {
         let cost = u128::from(charge_bytes).saturating_mul(8_000_000_000);
-        let capacity = Self::capacity(self.burst_bytes);
         let dt = u128::from(now_ns.saturating_sub(self.last_ns));
         let projected = self
             .credit_bit_ns
@@ -86,7 +86,10 @@ impl TokenBucket {
         let missing_bit_ns = cost - projected;
         let wait_ns = missing_bit_ns / u128::from(self.rate_bps);
         let wait_ns = wait_ns.min(u128::from(u64::MAX) - 1) + 1;
-        now_ns.saturating_add(wait_ns as u64)
+        match u64::try_from(wait_ns) {
+            Ok(w) => now_ns.saturating_add(w),
+            Err(_) => u64::MAX,
+        }
     }
 
     /// Current credit in bit·ns after a hypothetical refill at `now_ns`.
@@ -126,13 +129,13 @@ mod tests {
     #[test]
     fn burst_then_refill() {
         let mut b = TokenBucket::new(1_000_000, 1_500);
-        assert!(b.try_consume(1_500, 0).is_ok(), "burst admitted at t=0");
-        assert!(b.try_consume(1, 0).is_err(), "empty bucket denies");
+        assert!(b.try_consume(1_500, 0), "burst admitted at t=0");
+        assert!(!b.try_consume(1, 0), "empty bucket denies");
         // At 1 Mbit/s, 1 bit·ns cost of 8_000 bytes costs 64e12 bit·ns;
         // enough time must restore credit up to the ceiling.
         let eligible = b.eligible_at(1_500, 0);
         assert!(eligible > 0, "refill wait required after burst");
-        assert!(b.try_consume(1_500, eligible).is_ok(), "refilled admission");
+        assert!(b.try_consume(1_500, eligible), "refilled admission");
     }
 
     /// REQ: REQ-ROUTE-002 — I-LS3: over any window W, admitted bytes ≤
@@ -151,7 +154,7 @@ mod tests {
             for _ in 0..64 {
                 let charge = (r() % 1_500) + 1;
                 now += r() % (window / 64);
-                if b.try_consume(charge, now).is_ok() {
+                if b.try_consume(charge, now) {
                     admitted += u128::from(charge);
                 }
                 if now - window_start >= window {
@@ -175,7 +178,7 @@ mod tests {
         let mut now: u64 = 0;
         for _ in 0..10_000u64 {
             now += 100_000_000;
-            if b.try_consume(1, now).is_ok() {
+            if b.try_consume(1, now) {
                 return; // admitted well within the 1000 s campaign
             }
         }
@@ -190,11 +193,11 @@ mod tests {
         // Drain: burst 100 bytes at t=0 on a fresh bucket — build an empty
         // state by simulating a consumed burst.
         let mut b2 = b;
-        assert!(b2.try_consume(100, 0).is_ok());
+        assert!(b2.try_consume(100, 0));
         let charge = 1_250u64; // 10_000 bits at 10 Mbit/s ⇒ 1 ms
         let wait = b2.eligible_at(charge, 0);
         assert!(
-            wait >= 1_000_000 && wait <= 1_000_000 + 1_000,
+            (1_000_000..=1_000_000 + 1_000).contains(&wait),
             "wait {wait} ~ 1 ms expected"
         );
     }
