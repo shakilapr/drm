@@ -13,5 +13,13 @@ thiserror.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.178"
 
+[features]
+test-count-allocs = []
+
 [lints]
 workspace = true
+
+[[test]]
+name = "alloc_counter"
+harness = false
+required-features = ["test-count-allocs"]
