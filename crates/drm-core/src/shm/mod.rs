@@ -149,16 +149,12 @@ impl Mapping {
         Self { ptr, len }
     }
 
-    /// Base pointer of the mapping (backend precommit/attachment paths).
-    #[cfg_attr(
-        not(unix),
-        expect(
-            dead_code,
-            reason = "platform mmap body lands with the OS backend (windows-backends.md)"
-        )
-    )]
+    /// Base pointer of the mapping. Raw view by design: shared memory is
+    /// written/read through this pointer under the borrow protocol; external
+    /// I/O must copy first (transient borrow lifecycle).
+    /// REQ: REQ-CORE-072, REQ-CORE-071.
     #[must_use]
-    pub(crate) fn ptr(&self) -> NonNull<u8> {
+    pub fn ptr(&self) -> NonNull<u8> {
         self.ptr
     }
 
