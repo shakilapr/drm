@@ -72,8 +72,7 @@ _Static_assert(sizeof(float) == 4, "f32 must be IEEE single");
 _Static_assert(sizeof(int32_t) == 4, "i32 must be 4 bytes");
 _Static_assert(sizeof(int16_t) == 2, "i16 must be 2 bytes");
 
-static int nibble(char c, uint8_t *out)
-{
+static int nibble(char c, uint8_t *out) {
     if (c >= '0' && c <= '9') {
         *out = (uint8_t)(c - '0');
         return 1;
@@ -85,8 +84,7 @@ static int nibble(char c, uint8_t *out)
     return 0; /* strict lowercase hex only */
 }
 
-static int read_hex_file(const char *dir, const char *stem, uint8_t *bytes, uint8_t width)
-{
+static int read_hex_file(const char *dir, const char *stem, uint8_t *bytes, uint8_t width) {
     char path[256];
     char hex[64];
     long len;
@@ -130,8 +128,7 @@ static int read_hex_file(const char *dir, const char *stem, uint8_t *bytes, uint
 }
 
 /* Assemble the canonical little-endian encoding from the frozen value. */
-static void encode(const struct golden_vec *g, uint8_t out[4])
-{
+static void encode(const struct golden_vec *g, uint8_t out[4]) {
     switch (g->ty) {
     case GT_U8:
         out[0] = g->v.u8;
@@ -175,8 +172,7 @@ static void encode(const struct golden_vec *g, uint8_t out[4])
 }
 
 /* Independent decode: bytes -> value -> compare with the frozen value. */
-static int decode_matches(const struct golden_vec *g, const uint8_t *bytes)
-{
+static int decode_matches(const struct golden_vec *g, const uint8_t *bytes) {
     switch (g->ty) {
     case GT_U8:
         return bytes[0] == g->v.u8;
@@ -189,18 +185,18 @@ static int decode_matches(const struct golden_vec *g, const uint8_t *bytes)
     case GT_I16:
         return (int16_t)(bytes[0] | (bytes[1] << 8)) == g->v.i16;
     case GT_U32: {
-        uint32_t got = (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) | ((uint32_t)bytes[2] << 16)
-                       | ((uint32_t)bytes[3] << 24);
+        uint32_t got = (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) | ((uint32_t)bytes[2] << 16) |
+                       ((uint32_t)bytes[3] << 24);
         return got == g->v.u32;
     }
     case GT_I32: {
-        uint32_t raw = (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) | ((uint32_t)bytes[2] << 16)
-                       | ((uint32_t)bytes[3] << 24);
+        uint32_t raw = (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) | ((uint32_t)bytes[2] << 16) |
+                       ((uint32_t)bytes[3] << 24);
         return (int32_t)raw == g->v.i32;
     }
     case GT_F32: {
-        uint32_t bits = (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) | ((uint32_t)bytes[2] << 16)
-                        | ((uint32_t)bytes[3] << 24);
+        uint32_t bits = (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+                        ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
         float f;
         memcpy(&f, &bits, sizeof f);
         return f == g->v.f32;
@@ -209,8 +205,7 @@ static int decode_matches(const struct golden_vec *g, const uint8_t *bytes)
     return 0;
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     const char *dir = argc > 1 ? argv[1] : GOLDEN_DIR_DEFAULT;
     size_t pass = 0;
     size_t i;
@@ -227,15 +222,15 @@ int main(int argc, char **argv)
         memset(expected, 0, sizeof expected);
         encode(g, expected);
         if (memcmp(file_bytes, expected, g->width) != 0) {
-            fprintf(stderr, "golden_read: %s: bytes differ (file %02x%02x%02x%02x, want "
-                            "%02x%02x%02x%02x)\n",
+            fprintf(stderr,
+                    "golden_read: %s: bytes differ (file %02x%02x%02x%02x, want "
+                    "%02x%02x%02x%02x)\n",
                     g->stem, file_bytes[0], file_bytes[1], file_bytes[2], file_bytes[3],
                     expected[0], expected[1], expected[2], expected[3]);
             return 1;
         }
         if (!decode_matches(chk, file_bytes)) {
-            fprintf(stderr, "golden_read: %s: decoded value differs from frozen oracle\n",
-                    g->stem);
+            fprintf(stderr, "golden_read: %s: decoded value differs from frozen oracle\n", g->stem);
             return 1;
         }
         pass++;
