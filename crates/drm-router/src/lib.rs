@@ -8,6 +8,7 @@
 
 pub mod crc32c;
 pub mod mtu;
+pub mod shaping;
 pub mod wire;
 
 #[cfg(test)]
