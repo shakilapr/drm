@@ -148,10 +148,10 @@ fn hour_campaign() {
         }
     }
 
-    let _ = write!(
+    let _ = writeln!(
         log,
         "TOTAL cases={cases} accepted={accepted} rejected={rejected} \
-         seeds={} seconds={}\n",
+         seeds={} seconds={}",
         seeds.len(),
         budget().as_secs()
     );
