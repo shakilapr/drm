@@ -57,14 +57,14 @@ fn read_fuzz_no_panic() {
             }
             let r: Result<u128, drm_types::Status> = match rng.next() % 10 {
                 0 => drm_core::canon::read_u8(&buf, off).map(u128::from),
-                1 => drm_core::canon::read_i8(&buf, off).map(|v| v.cast_unsigned()),
+                1 => drm_core::canon::read_i8(&buf, off).map(|v| u128::from(v.cast_unsigned())),
                 2 => drm_core::canon::read_u16(&buf, off).map(u128::from),
-                3 => drm_core::canon::read_i16(&buf, off).map(|v| v.cast_unsigned()),
+                3 => drm_core::canon::read_i16(&buf, off).map(|v| u128::from(v.cast_unsigned())),
                 4 => drm_core::canon::read_u32(&buf, off).map(u128::from),
-                5 => drm_core::canon::read_i32(&buf, off).map(|v| v.cast_unsigned()),
+                5 => drm_core::canon::read_i32(&buf, off).map(|v| u128::from(v.cast_unsigned())),
                 6 => drm_core::canon::read_f32(&buf, off).map(|v| u128::from(v.to_bits())),
                 7 => drm_core::canon::read_u64(&buf, off).map(u128::from),
-                8 => drm_core::canon::read_i64(&buf, off).map(|v| v.cast_unsigned()),
+                8 => drm_core::canon::read_i64(&buf, off).map(|v| u128::from(v.cast_unsigned())),
                 _ => drm_core::canon::read_f64(&buf, off).map(|v| u128::from(v.to_bits())),
             };
             match r {
