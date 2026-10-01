@@ -239,14 +239,98 @@ static int check_006(const unsigned char *buf, size_t len) {
     return rd_u32(buf, off_w) == 1u;
 }
 
+static int check_007(const unsigned char *buf, size_t len) {
+    /* {enum{off,on} e, u32 x}: e=1, x=0x12345678; e@0, pad 3, x@4. */
+    if (len != 8) {
+        return 0;
+    }
+    if (buf[0] != 1u || buf[1] != 0u || buf[2] != 0u || buf[3] != 0u) {
+        return 0;
+    }
+    return rd_u32(buf, 4) == 0x12345678u;
+}
+
+static int check_008(const unsigned char *buf, size_t len) {
+    /* {u8[4] f, string[4] s}: f=[1,2,3,4]@0, bare count @4 (=4), body "wxyz"@8. */
+    if (len != 12) {
+        return 0;
+    }
+    if (memcmp(buf, "\x01\x02\x03\x04", 4) != 0) {
+        return 0;
+    }
+    if (rd_u32(buf, 4) != 4u) {
+        return 0;
+    }
+    return memcmp(buf + 8, "wxyz", 4) == 0;
+}
+
+static int check_009(const unsigned char *buf, size_t len) {
+    /* {u16 a, u16[<=3] v}: a=0x1234, v empty (count 0); a@0, pad 2, count @4,
+     * body element-aligned but empty — sample_len == header_end == 8. */
+    if (len != 8) {
+        return 0;
+    }
+    if (rd_u16(buf, 0) != 0x1234u || buf[2] != 0u || buf[3] != 0u) {
+        return 0;
+    }
+    unsigned count = rd_u32(buf, 4);
+    if (count > 3u || count != 0u) {
+        return 0;
+    }
+    return align_up((size_t)8, 2) == 8u && 8u + count * 2u == len;
+}
+
+static int check_010(const unsigned char *buf, size_t len) {
+    /* {u16 t, string[8] s, u64[<=2] v, bytes[<=4] b}: t=0x1234, s="hi" (2),
+     * v=[7] (1), b=[9,10] (2). Descriptors 3x8 @4..28; offsets derived
+     * s=28, v=align_up(30,8)=32, b=40; gap 30..32 zeroed; sample_len=42. */
+    if (len != 42) {
+        return 0;
+    }
+    if (rd_u16(buf, 0) != 0x1234u || buf[2] != 0u || buf[3] != 0u) {
+        return 0;
+    }
+    unsigned count_s = rd_u32(buf, 4);
+    unsigned count_v = rd_u32(buf, 12);
+    unsigned count_b = rd_u32(buf, 20);
+    if (count_s > 8u || count_v > 2u || count_b > 4u) {
+        return 0;
+    }
+    size_t off_s = align_up((size_t)28, 1);
+    size_t off_v = align_up((size_t)off_s + count_s, 8);
+    size_t off_b = align_up((size_t)off_v + count_v * 8, 1);
+    if (rd_u32(buf, 8) != (unsigned)off_s || rd_u32(buf, 16) != (unsigned)off_v ||
+        rd_u32(buf, 24) != (unsigned)off_b) {
+        return 0;
+    }
+    if (off_b + (size_t)count_b != len) {
+        return 0;
+    }
+    if (count_s != 2u || count_v != 1u || count_b != 2u) {
+        return 0;
+    }
+    if (!utf8_valid(buf + off_s, count_s) || memcmp(buf + off_s, "hi", 2) != 0) {
+        return 0;
+    }
+    if (buf[30] != 0u || buf[31] != 0u) {
+        return 0;
+    }
+    if (rd_u64(buf, off_v) != 7ull) {
+        return 0;
+    }
+    return buf[off_b] == 9u && buf[off_b + 1] == 10u;
+}
+
 static const struct {
     const char *name;
     int (*check)(const unsigned char *buf, size_t len);
     size_t len;
 } FIXTURES[] = {
-    {"001_u8_u64_padded", check_001, 16}, {"002_two_region_str_bounded", check_002, 32},
-    {"003_string16_utf8", check_003, 10}, {"004_bounded_u64_aligned", check_004, 16},
-    {"005_empty_bodied", check_005, 8},   {"006_three_variable_order", check_006, 40},
+    {"001_u8_u64_padded", check_001, 16},    {"002_two_region_str_bounded", check_002, 32},
+    {"003_string16_utf8", check_003, 10},    {"004_bounded_u64_aligned", check_004, 16},
+    {"005_empty_bodied", check_005, 8},      {"006_three_variable_order", check_006, 40},
+    {"007_enum_member", check_007, 8},       {"008_fixed_array_string", check_008, 12},
+    {"009_empty_bounded_u16", check_009, 8}, {"010_three_var_u64_gap", check_010, 42},
 };
 
 static int hexval(char c, unsigned *out) {

@@ -173,6 +173,53 @@ def _check_006(buf: bytes) -> None:
     assert u32(buf, off_w) == 1
 
 
+def _check_007(buf: bytes) -> None:
+    """{enum{off,on} e, u32 x}: e=1, x=0x12345678; e@0, pad 3, x@4."""
+    assert len(buf) == 8
+    assert buf[0] == 1 and buf[1:4] == b"\x00" * 3
+    assert u32(buf, 4) == 0x1234_5678
+
+
+def _check_008(buf: bytes) -> None:
+    """{u8[4] f, string[4] s}: f=[1,2,3,4]@0, bare count @4 (=4), body "wxyz"@8."""
+    assert len(buf) == 12
+    assert buf[0:4] == bytes([1, 2, 3, 4])
+    assert u32(buf, 4) == 4
+    assert utf8_strict(buf, 8, 4) == "wxyz"
+
+
+def _check_009(buf: bytes) -> None:
+    """{u16 a, u16[<=3] v}: a=0x1234, v empty; a@0, pad 2, count @4;
+    body element-aligned but empty — sample_len == header_end == 8."""
+    assert len(buf) == 8
+    assert u16(buf, 0) == 0x1234 and buf[2:4] == b"\x00\x00"
+    count = u32(buf, 4)
+    assert count <= 3 and count == 0
+    assert align_up(8, 2) == 8 and 8 + count * 2 == len(buf)
+
+
+def _check_010(buf: bytes) -> None:
+    """{u16 t, string[8] s, u64[<=2] v, bytes[<=4] b}: t=0x1234, s="hi" (2),
+    v=[7] (1), b=[9,10] (2). Descriptors 3x8 @4..28; offsets derived s=28,
+    v=align_up(30,8)=32, b=40; gap 30..32 zeroed; sample_len=42."""
+    assert len(buf) == 42
+    assert u16(buf, 0) == 0x1234 and buf[2:4] == b"\x00\x00"
+    count_s = u32(buf, 4)
+    count_v = u32(buf, 12)
+    count_b = u32(buf, 20)
+    assert count_s <= 8 and count_v <= 2 and count_b <= 4
+    off_s = align_up(28, 1)
+    off_v = align_up(off_s + count_s, 8)
+    off_b = align_up(off_v + count_v * 8, 1)
+    assert u32(buf, 8) == off_s and u32(buf, 16) == off_v and u32(buf, 24) == off_b
+    assert off_b + count_b == len(buf)
+    assert count_s == 2 and count_v == 1 and count_b == 2
+    assert utf8_strict(buf, off_s, count_s) == "hi"
+    assert buf[30] == 0 and buf[31] == 0
+    assert u64(buf, off_v) == 7
+    assert buf[off_b] == 9 and buf[off_b + 1] == 10
+
+
 COMPOSITE_CHECKS: list[tuple[str, Callable[[bytes], None]]] = [
     ("001_u8_u64_padded", _check_001),
     ("002_two_region_str_bounded", _check_002),
@@ -180,12 +227,16 @@ COMPOSITE_CHECKS: list[tuple[str, Callable[[bytes], None]]] = [
     ("004_bounded_u64_aligned", _check_004),
     ("005_empty_bodied", _check_005),
     ("006_three_variable_order", _check_006),
+    ("007_enum_member", _check_007),
+    ("008_fixed_array_string", _check_008),
+    ("009_empty_bounded_u16", _check_009),
+    ("010_three_var_u64_gap", _check_010),
 ]
 
 
-def test_composites_6() -> None:
-    """All 6 two-region vectors: structural decode + frozen values."""
-    assert len(COMPOSITE_CHECKS) == 6
+def test_composites_10() -> None:
+    """All 10 two-region vectors: structural decode + frozen values."""
+    assert len(COMPOSITE_CHECKS) == 10
     for stem, check in COMPOSITE_CHECKS:
         buf = read_hex(COMPS_DIR / f"{stem}.hex")
         check(buf)

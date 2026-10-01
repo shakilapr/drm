@@ -210,7 +210,7 @@ fn golden_composites_006_three_variable() {
     assert_eq!(vals[4], Value::Bounded(vec![Value::U32(1)]));
 }
 
-/// REQ: REQ-TOOL-042 — fixture count pinned: exactly 6 `.hex` vectors.
+/// REQ: REQ-TOOL-042 — fixture count pinned: exactly 10 `.hex` vectors.
 #[test]
 fn golden_composites_count() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -225,5 +225,121 @@ fn golden_composites_count() {
             path.extension().is_some_and(|x| x == "hex")
         })
         .count();
-    assert_eq!(n, 6);
+    assert_eq!(n, 10);
+}
+
+/// REQ: REQ-TOOL-043, REQ-TOOL-042 — C07: enum header member (tag = declaration
+/// index) beside a u32: e@0, pad 3, x@4, size 8.
+#[test]
+fn golden_composites_007_enum_member() {
+    let committed = hex_bytes("007_enum_member");
+    assert_eq!(committed, vec![1, 0, 0, 0, 0x78, 0x56, 0x34, 0x12]);
+    let fs = parse_bytes(b"e: enum{off,on}\nx: u32\n")
+        .unwrap_or_else(|d| unreachable!("C07 schema: {d:?}"))
+        .fields;
+    let mut dst = vec![0_u8; 16];
+    let n = encode(&fs, &[Value::Enum(1), Value::U32(0x1234_5678)], &mut dst)
+        .unwrap_or_else(|e| unreachable!("C07 encode: {e:?}"));
+    assert_eq!(n, 8);
+    assert_eq!(&dst[..8], &committed[..]);
+    let (vals, _) = match decode(&fs, &committed) {
+        Ok(x) => x,
+        Err(e) => unreachable!("C07 decode: {e:?}"),
+    };
+    assert_eq!(vals[0], Value::Enum(1));
+    assert_eq!(vals[1], Value::U32(0x1234_5678));
+}
+
+/// REQ: REQ-TOOL-042 — C08: fixed array beside a string: f@0..4, bare count
+/// descriptor @4 (single variable member), body@8.
+#[test]
+fn golden_composites_008_fixed_array_string() {
+    let committed = hex_bytes("008_fixed_array_string");
+    assert_eq!(
+        committed,
+        vec![1, 2, 3, 4, 4, 0, 0, 0, b'w', b'x', b'y', b'z']
+    );
+    let fs = parse_bytes(b"f: u8[4]\ns: string[4]\n")
+        .unwrap_or_else(|d| unreachable!("C08 schema: {d:?}"))
+        .fields;
+    let mut dst = vec![0_u8; 20];
+    let n = encode(
+        &fs,
+        &[
+            Value::Fixed(vec![Value::U8(1), Value::U8(2), Value::U8(3), Value::U8(4)]),
+            Value::Str("wxyz".into()),
+        ],
+        &mut dst,
+    )
+    .unwrap_or_else(|e| unreachable!("C08 encode: {e:?}"));
+    assert_eq!(n, 12);
+    assert_eq!(&dst[..12], &committed[..]);
+}
+
+/// REQ: REQ-TOOL-042 — C09: empty bounded array of u16 with a u16 header
+/// field: a@0, pad 2, bare count @4 (0), body element-aligned but empty —
+/// `sample_len` == `header_end` == 8.
+#[test]
+fn golden_composites_009_empty_bounded_u16() {
+    let committed = hex_bytes("009_empty_bounded_u16");
+    assert_eq!(committed, vec![0x34, 0x12, 0, 0, 0, 0, 0, 0]);
+    let fs = parse_bytes(b"a: u16\nv: u16[<=3]\n")
+        .unwrap_or_else(|d| unreachable!("C09 schema: {d:?}"))
+        .fields;
+    let mut dst = vec![0_u8; 16];
+    let n = encode(&fs, &[Value::U16(0x1234), Value::Bounded(vec![])], &mut dst)
+        .unwrap_or_else(|e| unreachable!("C09 encode: {e:?}"));
+    assert_eq!(n, 8);
+    assert_eq!(&dst[..8], &committed[..]);
+    let (vals, _) = match decode(&fs, &committed) {
+        Ok(x) => x,
+        Err(e) => unreachable!("C09 decode: {e:?}"),
+    };
+    assert_eq!(vals[0], Value::U16(0x1234));
+    assert_eq!(vals[1], Value::Bounded(vec![]));
+}
+
+/// REQ: REQ-TOOL-040 — C10: three variable members with a u64 body: t@0,
+/// descriptors 3×8 @4..28, bodies s@28 (2), gap 2 zeroed, v@32 (align 8),
+/// b@40 (2) — `sample_len` 42.
+#[test]
+fn golden_composites_010_three_var_u64_gap() {
+    let committed = hex_bytes("010_three_var_u64_gap");
+    assert_eq!(committed.len(), 42);
+    assert_eq!(&committed[0..2], &[0x34, 0x12]); // t = 0x1234
+    assert_eq!(&committed[4..8], &[2, 0, 0, 0]); // s.count
+    assert_eq!(&committed[8..12], &[28, 0, 0, 0]); // s.offset
+    assert_eq!(&committed[12..16], &[1, 0, 0, 0]); // v.count
+    assert_eq!(&committed[16..20], &[32, 0, 0, 0]); // v.offset (align 8)
+    assert_eq!(&committed[20..24], &[2, 0, 0, 0]); // b.count
+    assert_eq!(&committed[24..28], &[40, 0, 0, 0]); // b.offset
+    assert_eq!(&committed[28..30], b"hi"); // s body
+    assert_eq!(&committed[30..32], &[0, 0]); // alignment gap zeroed
+    assert_eq!(&committed[32..40], &[7, 0, 0, 0, 0, 0, 0, 0]); // v body
+    assert_eq!(&committed[40..42], &[9, 10]); // b body
+    let fs = parse_bytes(b"t: u16\ns: string[8]\nv: u64[<=2]\nb: bytes[<=4]\n")
+        .unwrap_or_else(|d| unreachable!("C10 schema: {d:?}"))
+        .fields;
+    let mut dst = vec![0_u8; 48];
+    let n = encode(
+        &fs,
+        &[
+            Value::U16(0x1234),
+            Value::Str("hi".into()),
+            Value::Bounded(vec![Value::U64(7)]),
+            Value::Bytes(vec![9, 10]),
+        ],
+        &mut dst,
+    )
+    .unwrap_or_else(|e| unreachable!("C10 encode: {e:?}"));
+    assert_eq!(n, 42);
+    assert_eq!(&dst[..42], &committed[..]);
+    let (vals, _) = match decode(&fs, &committed) {
+        Ok(x) => x,
+        Err(e) => unreachable!("C10 decode: {e:?}"),
+    };
+    assert_eq!(vals[0], Value::U16(0x1234));
+    assert_eq!(vals[1], Value::Str("hi".into()));
+    assert_eq!(vals[2], Value::Bounded(vec![Value::U64(7)]));
+    assert_eq!(vals[3], Value::Bytes(vec![9, 10]));
 }

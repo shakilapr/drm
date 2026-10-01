@@ -1,0 +1,6 @@
+{
+  "type": "composite",
+  "schema": "e: enum{off,on}\nx: u32",
+  "values": { "e": 1, "x": 305419896 },
+  "len": 8
+}

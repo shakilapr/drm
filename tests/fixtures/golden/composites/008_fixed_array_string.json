@@ -1,0 +1,6 @@
+{
+  "type": "composite",
+  "schema": "f: u8[4]\ns: string[4]",
+  "values": { "f": [1, 2, 3, 4], "s": "wxyz" },
+  "len": 12
+}
