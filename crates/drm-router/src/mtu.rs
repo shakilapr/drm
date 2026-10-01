@@ -78,9 +78,24 @@ pub fn validate_override(payload: u16) -> Result<(), Status> {
     Ok(())
 }
 
+/// Validates an operator-provided link-MTU override against the family floor.
+/// REQ: REQ-ROUTE-032, REQ-ROUTE-018.
+///
+/// # Errors
+/// [`Status::InvalidConfig`] when the MTU is below the family minimum (an
+/// override may raise, never lower, the floor).
+pub fn validate_mtu_override(link_mtu: u16, family: IpFamily) -> Result<(), Status> {
+    if link_mtu < family.min_mtu() {
+        return Err(Status::InvalidConfig);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{IpFamily, auto_suggest, max_datagram_payload, validate_override};
+    use super::{
+        IpFamily, auto_suggest, max_datagram_payload, validate_mtu_override, validate_override,
+    };
     use drm_types::Status;
 
     /// REQ: REQ-ROUTE-032 — 1500 MTU yields 1472 (v4) / 1452 (v6).
@@ -124,5 +139,27 @@ mod tests {
     fn override_bounds() {
         assert!(validate_override(65507).is_ok());
         assert_eq!(validate_override(65508), Err(Status::InvalidConfig));
+    }
+
+    /// REQ: REQ-ROUTE-032 — sub-Ethernet MTU edges: 1492 (`PPPoE`) and 1472.
+    #[test]
+    fn mtu_edges_1492_1472() {
+        assert_eq!(max_datagram_payload(1492, IpFamily::V4), Ok(1464));
+        assert_eq!(max_datagram_payload(1492, IpFamily::V6), Ok(1444));
+        assert_eq!(max_datagram_payload(1472, IpFamily::V4), Ok(1444));
+        assert_eq!(max_datagram_payload(1472, IpFamily::V6), Ok(1424));
+    }
+
+    /// REQ: REQ-ROUTE-032, REQ-ROUTE-018 — an MTU override below the family
+    /// floor is an error, at the floor is accepted (both families).
+    #[test]
+    fn mtu_override_below_floor() {
+        assert_eq!(validate_mtu_override(67, IpFamily::V4), Err(Status::InvalidConfig));
+        assert_eq!(validate_mtu_override(68, IpFamily::V4), Ok(()));
+        assert_eq!(
+            validate_mtu_override(1279, IpFamily::V6),
+            Err(Status::InvalidConfig)
+        );
+        assert_eq!(validate_mtu_override(1280, IpFamily::V6), Ok(()));
     }
 }
