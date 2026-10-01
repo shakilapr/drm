@@ -89,7 +89,7 @@ fn lint(flags: &[String]) -> Result<()> {
     )
     .context("xtask lint: clippy")?;
     for (tool, args) in [
-        ("mypy", vec!["."]),
+        ("mypy", vec!["bindings"]),
         ("eslint", vec!["."]),
         ("yamllint", vec![".github", "xtask"]),
         ("markdownlint", vec!["."]),
