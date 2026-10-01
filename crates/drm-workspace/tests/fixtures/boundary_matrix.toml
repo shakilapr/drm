@@ -1,0 +1,278 @@
+# Type x case boundary matrix (work-plan M01W4-E4-T1; canon-codec Test Matrix,
+# I3). One cell per (type, case); generated test asserts accept/reject exactly
+# and fails on any missing cell (TYPE_MATRIX_PCT = 100).
+#
+# cell fields:
+#   type    — single-field schema body: the test builds schema "v: <type>"
+#   case    — case name (completeness table in boundary_matrix.rs must match)
+#   value   — literal for the value model (quoted string / bracket list)
+#   patch   — "" | count-max1 | tag-unknown | bool-two | utf8-bad
+#   expect  — accept (encode ok + decode roundtrip) | reject (encode fails,
+#             destination untouched) | decode-reject (patched sample rejected)
+#
+# Integer range enforcement lives at the schema/codegen literal boundary
+# (REQ-TOOL-034), not the codec: every wire pattern of a fixed-width integer is
+# a valid value, so integer cells cover zero/min/max; structural max+1 rows
+# belong to the length/count/tag/bool families below.
+
+# ---- fixed-width integers ----
+[[cell]]
+type = "u8"
+case = "zero"
+value = "0"
+expect = "accept"
+[[cell]]
+type = "u8"
+case = "max"
+value = "255"
+expect = "accept"
+[[cell]]
+type = "i8"
+case = "zero"
+value = "0"
+expect = "accept"
+[[cell]]
+type = "i8"
+case = "min"
+value = "-128"
+expect = "accept"
+[[cell]]
+type = "i8"
+case = "max"
+value = "127"
+expect = "accept"
+[[cell]]
+type = "u16"
+case = "zero"
+value = "0"
+expect = "accept"
+[[cell]]
+type = "u16"
+case = "max"
+value = "65535"
+expect = "accept"
+[[cell]]
+type = "i16"
+case = "zero"
+value = "0"
+expect = "accept"
+[[cell]]
+type = "i16"
+case = "min"
+value = "-32768"
+expect = "accept"
+[[cell]]
+type = "i16"
+case = "max"
+value = "32767"
+expect = "accept"
+[[cell]]
+type = "u32"
+case = "zero"
+value = "0"
+expect = "accept"
+[[cell]]
+type = "u32"
+case = "max"
+value = "4294967295"
+expect = "accept"
+[[cell]]
+type = "i32"
+case = "zero"
+value = "0"
+expect = "accept"
+[[cell]]
+type = "i32"
+case = "min"
+value = "-2147483648"
+expect = "accept"
+[[cell]]
+type = "i32"
+case = "max"
+value = "2147483647"
+expect = "accept"
+[[cell]]
+type = "u64"
+case = "zero"
+value = "0"
+expect = "accept"
+[[cell]]
+type = "u64"
+case = "max"
+value = "18446744073709551615"
+expect = "accept"
+[[cell]]
+type = "i64"
+case = "zero"
+value = "0"
+expect = "accept"
+[[cell]]
+type = "i64"
+case = "min"
+value = "-9223372036854775808"
+expect = "accept"
+[[cell]]
+type = "i64"
+case = "max"
+value = "9223372036854775807"
+expect = "accept"
+
+# ---- floats (IEEE bit patterns; no encode-side overflow exists) ----
+[[cell]]
+type = "f32"
+case = "zero"
+value = "0.0"
+expect = "accept"
+[[cell]]
+type = "f32"
+case = "max"
+value = "3.4028235e38"
+expect = "accept"
+[[cell]]
+type = "f32"
+case = "inf"
+value = "inf"
+expect = "accept"
+[[cell]]
+type = "f64"
+case = "zero"
+value = "0.0"
+expect = "accept"
+[[cell]]
+type = "f64"
+case = "max"
+value = "1.7976931348623157e308"
+expect = "accept"
+[[cell]]
+type = "f64"
+case = "inf"
+value = "inf"
+expect = "accept"
+
+# ---- bool: decode strictness (byte 2 is the wire-level max+1) ----
+[[cell]]
+type = "bool"
+case = "false"
+value = "false"
+expect = "accept"
+[[cell]]
+type = "bool"
+case = "true"
+value = "true"
+expect = "accept"
+[[cell]]
+type = "bool"
+case = "two"
+value = "true"
+patch = "bool-two"
+expect = "decode-reject"
+
+# ---- enum: tag space is [0, variants) ----
+[[cell]]
+type = "enum{off,on}"
+case = "first"
+value = "0"
+expect = "accept"
+[[cell]]
+type = "enum{off,on}"
+case = "last"
+value = "1"
+expect = "accept"
+[[cell]]
+type = "enum{off,on}"
+case = "unknown"
+value = "2"
+expect = "reject"
+[[cell]]
+type = "enum{off,on}"
+case = "unknown-decoded"
+value = "1"
+patch = "tag-unknown"
+expect = "decode-reject"
+
+# ---- fixed array: full ok, over-length rejected ----
+[[cell]]
+type = "u8[4]"
+case = "full"
+value = "[1,2,3,4]"
+expect = "accept"
+[[cell]]
+type = "u8[4]"
+case = "over"
+value = "[1,2,3,4,5]"
+expect = "reject"
+
+# ---- bounded array: empty/full ok; over rejected both directions ----
+[[cell]]
+type = "u32[<=4]"
+case = "empty"
+value = "[]"
+expect = "accept"
+[[cell]]
+type = "u32[<=4]"
+case = "full"
+value = "[1,2,3,4]"
+expect = "accept"
+[[cell]]
+type = "u32[<=4]"
+case = "over"
+value = "[1,2,3,4,5]"
+expect = "reject"
+[[cell]]
+type = "u32[<=4]"
+case = "overcount"
+value = "[1,2]"
+patch = "count-max1"
+expect = "decode-reject"
+[[cell]]
+type = "u32[<=4]"
+case = "overcount-empty"
+value = "[]"
+patch = "count-max1"
+expect = "decode-reject"
+
+# ---- string: UTF-8 byte-length bound both directions; bad bytes on decode ----
+[[cell]]
+type = "string[8]"
+case = "empty"
+value = '""'
+expect = "accept"
+[[cell]]
+type = "string[8]"
+case = "full"
+value = '"abcdefgh"'
+expect = "accept"
+[[cell]]
+type = "string[8]"
+case = "over"
+value = '"abcdefghi"'
+expect = "reject"
+[[cell]]
+type = "string[8]"
+case = "badutf8"
+value = '"abcdefgh"'
+patch = "utf8-bad"
+expect = "decode-reject"
+
+# ---- bytes: empty/full ok; over rejected both directions ----
+[[cell]]
+type = "bytes[<=8]"
+case = "empty"
+value = "[]"
+expect = "accept"
+[[cell]]
+type = "bytes[<=8]"
+case = "full"
+value = "[1,2,3,4,5,6,7,8]"
+expect = "accept"
+[[cell]]
+type = "bytes[<=8]"
+case = "over"
+value = "[1,2,3,4,5,6,7,8,9]"
+expect = "reject"
+[[cell]]
+type = "bytes[<=8]"
+case = "overcount"
+value = "[1,2]"
+patch = "count-max1"
+expect = "decode-reject"

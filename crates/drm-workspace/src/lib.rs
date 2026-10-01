@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod canon;
 pub mod parser;
 
 /// REQ: REQ-TOOL-013 — placeholder module; `WorkspaceModel` lands W3
