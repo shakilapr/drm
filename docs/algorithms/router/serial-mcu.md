@@ -66,6 +66,19 @@ fn frame_decode(cfg: &SerialLinkConfig, buf: &mut ReadBuf) -> Result<Option<Seri
 
 ## Protocols
 
+*Escape/stuffing options table (decision Phase 32 — criteria pre-stated):*
+
+Selection criteria, stated before the decision: (1) worst-case overhead bounded and computable at build (frame bound feeds `max_frame_bytes`, I-SR2, and the blocking estimate, I-SR7); (2) MCU decode is byte-at-a-time with O(1) state; (3) reversible for arbitrary payload bytes (I-SR4); (4) single resync delimiter after corruption (I-SR3).
+
+| Option | Worst-case overhead | MCU decode cost | Reversible | Resync | Verdict |
+|---|---|---|---|---|---|
+| COBS | `ceil(n/254) + 1`, bounded (n > 0) | O(1)/byte | yes, any bytes | 0x00 delimiter | **selected** — meets all four criteria |
+| PPP byte-stuffing | unbounded (n × 2 adversarial) | O(1)/byte | yes | 0x7E | rejected: criterion 1 fails — worst-case doubles frame bound |
+| SLIP | unbounded (n × 2) | O(1)/byte | yes | 0xC0 | rejected: criterion 1 fails, plus no error detection aid |
+| HDLC bit-stuffing | ~1 bit per 32 avg, sub-byte | bit-level shifter | yes | 0x7E flag | rejected: criteria 1–2 fail — bound is statistical, decode is bit-granular on MCU |
+
+Decision lands with Phase 32; until then COBS is the provisionally binding choice (wire diagrams above assume it). Any re-opening requires a new ADR comparing ≥ 2 alternatives against the same four criteria.
+
 *Host↔MCU exchange (interop gate I-SR6):*
 
 1. Host publishes small structured topic over serial link (route config `[route.x.serial]`).

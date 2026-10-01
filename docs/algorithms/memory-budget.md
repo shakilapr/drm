@@ -148,6 +148,12 @@ fn activate_precommitted(mapping: &Mapping, budget: &MemoryBudget) -> Result<(),
 
 ## Protocols
 
+*Static-vs-activation split (precommit M6):*
+
+- **Build time (static, verifier)**: backend capability, lockable-budget coverage, page-rounded conservative locked sums, per-node locked working set, worst-case vs budget. Static checks estimate; they never prove residency.
+- **Activation time (per precommit node)**: map segment, one backend-defined lock proof (`precommit_and_prove`), refuse-on-failure — `LockFailed` ⇒ the node never reaches active state; continuing pageable is forbidden (I-MB5). DRM never decommits afterward (I-MB10: exact residency is a platform fact, measured live by `drm-diag`).
+- The split is one-directional: a static pass can never be weakened by a runtime fact, and an activation failure can never be overridden by a static pass.
+
 *Precommit activation (node startup):*
 
 1. Verifier passed statically (backend capability + lockable budget coverage + per-process locked set — I-MB2/I-MB7).
@@ -161,6 +167,21 @@ fn activate_precommitted(mapping: &Mapping, budget: &MemoryBudget) -> Result<(),
 1. E1 derives expected worst-case for 5 fixture deployments by hand/independent script.
 2. E2 implements verifier math; outputs must equal references exactly (bytes).
 3. Disagreement ⇒ fix before Phase 19 gate.
+
+*Worked example (dual derivation — agreement is the gate):*
+
+One compute `nav`, budgets `{drm_budget = 65536, lockable = 32768, ram = 512 MiB, page = 4096, precommit = true}`. Channels: `fix {pool_slots = 16, slot_bytes = 256, control_block = 1024, precommit = true, R = 4, H = 2}`; `dbg {pool_slots = 8, slot_bytes = 64, control_block = 1024, precommit = false}`; router lane buffers `4096` (precommit compute ⇒ locked).
+
+| Step | Formula | E1 (hand) | E2 (verifier) |
+|---|---|---|---|
+| `fix` channel | 16×256 + 1024 | 5120 | 5120 |
+| `dbg` channel | 8×64 + 1024 | 1536 | 1536 |
+| worst_case | 5120 + 1536 + 4096 | 10752 ≤ 65536 ⇒ pass | 10752 ⇒ pass |
+| locked spans | round8K? — no: ⌈5120/4096⌉·4096 + ⌈4096/4096⌉·4096 | 8192 + 4096 = 12288 ≤ 32768 ⇒ pass | 12288 ⇒ pass |
+| nominal | declared estimate, informational | 2048 (printed, never gated) | 2048 |
+| `fix` drop-free | R+H+1 = 4+2+1 = 7 ≤ pool_slots 16 | no warning | no warning |
+
+E1 and E2 derive independently; byte-exact agreement on all four numbers is the I-MB1 gate. A mismatch is a defect in one of the two derivations — neither side is authoritative.
 
 ## Edge Cases & Errors
 
