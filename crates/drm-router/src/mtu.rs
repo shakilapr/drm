@@ -154,7 +154,10 @@ mod tests {
     /// floor is an error, at the floor is accepted (both families).
     #[test]
     fn mtu_override_below_floor() {
-        assert_eq!(validate_mtu_override(67, IpFamily::V4), Err(Status::InvalidConfig));
+        assert_eq!(
+            validate_mtu_override(67, IpFamily::V4),
+            Err(Status::InvalidConfig)
+        );
         assert_eq!(validate_mtu_override(68, IpFamily::V4), Ok(()));
         assert_eq!(
             validate_mtu_override(1279, IpFamily::V6),
