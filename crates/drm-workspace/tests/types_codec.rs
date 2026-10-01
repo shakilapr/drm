@@ -262,7 +262,7 @@ fn types_codec_string_utf8_matrix() {
 #[test]
 fn types_codec_two_region_packing() {
     let fs = fixture(parse_bytes("a: string[4]\nb: bytes[<=4]\n".as_bytes())).fields;
-    let mut dst = vec![0_u8; 24];
+    let mut dst = vec![0xAA_u8; 24];
     let n = encode(
         &fs,
         &[Value::Str("ab".into()), Value::Bytes(vec![9, 8])],
@@ -277,6 +277,10 @@ fn types_codec_two_region_packing() {
     assert_eq!(&dst[8..16], &[2, 0, 0, 0, 18, 0, 0, 0]);
     assert_eq!(&dst[16..18], b"ab");
     assert_eq!(&dst[18..20], &[9, 8]);
+    // Canonical determinism: the whole sample was written (0xAA probe gone),
+    // every gap byte exactly 0; bytes at ≥ sample_len stay untouched.
+    assert!(dst[..n.expect_cap()].iter().all(|b| *b != 0xAA));
+    assert_eq!(dst[n.expect_cap()..], [0xAA_u8; 4]);
     let (vals, n2) = match decode(&fs, &dst[..n.expect_cap()]) {
         Ok((v, n2)) => (v, n2),
         Err(e) => unreachable!("decode ok: {e:?}"),
@@ -375,4 +379,33 @@ fn types_codec_prim_layout_sizes() {
         let l = fixture(drm_workspace::canon::layout(&f.ty));
         assert_eq!((l.size, l.align), (size, align), "{name}");
     }
+}
+
+/// REQ: REQ-TOOL-042, REQ-TOOL-040 - alignment gaps between variable bodies are
+/// exactly zero on encode (canonical determinism, I1/I8).
+#[test]
+fn types_codec_gap_zeroing() {
+    let fs = fixture(parse_bytes(
+        "a: u32\ns: string[2]\nv: u64[<=1]\n".as_bytes(),
+    ))
+    .fields;
+    let mut dst = vec![0xAA_u8; 48];
+    let n = encode(
+        &fs,
+        &[
+            Value::U32(9),
+            Value::Str("z".into()),
+            Value::Bounded(vec![Value::U64(5)]),
+        ],
+        &mut dst,
+    );
+    let Ok(n) = n else {
+        unreachable!("encode ok");
+    };
+    assert_eq!(n, 32);
+    // s body @20 (1 byte), gap @21..24 zeroed, v body @24 (element-aligned).
+    assert_eq!(dst[20], b'z');
+    assert_eq!(&dst[21..24], &[0, 0, 0]);
+    assert_eq!(dst[24], 5);
+    assert_eq!(&dst[32..], [0xAA_u8; 16]);
 }

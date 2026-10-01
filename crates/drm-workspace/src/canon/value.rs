@@ -321,6 +321,11 @@ pub fn encode(fields: &[Field], values: &[Value], dst: &mut [u8]) -> Result<u64,
     if u64::try_from(dst.len()).map_err(|_| Status::InvalidArg)? < p.sample_len {
         return Err(Status::InvalidArg);
     }
+    // Canonical determinism: every byte in [0, sample_len) is written —
+    // alignment gaps between bodies (and header padding) are zeroed first,
+    // then filled by the field writes below (I1/I8: gap bytes are exactly 0).
+    let sample_len = usize::try_from(p.sample_len).map_err(|_| Status::InvalidArg)?;
+    dst[..sample_len].fill(0);
     let sl = layout_struct(fields)?;
     let counts = counts_of(fields, values)?;
     let n_var = counts.len();
