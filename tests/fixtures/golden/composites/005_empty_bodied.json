@@ -1,0 +1,6 @@
+{
+  "type": "composite",
+  "schema": "a: u8\nf: bool[2]\nb: bytes[<=4]",
+  "values": { "a": 7, "f": [true, false], "b": [] },
+  "len": 8
+}

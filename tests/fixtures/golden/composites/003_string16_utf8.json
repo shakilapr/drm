@@ -1,0 +1,6 @@
+{
+  "type": "composite",
+  "schema": "s: string[16]",
+  "values": { "s": "h\u00e9llo" },
+  "len": 10
+}

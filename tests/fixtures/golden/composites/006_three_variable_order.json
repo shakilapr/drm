@@ -1,0 +1,6 @@
+{
+  "type": "composite",
+  "schema": "n: u32\ns: string[4]\nb: bytes[<=4]\nk: u16\nw: u32[<=2]",
+  "values": { "n": 1, "k": 5, "s": "xy", "b": [9], "w": [1] },
+  "len": 40
+}

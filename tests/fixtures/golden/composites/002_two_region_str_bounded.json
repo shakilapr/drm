@@ -1,0 +1,6 @@
+{
+  "type": "composite",
+  "schema": "t: u16\ns: string[8]\nv: u32[<=4]",
+  "values": { "t": 4242, "s": "abc", "v": [1, 2] },
+  "len": 32
+}

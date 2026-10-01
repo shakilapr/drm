@@ -1,0 +1,6 @@
+{
+  "type": "composite",
+  "schema": "x: f32\nv: u64[<=2]",
+  "values": { "x": 1.5, "v": [7] },
+  "len": 16
+}
