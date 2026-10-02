@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod crc32c;
+pub mod framing;
 pub mod mtu;
 pub mod shaping;
 pub mod wire;
