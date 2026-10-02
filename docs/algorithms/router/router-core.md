@@ -176,6 +176,12 @@ fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
 2. Local publishers/consumers continue (shared memory untouched by the router).
 3. Link-up → routes resume; importer epoch bump (I-RT4/I-RT9 path).
 
+*UDP transport notes (M02W1-E3-T3 seed; REQ: REQ-ROUTE-009):*
+
+1. **Batching**: receive with `recvmmsg(2)` — up to 64 datagrams per syscall; per-datagram framing decode (WireHeader + payload), stale/duplicate classification per I-RT9 before any queueing.
+2. **SO_RCVBUF sizing**: set to `max_record_bytes × in-flight budget` (≥ 256 datagrams); kernel drops beyond that are counted per link (observability-plane), never silently ignored.
+3. **Two-host sim plan**: two processes over loopback UDP, one router process per "host"; inject reorder (send-side shuffle window ≤ 32) and duplicates (2× retransmit of the same frame) to exercise I-RT9; remote-restart test raises `stream_epoch` on reconnect (epoch-max → 0 case included).
+
 ## Edge Cases & Errors
 
 | Case | Result |
