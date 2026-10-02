@@ -8,6 +8,7 @@
 pub mod canon;
 pub mod model;
 pub mod parser;
+pub mod topology;
 
 #[cfg(test)]
 mod tests {
