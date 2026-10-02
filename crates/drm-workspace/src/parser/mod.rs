@@ -14,10 +14,9 @@ pub mod render;
 
 use std::collections::HashSet;
 
-use diag::{Diagnostic, Span};
 use lex::{Tok, TokSpanned};
 
-pub use diag::Reason;
+pub use diag::{Diagnostic, Reason, Span};
 pub use render::render_canonical;
 
 /// The 11 canonical primitives (schema-parser.md §Data Structures).

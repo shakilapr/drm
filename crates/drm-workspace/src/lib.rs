@@ -6,21 +6,17 @@
 #![forbid(unsafe_code)]
 
 pub mod canon;
+pub mod model;
 pub mod parser;
-
-/// REQ: REQ-TOOL-013 — placeholder module; `WorkspaceModel` lands W3
-/// (workspace-model.md).
-pub mod model {
-    /// REQ: REQ-TOOL-013 — placeholder type for the W1 skeleton build.
-    #[derive(Debug)]
-    pub struct WorkspaceModelPlaceholder;
-}
 
 #[cfg(test)]
 mod tests {
-    /// REQ: REQ-TOOL-013 — placeholder compile smoke for the W1 skeleton.
+    /// REQ: REQ-TOOL-045 — empty tree builds an empty model (tools still run).
     #[test]
-    fn skeleton_compiles() {
-        let _ = super::model::WorkspaceModelPlaceholder;
+    fn empty_tree_builds() {
+        let tree = super::model::TreeInput::default();
+        let m = super::model::build(&tree).unwrap_or_else(|e| unreachable!("empty tree: {e:?}"));
+        assert_eq!(m.topics.len(), 0);
+        assert_eq!(m.packages.len(), 0);
     }
 }
