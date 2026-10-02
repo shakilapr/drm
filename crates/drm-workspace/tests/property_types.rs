@@ -131,8 +131,8 @@ proptest! {
         let cap = fixture(usize::try_from(sl.sample_max));
         let mut dst1 = vec![0xAA_u8; cap];
         let mut dst2 = vec![0x55_u8; cap];
-        let n1 = fixture(encode(&fs, &[v.clone()], &mut dst1));
-        let n2 = fixture(encode(&fs, &[v.clone()], &mut dst2));
+        let n1 = fixture(encode(&fs, std::slice::from_ref(&v), &mut dst1));
+        let n2 = fixture(encode(&fs, std::slice::from_ref(&v), &mut dst2));
         prop_assert_eq!(n1, n2);
         let n = fixture(usize::try_from(n1));
         prop_assert_eq!(&dst1[..n], &dst2[..n]);

@@ -28,7 +28,7 @@ fn main() -> std::process::ExitCode {
 fn run(args: &[String]) -> Result<()> {
     let Some(cmd) = args.first() else {
         bail!(
-            "usage: cargo xtask <fmt [--check] | lint | test | check-layering | audit-traceability>"
+            "usage: cargo xtask <fmt [--check] | lint | test [--stress] | check-layering | audit-traceability>"
         );
     };
     let flags = &args[1..];
@@ -104,11 +104,34 @@ fn lint(flags: &[String]) -> Result<()> {
 }
 
 /// REQ: REQ-QAL-006 — `xtask test`: workspace unit + doc tests.
+/// `--stress` runs the ignored `stress_*` suites (multiprocess, long-budget;
+/// work-plan M02W1-E4-T4). REQ: REQ-QAL-006.
 fn test(flags: &[String]) -> Result<()> {
-    if !flags.is_empty() {
-        bail!("test takes no flags");
+    match flags
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [] => {
+            spawn("cargo", &["test", "--workspace"]).context("xtask test")?;
+        }
+        ["--stress"] => {
+            spawn(
+                "cargo",
+                &[
+                    "test",
+                    "--workspace",
+                    "--",
+                    "--ignored",
+                    "stress",
+                    "--nocapture",
+                ],
+            )
+            .context("xtask test --stress")?;
+        }
+        other => bail!("test flags: {other:?} (expected none or --stress)"),
     }
-    spawn("cargo", &["test", "--workspace"]).context("xtask test")?;
     Ok(())
 }
 
@@ -213,11 +236,57 @@ fn spawn(tool: &str, args: &[&str]) -> Result<()> {
 }
 
 /// REQ: REQ-QAL-003 — citation coverage report over `crates/**/*.rs` and `xtask/**/*.rs`;
-/// informational in W1 (enforcement tightens with xtask audit-traceability work).
+/// REQ: REQ-QAL-003 — citation scan over `.rs` files under the given roots:
+/// a file without any `REQ:` marker is listed as uncited. Blocking per
+/// work-plan M02W1-E4-T3 (CI fails on an uncited file).
+fn citation_offenders(roots: &[std::path::PathBuf]) -> Result<Vec<String>> {
+    let mut offenders: Vec<String> = Vec::new();
+    let mut stack: Vec<std::path::PathBuf> = roots.to_vec();
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path)
+                    .with_context(|| format!("read {}", path.display()))?;
+                if !text.contains("REQ:") {
+                    offenders.push(path.display().to_string());
+                }
+            }
+        }
+    }
+    offenders.sort();
+    Ok(offenders)
+}
+
+/// REQ: REQ-QAL-003 — `xtask audit-traceability --citations`: file-level REQ
+/// citation coverage over crate sources; any uncited file fails the audit.
 fn audit_citations() -> Result<()> {
-    let mut files = 0;
-    let mut cited = 0;
-    let mut uncited: Vec<String> = Vec::new();
+    let offenders = citation_offenders(&[
+        std::path::PathBuf::from("crates"),
+        std::path::PathBuf::from("xtask"),
+    ])?;
+    let total = count_rs_files();
+    println!(
+        "citations: {}/{total} .rs files carry REQ citations",
+        total - offenders.len()
+    );
+    if !offenders.is_empty() {
+        bail!(
+            "uncited source files (REQ marker required, work-plan M02W1-E4-T3): {}",
+            offenders.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Total `.rs` file count under the audit roots (for the coverage report).
+fn count_rs_files() -> usize {
+    let mut count = 0;
     let mut stack = vec![
         std::path::PathBuf::from("crates"),
         std::path::PathBuf::from("xtask"),
@@ -231,20 +300,34 @@ fn audit_citations() -> Result<()> {
             if path.is_dir() {
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                files += 1;
-                let text = std::fs::read_to_string(&path)
-                    .with_context(|| format!("read {}", path.display()))?;
-                if text.contains("REQ:") {
-                    cited += 1;
-                } else {
-                    uncited.push(path.display().to_string());
-                }
+                count += 1;
             }
         }
     }
-    println!("citations: {cited}/{files} .rs files carry REQ citations");
-    if !uncited.is_empty() {
-        println!("uncited: {}", uncited.join(", "));
+    count
+}
+
+/// REQ: REQ-QAL-003 — self-test: the citation scan catches an uncited file and
+/// clears a cited one (CI red→green fixture, M02W1-E4-T3).
+#[cfg(test)]
+mod citation_tests {
+    use super::citation_offenders;
+
+    #[test]
+    fn detects_uncited_and_clears_cited() {
+        let dir =
+            std::env::temp_dir().join(format!("drm-citation-selftest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| unreachable!("tmpdir: {e}"));
+        let cited = dir.join("cited.rs");
+        let uncited = dir.join("uncited.rs");
+        std::fs::write(&cited, "//! REQ: REQ-QAL-003\nfn main() {}\n")
+            .unwrap_or_else(|e| unreachable!("write cited: {e}"));
+        std::fs::write(&uncited, "//! no marker here\nfn main() {}\n")
+            .unwrap_or_else(|e| unreachable!("write uncited: {e}"));
+        let offenders = citation_offenders(std::slice::from_ref(&dir))
+            .unwrap_or_else(|e| unreachable!("scan: {e}"));
+        assert_eq!(offenders.len(), 1, "uncited file must be listed");
+        assert!(offenders[0].ends_with("uncited.rs"));
+        std::fs::remove_dir_all(&dir).unwrap_or_else(|e| unreachable!("cleanup: {e}"));
     }
-    Ok(())
 }
