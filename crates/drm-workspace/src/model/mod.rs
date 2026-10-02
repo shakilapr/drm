@@ -21,6 +21,23 @@ pub type PackageName = String;
 /// Node manifest identity.
 pub type NodeName = String;
 
+/// Topic attributes extracted into typed model data (work-plan M02W2-E2-T3).
+/// Grammar-level validation happened in the parser; the model carries the
+/// normalized values. REQ: REQ-TOOL-031, REQ-TOOL-013.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TopicAttrs {
+    /// `@history: <depth>` sample count; `None` when absent or `latest`.
+    pub history_depth: Option<u64>,
+    /// `@history: latest` (unbounded-latest retention).
+    pub history_latest: bool,
+    /// `@pool_size: <n>` payload-pool slots.
+    pub pool_size: Option<u64>,
+    /// `@overflow: overwrite` policy.
+    pub overflow_overwrite: bool,
+    /// `@overflow: reject` policy.
+    pub overflow_reject: bool,
+}
+
 /// A parsed topic: canonical AST, schema content hash, canonical layout.
 /// REQ: REQ-TOOL-047.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,8 +50,13 @@ pub struct TopicEntry {
     pub schema_hash: [u8; 16],
     /// Canonical two-region layout ([canon-codec.md](../../docs/algorithms/canon-codec.md)).
     pub layout: StructLayout,
+    /// Normalized topic attributes (REQ-TOOL-031).
+    pub attrs: TopicAttrs,
 }
 
+/// Normalized topic attributes from `@history`/`@pool_size`/`@overflow`
+/// (the parser enforces one value per key and closed vocabularies).
+/// REQ: REQ-TOOL-031.
 /// Package-level metadata: the sorted set of its topics (I-D1).
 /// REQ: REQ-TOOL-047.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -147,12 +169,14 @@ pub fn build(tree: &TreeInput) -> Result<WorkspaceModel, Vec<ModelError>> {
             match parser::parse_bytes(src) {
                 Ok(schema) => match canon::layout_struct(&schema.fields) {
                     Ok(layout) => {
+                        let attrs = attrs_of(&schema);
                         model.topics.insert(
                             topic.clone(),
                             TopicEntry {
                                 schema_hash: schema_hash(&schema),
                                 schema,
                                 layout,
+                                attrs,
                             },
                         );
                         model
@@ -236,4 +260,23 @@ pub fn schema_hash(schema: &TopicFile) -> [u8; 16] {
     out[..8].copy_from_slice(&h1.to_le_bytes());
     out[8..].copy_from_slice(&h2.to_le_bytes());
     out
+}
+
+/// Extracts topic attributes into normalized [`TopicAttrs`] (grammar-level
+/// validation already happened in the parser: one value per key, closed
+/// vocabularies). REQ: REQ-TOOL-031.
+#[must_use]
+pub fn attrs_of(schema: &TopicFile) -> TopicAttrs {
+    let mut a = TopicAttrs::default();
+    for attr in &schema.attrs {
+        match attr.value {
+            parser::AttrValue::Latest => a.history_latest = true,
+            parser::AttrValue::Depth(n) => a.history_depth = Some(u64::from(n)),
+            parser::AttrValue::Size(n) => a.pool_size = Some(u64::from(n)),
+            parser::AttrValue::Overwrite => a.overflow_overwrite = true,
+            parser::AttrValue::Reject => a.overflow_reject = true,
+            parser::AttrValue::Encoding(_) => {} // carried in the schema AST
+        }
+    }
+    a
 }
