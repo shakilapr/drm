@@ -1,4 +1,4 @@
-//! WorkspaceModel determinism + conflict-collection tests (workspace-model.md
+//! `WorkspaceModel` determinism + conflict-collection tests (workspace-model.md
 //! I-D1, I-D2; work-plan M02W1-E2-T3). REQ: REQ-TOOL-045, REQ-TOOL-047.
 
 use drm_workspace::canon;
@@ -76,7 +76,8 @@ impl Xs {
     fn shuffle<T>(&mut self, xs: &mut [T]) {
         let n = xs.len();
         for i in (1..n).rev() {
-            let j = (self.next() % u64::try_from(i + 1).unwrap_or(u64::MAX)) as usize;
+            let bound = u64::try_from(i + 1).unwrap_or(u64::MAX);
+            let j = usize::try_from(self.next() % bound).unwrap_or(usize::MAX);
             xs.swap(i, j);
         }
     }
@@ -145,7 +146,9 @@ fn model_conflicts() {
                 drm_workspace::model::ModelError::Parse { topic, .. } => {
                     assert_eq!(topic, "delta/broken");
                 }
-                other => unreachable!("expected Parse, got {other:?}"),
+                other @ drm_workspace::model::ModelError::DuplicateTopic { .. } => {
+                    unreachable!("expected Parse, got {other:?}")
+                }
             }
         }
         Ok(_) => unreachable!("broken topic must fail the build"),

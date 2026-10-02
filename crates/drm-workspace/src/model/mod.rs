@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fmt::Write as _;
 
 use crate::canon::{self, StructLayout};
 use crate::parser::{self, TopicFile};
@@ -206,7 +207,7 @@ pub fn render_model(m: &WorkspaceModel) -> String {
             out.push_str(topic);
             out.push('\n');
             for b in entry.schema_hash {
-                out.push_str(&format!("{b:02x}"));
+                let _ = write!(out, "{b:02x}");
             }
             out.push('\n');
             out.push_str(&parser::render_canonical(&entry.schema));
