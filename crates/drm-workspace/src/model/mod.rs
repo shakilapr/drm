@@ -12,6 +12,8 @@ use std::fmt::Write as _;
 use crate::canon::{self, StructLayout};
 use crate::parser::{self, TopicFile};
 
+pub mod handles;
+
 /// Canonical topic path: `package/stem`, lowercase ASCII (REQ-TOOL-056).
 pub type TopicName = String;
 /// Package directory identity.
