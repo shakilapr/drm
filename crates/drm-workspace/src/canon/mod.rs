@@ -7,7 +7,10 @@
 use crate::parser::{Field, Prim, Type};
 use drm_types::Status;
 
+pub mod layout_json;
 pub mod value;
+
+pub use layout_json::{emit_layout_json, json_escape};
 
 /// Type-level layout in the fixed-width canonical domain (u64 size, u32 align).
 /// REQ: REQ-TOOL-042.

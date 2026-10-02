@@ -1,0 +1,13 @@
+{
+  "banner": "@generated — regenerate: DRM_LAYOUT_REGEN=1 cargo test -p drm-workspace --test layout_emit",
+  "schema": "e: enum{off,on}\nx: u32\n",
+  "header_end": 8,
+  "sample_max": 8,
+  "struct_align": 4,
+  "slots": [
+    {"name": "e", "region": "header", "offset": 0, "size": 1, "align": 1},
+    {"name": "x", "region": "header", "offset": 4, "size": 4, "align": 4}
+  ],
+  "variables": [
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "banner": "@generated — regenerate: DRM_LAYOUT_REGEN=1 cargo test -p drm-workspace --test layout_emit",
+  "schema": "f: u8[4]\ns: string[4]\n",
+  "header_end": 8,
+  "sample_max": 12,
+  "struct_align": 4,
+  "slots": [
+    {"name": "f", "region": "header", "offset": 0, "size": 4, "align": 1},
+    {"name": "s", "region": "descriptor", "offset": 4, "size": 4, "align": 4},
+    {"name": "s", "region": "body", "offset": 8, "size": 4, "align": 1}
+  ],
+  "variables": [
+    {"name": "s", "max": 4, "elem_size": 1, "elem_align": 1}
+  ]
+}

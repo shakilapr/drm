@@ -1,0 +1,22 @@
+{
+  "banner": "@generated — regenerate: DRM_LAYOUT_REGEN=1 cargo test -p drm-workspace --test layout_emit",
+  "schema": "n: u32\ns: string[4]\nb: bytes[<=4]\nk: u16\nw: u32[<=2]\n",
+  "header_end": 32,
+  "sample_max": 48,
+  "struct_align": 4,
+  "slots": [
+    {"name": "n", "region": "header", "offset": 0, "size": 4, "align": 4},
+    {"name": "k", "region": "header", "offset": 4, "size": 2, "align": 2},
+    {"name": "s", "region": "descriptor", "offset": 8, "size": 8, "align": 4},
+    {"name": "b", "region": "descriptor", "offset": 16, "size": 8, "align": 4},
+    {"name": "w", "region": "descriptor", "offset": 24, "size": 8, "align": 4},
+    {"name": "s", "region": "body", "offset": 32, "size": 4, "align": 1},
+    {"name": "b", "region": "body", "offset": 36, "size": 4, "align": 1},
+    {"name": "w", "region": "body", "offset": 40, "size": 8, "align": 4}
+  ],
+  "variables": [
+    {"name": "s", "max": 4, "elem_size": 1, "elem_align": 1},
+    {"name": "b", "max": 4, "elem_size": 1, "elem_align": 1},
+    {"name": "w", "max": 2, "elem_size": 4, "elem_align": 4}
+  ]
+}

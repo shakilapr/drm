@@ -10,6 +10,9 @@ license.workspace = true
 drm-types = { path = "../drm-types" }
 thiserror.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.178"
 
