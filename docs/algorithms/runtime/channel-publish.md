@@ -1,5 +1,6 @@
 # Channel Publish Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: one authoritative publish transaction joining validation, overflow gating, slot selection,
 reclamation, payload write, generation advance, ring commit, and diagnostics — in two forms sharing
 one ordering: copy publish (`src` slice) and loan publish (`write_acquire`/`commit`/`abort`, the

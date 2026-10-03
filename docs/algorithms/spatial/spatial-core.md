@@ -1,5 +1,6 @@
 # Spatial Core Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: `drm-spatial` foundations — distinct semantic types, compile-time fixed spaces vs dynamic spaces, `[spatial]` node contracts, static/dynamic inference, forests of spaces, canonical conventions and geodetic boundaries, temporal precision (sample/receive time), the four clock domains, runtime overlay frame creation, MCU constant codegen. Implements [spatial_architecture.md](../../spatial_architecture.md) §Five Golden Rules, §Rigid Transforms, §Distinct Types, §Compile-Time Spaces, §Forest, §Conventions, §Temporal Precision, §Dual Hierarchy, §Authoring Spaces, §Node Spatial Contracts, §Shared Memory and Microcontrollers. Owner: E2 (compiler/grammar, `crates/drm-spatial`) + E1 (runtime caches). Phases 33. Depends on [canon-codec.md](../canon-codec.md), [channel-metadata.md](../runtime/channel-metadata.md), [workspace-model.md](../toolchain/workspace-model.md).
 
 ## REQ Bindings

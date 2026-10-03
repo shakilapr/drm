@@ -1,5 +1,6 @@
 # Pool Exhaustion & Dead-Reader Reclamation Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: publisher behavior when the payload pool is exhausted (drop + counter, never block), and the
 slow-path reclamation of hazard slots abandoned by dead or closed endpoints, proven via the
 endpoint's OS registration lock. Implements architecture.md §Safe Handling of Pool Exhaustion,

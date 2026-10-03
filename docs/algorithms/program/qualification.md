@@ -1,5 +1,6 @@
 # Qualification Harness Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: Phase 34 whole-system qualification — requirement traceability, fault injection, fuzz/property/sanitizer completion, soak, deterministic builds, supported-platform matrix closure, invariant verification, and docs/examples CI. Owner: all (E4 harness lead). Depends on every algorithm test matrix and `docs/req/registry.csv`.
 
 ## REQ Bindings

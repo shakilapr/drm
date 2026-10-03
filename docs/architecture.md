@@ -1,5 +1,13 @@
 # DRM Architecture
 
+## Requirements Language
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear in all capitals.
+
+## Architecture Description Conventions
+
+This document describes the system-of-interest (DRM middleware), its stakeholders, their concerns, and the views addressing them; rationale for significant decisions lives in `docs/adr/`. Conventions: `docs/standards.md`.
+
 DRM is a decentralized data middleware for robots. Its primary duty is to move data between programs—such as camera frames, LiDAR point clouds, sensor measurements, and motor commands—without relying on a central broker, master node, or runtime network discovery.
 
 Applications may be written in any language capable of binding DRM's canonical C ABI. DRM's MVP provides first-party bindings for C, C++, Rust, and Python. Applications declare what topics they send and receive; DRM handles how that data is packaged, transported, and delivered.

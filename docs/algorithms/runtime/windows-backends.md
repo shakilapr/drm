@@ -1,5 +1,6 @@
 # Windows Runtime Backend Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: Windows implementations of the platform seams — shared-memory sections (pagefile-backed), file locks, process identity, precommit locking — with the platform-divergence rules pinned. Implements architecture.md §Platform-Managed Paging, §Hard Real-Time Precommitment, §Crash Recovery via OS Registration-Lock Authority (Windows variants), §Safe Cleanup, §Session-Scoped Persistence. Owner: E1 (crate `drm-core::shm::windows`). Phase 31. Mirrors [shm-backend.md](shm-backend.md) invariants I0–I9.
 
 ## REQ Bindings

@@ -1,5 +1,6 @@
 # Feasibility Estimation Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: declared-feasibility reports — nominal link utilization from typed `expected_rate` metadata (normalized by workspace-model.md), per-edge encoded frame sizes owned by each transport adapter, route `export_limit` shaping propagated as effective rate, per-link/per-route breakdown, impossible-configuration rejection collected into the verify report, and the honest boundary: estimates are engineering numbers, never runtime guarantees. Implements architecture.md §What `drm verify` Estimates, §Traffic Shaping and Bandwidth Budgeting. Owner: E2 (crate `drm-workspace::verifier::feasibility`). Phase 27. Depends on [verify-engine.md](verify-engine.md), [canon-codec.md](../canon-codec.md), [route-derivation.md](route-derivation.md), [workspace-model.md](workspace-model.md).
 
 ## REQ Bindings

@@ -1,5 +1,6 @@
 # Schema Parser Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: lexing, parsing, validation and canonical rendering of `.drm` topic-definition files. Topic attributes use an `@` sigil so any ordinary identifier remains a legal field name. Implements architecture.md §Topic Definitions (grammar, structural bounds, enums, topic attributes). Owner: E2 (crate `drm-workspace::parser`, `drm-workspace::render`). Phase 2. Gate criteria map 1:1 to invariants I1–I4 below.
 
 ## REQ Bindings

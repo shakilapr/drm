@@ -1,5 +1,6 @@
 # Spatial Index Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fixed-capacity incremental hash grid** for dynamic overlay objects and a **compiled static BVH** for static environment frames with **live calibration-slot subtree swaps**. Zero-heap steady-state indexing/queries; frame-typed query API; candidate completeness; exact spatial memory verification. Implements [spatial_architecture.md](../../spatial_architecture.md) §Runtime Spatial Index, §Hash Grid for Dynamic Objects, §Compiled Static BVH, §Ownership and Update Discipline, §Proximity Query Semantics. Owner: E2 (compiler/BVH) + E1 (runtime grid). Phase 33 (implemented M21–M22). Depends on [spatial-core.md](spatial-core.md), [spatial-queries.md](spatial-queries.md), [memory-budget.md](../memory-budget.md).
 
 ## REQ Bindings

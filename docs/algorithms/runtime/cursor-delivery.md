@@ -1,5 +1,6 @@
 # Cursor & Delivery Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: reader cursors, the four access operations (`borrow_latest`, `copy_latest`, `borrow_next`,
 `copy_next`), independent reader positions, exact `GAP` reporting on lapped sequential readers,
 persistent + in-call epoch verification, and bounded retry primitives. Implements architecture.md

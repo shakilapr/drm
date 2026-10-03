@@ -1,5 +1,6 @@
 # Consumer Registration Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: fixed consumer-record claim, identity publication, clean close, dead-owner takeover,
 generation-safe hazard reuse, and stale-record normalization. Implements architecture.md §Consumer
 Registration and Reuse, §Crash Recovery via OS Registration-Lock Authority. Owner:

@@ -1,5 +1,6 @@
 # Topic Handle System Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: canonical topic identity → stable runtime handles; numeric-ID assignment across builds; committed assignment lockfile (`.drm/ids.json`) with semantic merge reconciliation (`drm ids reconcile`); explicit `drm ids compact`. Handles are runtime/deployment artifacts: generated code bindings never embed them (codegen-invalidation.md I-G9, architecture.md §Canonical Identity, Runtime Handles, and Transport Identifiers). Owner: E2 (crate `drm-workspace::model::handles`, `drm-cli::ids`). Phase 6. Depends on [workspace-model.md](workspace-model.md), [deployment-identity.md](deployment-identity.md).
 
 ## REQ Bindings

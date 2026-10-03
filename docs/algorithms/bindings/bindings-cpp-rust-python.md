@@ -1,5 +1,6 @@
 # Language Binding Algorithms (C++, Rust, Python)
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: first-party bindings over `drm-ffi` — C++/Rust transient zero-copy borrows, Python owned-reads-only, per-language threading models, generated node-scoped facades over a shared types layer, byte-backed generated views, interoperability. Implements architecture.md §Core Language Ecosystem, §Node Communication Contracts as Architectural Capabilities, borrow-lifecycle rule. Owner: E4 (C++ `bindings/cpp`, Python `bindings/python`) + E1 (Rust `bindings/rust/crates/drm`). Phases 20–22. Depends on [c-abi-surface.md](c-abi-surface.md), [hazard-protocol.md](../runtime/hazard-protocol.md), [consumer-registration.md](../runtime/consumer-registration.md).
 
 ## REQ Bindings

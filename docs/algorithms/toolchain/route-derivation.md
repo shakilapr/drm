@@ -1,5 +1,6 @@
 # Route Derivation Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: automatic derivation of a per-topic **forwarding tree** (route plan) from the declared communication graph and physical topology — local elimination, 1→N fan-out, multi-hop forwarding, explicit overrides (`prefer`/`deny`/`force`/`export_limit`), external endpoints as first-class vertices, explicit-hop tree construction under a one-parent invariant, acyclic re-export. Path analysis is polynomial (connectivity/bridge based), never simple-path enumeration. Implements architecture.md §Automatic Routing and Explicit Overrides, §External Endpoints. Owner: E3 (crate `drm-workspace::topology::route`). Phase 28.
 
 ## REQ Bindings

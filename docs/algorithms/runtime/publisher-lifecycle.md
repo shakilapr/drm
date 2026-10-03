@@ -1,5 +1,6 @@
 # Publisher Lifecycle & Epochs Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: publisher authority acquisition via OS locks, restart semantics, stale-segment recovery,
 `publisher_epoch` increment exactly-once, consumer epoch observation and state reset, freshness
 transitions. Implements architecture.md §Publisher Epoch, §Segment Creation and Writer Authority

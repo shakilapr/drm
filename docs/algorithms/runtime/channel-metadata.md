@@ -1,5 +1,6 @@
 # Channel Metadata & Attachment Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: channel descriptor block (channel-level metadata) as a naturally aligned control block, one-time attachment validation, epoch observe/reset protocol, and the per-run addressability watermark. Implements architecture.md §No Universal Envelope (channel/sample/transport layers), §Publisher Epoch, §Startup Compatibility Guard, §Individual Segment Validation, §Channel Metadata (aligned control block). Owner: E1 (crate `drm-core::channel`), E2 (descriptor spec + layout). Phases 5, 17, 18.
 
 ## REQ Bindings

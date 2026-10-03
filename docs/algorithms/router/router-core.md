@@ -1,5 +1,6 @@
 # Boundary Router Core Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: `drm-router` data path — topic filtering from derived forwarding plans, router-owned copy before egress (external-I/O borrow rule), per-transport framing (UDP datagrams, reliable stream records, COBS serial frames), two-way import, multi-hop forwarding, ingress ordering/dedup, session lifecycle, disconnect isolation. Implements architecture.md §The Boundary Router, §Transport Metadata. Owner: E3 (crate `drm-router`). Phase 29. Depends on [route-derivation.md](../toolchain/route-derivation.md), [lanes-shaping.md](lanes-shaping.md), [publisher-lifecycle.md](../runtime/publisher-lifecycle.md), [cursor-delivery.md](../runtime/cursor-delivery.md).
 
 ## REQ Bindings

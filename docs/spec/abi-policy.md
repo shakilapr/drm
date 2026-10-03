@@ -1,5 +1,11 @@
 # C ABI Compatibility Policy
 
+## Requirements Language
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear in all capitals.
+
+## Scope
+
 Scope: the stable C ABI surface — `bindings/c/include/drm/drm.h` (handwritten, single
 source of truth, ADR 0002) and the exported symbols of crate `drm-ffi`. Implements
 architecture.md §Canonical C ABI; work-plan M01W3-E4-T5.

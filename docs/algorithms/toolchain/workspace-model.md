@@ -1,5 +1,6 @@
 # Workspace Model Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: construction of the in-memory `WorkspaceModel` from manifests and `.drm` files — topics, nodes, packages, compute units, links, placement — plus normalized planning metadata (typed rates, contract metadata), contract validation, contract fingerprints, and deterministic reproducibility. Layering: model construction enforces **structural/referential integrity only**; architectural policy (single-writer, routing, reliability, budgets, compatibility) belongs to `drm verify` (verify-engine.md). Implements architecture.md §In-Memory Workspace Model, §Primary Domain Relationships, §Node Communication Contracts. Owner: E2 (crate `drm-workspace::model`). Phase 23.
 
 ## REQ Bindings

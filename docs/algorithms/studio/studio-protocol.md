@@ -1,5 +1,6 @@
 # Studio Protocol & Engine Bridge Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: the engine↔Studio bridge — generated TypeScript types + JSON-RPC schema (`packages/studio-protocol`), `drm studio --stdio` host, capability handshake, revisioned optimistic concurrency, durable journaled ChangeSets with conditional undo, format-preserving editing, run-session supervisor, command/data-plane separation, workspace-trust gating, and renderer capability model. Implements [ui-architecture.md](../../ui-architecture.md) Core Principles, §Process Architecture, §Protocol, §Transactional Mutations, §Run Session Supervisor. Owner: E2 (protocol generation, stdio host) + E4 (supervisor). Phase 32. UI state/streams: [ui-architecture.md](../../ui-architecture.md) §Semantic vs UI State, §Frontend State. Extensions: §Extension Platform. Depends on [workspace-model.md](../toolchain/workspace-model.md), [verify-engine.md](../toolchain/verify-engine.md), [handle-system.md](../toolchain/handle-system.md), [build-orchestration.md](../toolchain/build-orchestration.md).
 
 ## REQ Bindings

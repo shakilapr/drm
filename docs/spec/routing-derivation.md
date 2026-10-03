@@ -3,6 +3,10 @@
 Non-normative derived spec; `docs/architecture.md` §Automatic Routing and Explicit
 Overrides wins conflicts. REQ: REQ-ROUTE-003 (≥ 2 paths without policy ⇒ verify error).
 
+## Requirements Language
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear in all capitals.
+
 ## Model
 
 - Vertices: compute units + external endpoints. Edges: physical links

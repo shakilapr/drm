@@ -1,5 +1,13 @@
 # DRM Studio (UI Architecture)
 
+## Requirements Language
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear in all capitals.
+
+## Architecture Description Conventions
+
+Conventions: `docs/standards.md`.
+
 DRM Studio is the visual control surface for the DRM workspace: create and edit packages, nodes, topics, computes, and links; assign publishers and consumers; inspect routes, memory budgets, and verification results; build and run targets; visualize the system. It is explicitly **not an IDE**: source code remains in VS Code or any editor, and workspace files remain the only source of truth.
 
 Related: [DRM Architecture](architecture.md).

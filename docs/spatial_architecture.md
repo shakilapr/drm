@@ -1,5 +1,13 @@
 # DRM Spatial Module Architecture
 
+## Requirements Language
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear in all capitals.
+
+## Architecture Description Conventions
+
+Conventions: `docs/standards.md`.
+
 DRM Spatial is an integrated spatial-temporal module within DRM (`drm-spatial`). It replaces dynamic transform trees like tf2 with a compiled spatial graph, versioned shared-memory caches, explicit clock domains, and consumer-driven history.
 
 In robotics, coordinate transforms change over time, belong to different hardware clock domains, experience sensor latencies, and occasionally jump or reparent. DRM Spatial models both spatial geometry and temporal behavior as a high-performance library on top of the DRM data fabric.

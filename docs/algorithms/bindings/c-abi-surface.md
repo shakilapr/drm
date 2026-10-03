@@ -1,5 +1,6 @@
 # Canonical C ABI Surface Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: the stable C ABI (`drm.h`, crate `drm-ffi`) — opaque context/publisher/consumer handles, raw-pointer `extern "C"` functions with pointer AND length checks before any Rust reference/slice, validate-once endpoint open with borrower-record lease, copy publish plus zero-copy publisher write-loan, borrow/copy read operations, fixed `int32_t` status codes, fail-stop panic rule, one-way ABI compatibility, explicit close operations. Implements architecture.md §Canonical C ABI, §Low-Level C ABI and Endpoint Handles, §Core Language Ecosystem. Owner: E4 (crate `drm-ffi`, header `bindings/c/include/drm/drm.h`) with E1 (core hooks). Phase 7 (finalize), 20–22 (binding substrate). Depends on [channel-metadata.md](../runtime/channel-metadata.md), [channel-publish.md](../runtime/channel-publish.md) (copy + loan transactions), [hazard-protocol.md](../runtime/hazard-protocol.md), [publisher-lifecycle.md](../runtime/publisher-lifecycle.md), [consumer-registration.md](../runtime/consumer-registration.md), [deployment-identity.md](../deployment-identity.md).
 
 ## REQ Bindings

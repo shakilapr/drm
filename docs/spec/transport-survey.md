@@ -6,6 +6,10 @@ as constants (clean-room: no code copied). Forward-referenced by
 REQ: REQ-ROUTE-001 (ingress topics never re-exported), REQ-ROUTE-002
 (bits/bytes explicit).
 
+## Requirements Language
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear in all capitals.
+
 ## Datagram overhead (fixed, per wire frame)
 
 | Family | IP header | DRM frame header | Total overhead |

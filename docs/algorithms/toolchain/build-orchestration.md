@@ -1,5 +1,6 @@
 # Build Orchestration & Watch Mode Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: `drm build` as high-level orchestrator (parse → handles → deployment artifacts → generate → verify → invoke native builder), native build adapters (CMake/Ninja, Cargo, custom command), and `drm dev` filesystem watch — two data event categories plus error/rescan control signals, event-loss recovery, pending-dirty retention across invalid declaration batches. Watch events are invalidation hints, not truth (architecture.md §DRM as Orchestrator, §Clear Division of Responsibilities, §Development Watch Mode). Owner: E2 (crate `drm-workspace`, `drm-cli`). Phase 25. Depends on [workspace-model.md](workspace-model.md), [codegen-invalidation.md](codegen-invalidation.md), [handle-system.md](handle-system.md).
 
 ## REQ Bindings

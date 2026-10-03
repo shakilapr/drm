@@ -1,5 +1,6 @@
 # Spatial Query Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: spatial query surface — **compiled transform plans** per (target, reference) pair, the four query operations `latest/at/predict/delayed_view`, the transform result object (hard error + combinable quality flags), SLERP/linear interpolation with the discontinuity guard, **transactional temporal reparenting** (Preserve World/Local/Snap), **live calibration via calibration slots** (no recompilation), versioned per-process caches with consumer-driven time-based history. Implements [spatial_architecture.md](../../spatial_architecture.md) §Versioned Local Cache, §Query Semantics and History, §Discontinuities and Teleports, §Transactional Reparenting, §Transform Status and Quality, §Calibration Without Recompilation. Owner: E2 (query-plan compiler) + E1 (runtime). Phase 33 (implemented M20–M21). Depends on [spatial-core.md](spatial-core.md), [channel-metadata.md](../runtime/channel-metadata.md), [cursor-delivery.md](../runtime/cursor-delivery.md).
 
 ## REQ Bindings

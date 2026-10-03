@@ -2,6 +2,10 @@
 
 Normative EBNF lives in [`docs/algorithms/toolchain/schema-parser.md`](../algorithms/toolchain/schema-parser.md) §Grammar — this spec restates it for toolchain implementers and pins the diagnostics contract. Source of truth: the algorithm doc; divergence here is a bug.
 
+## Requirements Language
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear in all capitals.
+
 ## Production summary
 
 ```ebnf

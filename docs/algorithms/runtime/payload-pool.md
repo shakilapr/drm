@@ -1,5 +1,6 @@
 # Payload Pool Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: per-topic fixed-capacity payload slot pools — dynamic-count layout at static offsets, structural isolation, size rejection before write, the payload pool invariant (`pool_size ≥ R+1`; drop-free at `pool_size ≥ R+H+1`), and the single in-progress-write guard. Implements architecture.md §Memory Architecture: Fixed Channels, §Fixed-Capacity Slot Pools, §Payload Pool Invariant, §Single Publisher (one in-progress write). Owner: E1 (crate `drm-core::channel::pool`), E2 (verifier hooks). Phase 13; invariant enforcement shared with Phase 19 ([memory-budget.md](../memory-budget.md)).
 
 ## REQ Bindings

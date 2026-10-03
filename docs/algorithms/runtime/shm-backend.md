@@ -1,5 +1,6 @@
 # Shared-Memory Backend Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: Linux OS shared-memory backend — backend-safe generated names, exclusive-create
 (`O_CREAT|O_EXCL`), stale-object classification before exact-size attach, map/unmap lifecycle,
 OS-backed per-topic publisher locks + one per-deployment active lock, fork sanitization, precommit

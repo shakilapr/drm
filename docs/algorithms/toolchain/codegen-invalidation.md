@@ -1,5 +1,6 @@
 # Codegen & Invalidation Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: language binding generators (C/C++/Rust/Python) — stable shared output paths, generation fingerprints over directed capabilities, node-scoped API units, atomic replacement, timestamp preservation by content compare, direct reconciliation against a complete expected-output set. Generated bindings never embed runtime numeric handles (architecture.md §Stable Shared Bindings, §Node Communication Contracts; handle-system.md consumed by deployment artifacts, not codegen). Owner: E2 (crate `drm-workspace::codegen`). Phase 24. Depends on [workspace-model.md](workspace-model.md), [canon-codec.md](../canon-codec.md).
 
 ## REQ Bindings

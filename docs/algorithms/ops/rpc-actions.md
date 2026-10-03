@@ -1,5 +1,6 @@
 # RPC & Actions Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: `drm-rpc` — request-response services and long-running, cancellable action workflows built as a clean library layer over correlated topics; single ordered event stream per client; reactor/worker execution with server sessions, admission control, and bounded outboxes; no changes to core ring buffers. Implements architecture.md §drm-rpc. Owner: E1 (crate `drm-rpc`). Phase 32. Depends on [cursor-delivery.md](../runtime/cursor-delivery.md), [channel-metadata.md](../runtime/channel-metadata.md), [handle-system.md](../toolchain/handle-system.md), [overflow-policies.md](../runtime/overflow-policies.md) (reject gating).
 
 ## REQ Bindings

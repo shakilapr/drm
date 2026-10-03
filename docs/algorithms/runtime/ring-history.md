@@ -1,5 +1,6 @@
 # Ring & History Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: circular sequence-history ring — `sequence → {slot_index, generation, sequence}` handles at depth `R`; retention semantics; publisher write path; reader position resolution; per-run addressability watermark. Implements architecture.md §The Dual-Layer Architecture, §Shared History, §Publisher Slot Selection (storage side), §Publisher Epoch (first_valid_seq). Owner: E2 (crate `drm-core::ring`), E1 (integration). Phases 9–10.
 
 ## REQ Bindings

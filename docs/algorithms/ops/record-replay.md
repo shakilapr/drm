@@ -1,5 +1,6 @@
 # Record & Replay Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: `drm-record` — borrow-copy-release logging pipeline, recorder-owned bounded per-topic slab buffers, loss-ledger gap accounting, disk threads fully decoupled from DRM memory, `on_full` policies, MCAP framing with DRM metadata records, replay with explicit scheduler and tiered fidelity. Implements architecture.md §Memory Ownership (record lifecycle), §drm-record. Owner: E4 (crate `drm-record`). Phase 32. Depends on [cursor-delivery.md](../runtime/cursor-delivery.md) (borrow_next), [hazard-protocol.md](../runtime/hazard-protocol.md), [exhaustion-reclamation.md](../runtime/exhaustion-reclamation.md), [overflow-policies.md](../runtime/overflow-policies.md) (reject gating).
 
 ## REQ Bindings

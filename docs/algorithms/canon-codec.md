@@ -1,5 +1,6 @@
 # Canonical Codec Algorithms
 
+Normative terminology follows [docs/standards.md](../standards.md).
 Scope: canonical binary representation — primitive encode/decode over raw bytes, two-region layout computation (fixed header in declaration order + bounded variable tail), fixed/bounded array and enum codecs, checked fixed-width size arithmetic, message-level structural-bound enforcement (two-phase validate → write), UTF-8/enum validation, and deterministic observable bytes. Implements architecture.md §Canonical Binary Layout, §Structural Bounds, §Sample Metadata. Owners: E2 (`drm-workspace::canon` — layout) + E1 (`drm-core::canon` — codec over mapped bytes). Phases 3–4; the layout-fixture exchange is the permanent toolchain↔runtime gate.
 
 ## REQ Bindings

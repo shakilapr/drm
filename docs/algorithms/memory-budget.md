@@ -1,5 +1,6 @@
 # Memory Budget & Precommit Algorithms
 
+Normative terminology follows [docs/standards.md](../standards.md).
 Scope: deterministic memory verification against configured deployment budgets — overflow-checked worst-case capacity calculation, budget comparison rules, drop-free shortfall warning (statically known `H`), warning band, per-region lockable accounting (page-rounded, conservative), per-process locked working set — and the hard-real-time precommit protocol (backend-defined lock proof, refuse-on-failure at activation). Implements architecture.md §Memory Budgets as Build-Time Verification, §Hard Real-Time Precommitment, §Payload Pool Invariant (sizing rules). Owner: E2 (verifier math in `drm-workspace::verifier`) + E1 (activation in `drm-core::channel`). Phase 19. Depends on [payload-pool.md](runtime/payload-pool.md) (invariant), [channel-metadata.md](runtime/channel-metadata.md) (attach check), [shm-backend.md](runtime/shm-backend.md) (platform locking), [windows-backends.md](runtime/windows-backends.md) (Windows proof), [router-core.md](router/router-core.md) (lane buffers).
 
 ## REQ Bindings

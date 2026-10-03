@@ -1,5 +1,6 @@
 # Zero-Copy Hazard Protocol Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: lockless consumer acquisition with a sequentially consistent control handshake, one
 single-word hazard slot per consumer endpoint, 64-bit generation ABA protection, publisher slot
 selection/retirement, borrow scope release, and multi-reader sharing of one slot. Implements

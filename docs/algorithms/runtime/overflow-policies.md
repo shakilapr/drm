@@ -1,5 +1,6 @@
 # Overflow Policies Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: topic-level history overflow — `overwrite` continuous rolling with exact gap accounting, `reject` required-sequential gating with explicit `QueueFull`. Implements architecture.md §History Overflow. Owner: E1 (crate `drm-core::channel::overflow`). Phase 12.
 
 ## REQ Bindings

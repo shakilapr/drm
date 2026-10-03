@@ -1,5 +1,6 @@
 # Observability Plane Algorithms
 
+Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: the observability plane — `drm-diag` (out-of-band aggregation: counters, observed_rate, per-consumer deadline state, link stats), `drm-trace` (wait-free per-producer SPSC event lanes), and non-publishing introspection tools (`drm echo`, `drm hz`, `drm log`). Implements architecture.md §Two-Plane Architecture (Observability Plane), §What drm-diag Measures, §Tooling and Introspection. Owner: E1 (trace runtime), E4 (diag + tools). Phase 32. Depends on [channel-metadata.md](../runtime/channel-metadata.md) (counters, timing variant), [cursor-delivery.md](../runtime/cursor-delivery.md) (momentary borrow rule).
 
 ## REQ Bindings
