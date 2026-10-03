@@ -31,6 +31,20 @@ REQ-TOOL-042 (declaration order, natural alignment, padding), REQ-TOOL-043 (litt
 REQ-TOOL-044 (standard sizes). Descriptor: REQ-CORE-014 (aligned control state, offset asserts),
 REQ-CORE-015 (stored once per segment), REQ-CORE-016 (exact offsets/counts/size).
 
+## Regression board (M02W4-E4-T1, all suites green via `cargo xtask test`)
+
+| Crate | Suites |
+|---|---|
+| `drm-cli` | unit (0) |
+| `drm-core` | lib 47; `attach_semantics` 4; `canon_le_assert` 1; `canon_read_fuzz` 2 (1 ignored, nightly); `crosscheck` 1; `descriptor_golden` 2; `golden_primitives` 1; `ordering_smoke` 2; stress binaries `no_fd_leak`/`platform`/`quota_edge`/`shm_kill` (0 local, stress lane) |
+| `drm-ffi` | lib 2 |
+| `drm-router` | lib 21; `config_parse` 9; `crc32c_kat` 3; `framing_property` 3; `framing_record` 4; `route_table` 2 |
+| `drm-types` | lib 7; `blake3_kat` 3 |
+| `drm-workspace` | lib 10; `boundary_matrix` 2; `fixtures_valid` 3; `fuzz_campaign` 1 (ignored, nightly); `fuzz_seeds` 2; `golden_composites` 11; `handle_stability` 7; `layout_emit` 2; `model_attrs` 4; `model_determinism` 4; `model_fingerprint` 6; `model_nodes` 5; `model_roundtrip` 1; `model_topology` 7; `parser_corpus` 4; `property_types` 1; `roundtrip` 1; `topology_graph` 19; `types_codec` 13; `types_layout` 7; `types_unbounded` 8 |
+| `xtask` | lib 1; soak parser 1 |
+
+Status: 0 failures across the workspace; doc-tests green (6 crates). Signing role E3.
+
 ## Notes
 
 - The golden byte contract is the frozen vector set, not any runner: adding vectors requires
