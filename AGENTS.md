@@ -14,3 +14,4 @@
 12. **Layering**: `drm-types` zero deps; `drm-workspace` never depends on `drm-core`; ops crates never depend on each other. Enforced by `xtask check-layering`.
 13. **Generated Code**: Generated artifacts carry a `@generated` banner and are never hand-edited; regenerate and commit the diff.
 14. **Regression Permanence**: A green phase suite becomes a permanent blocking gate; flaky tests are quarantined and repaired or deleted within one week.
+15. **Standards**: External standards and cross-cutting conventions registry: `docs/standards.md`; documents point there instead of restating.
