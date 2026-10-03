@@ -27,7 +27,7 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 | `xtask bench --report-regressions` | benchmark regression report (audit.yml) |
 | `xtask abi-check --against <ref>` | ABI/layout compatibility vs a previous release (release.yml) |
 | `xtask publish` | lockstep crates.io publishing (release.yml) |
-| `xtask sbom --out <file>` | SBOM generation (release.yml) |
+| `xtask sbom --out <file>` | SBOM generation (release.yml). *Registered, not yet implemented — planned for the release phase (docs/standards.md Planned).* |
 | `xtask audit syscall` | syscall audit on the data path |
 
 Adding, renaming, or removing a command requires updating this registry and ADR 0003 in the same PR.

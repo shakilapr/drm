@@ -1,6 +1,6 @@
 # Contributing to DRM
 
-Normative rules: [AGENTS.md](AGENTS.md), [codebase.md](codebase.md), [docs/architecture.md](docs/architecture.md).
+Normative rules: [AGENTS.md](AGENTS.md), [codebase.md](codebase.md), [docs/architecture.md](docs/architecture.md). Standards and cross-cutting conventions: [docs/standards.md](docs/standards.md).
 
 ## Prerequisites
 
