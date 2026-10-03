@@ -239,6 +239,192 @@ fn route_conflicting_override() {
     );
 }
 
+/// REQ: REQ-ROUTE-016 — force pins the viable diamond branch that carries the
+/// forced link; no ambiguity error.
+#[test]
+fn route_force_pins_viable() {
+    let mut g = diamond();
+    g.overrides
+        .force
+        .insert("t".to_string(), singleton_lid("L1"));
+
+    let res = derive(&g);
+    assert!(res.errors.is_empty(), "errors: {res:?}");
+    let plan = res.plans.get("t").unwrap_or_else(|| unreachable!("plan"));
+    let egress: Vec<&str> = plan.forwarding["A"]
+        .egress
+        .iter()
+        .map(|e| e.link.0.as_str())
+        .collect();
+    assert_eq!(egress, vec!["L1"], "pinned branch selected");
+    assert_eq!(
+        plan.forwarding["D"].ingress.as_ref().map(|l| l.0.as_str()),
+        Some("L3")
+    );
+}
+
+/// REQ: REQ-ROUTE-016 — force names a link off every viable path ⇒ explicit
+/// `ForcedLinkNotViable`; no plan. `L9` hangs off a compute with no path to
+/// the consumer.
+#[test]
+fn route_force_not_viable() {
+    let mut g = diamond();
+    g.computes.insert("E".to_string());
+    g.links.push(link("L9", cid("A"), cid("E")));
+    g.overrides
+        .force
+        .insert("t".to_string(), singleton_lid("L9"));
+
+    let res = derive(&g);
+    assert!(!res.plans.contains_key("t"));
+    assert_eq!(res.errors.len(), 1, "errors: {res:?}");
+    assert!(
+        matches!(&res.errors[0], VerifyError::ForcedLinkNotViable { topic, link, .. }
+            if topic == "t" && link == "L9"),
+        "errors: {res:?}"
+    );
+}
+
+/// REQ: REQ-ROUTE-014 — two forced links for one topic ⇒ `ConflictingRouteOverride`.
+#[test]
+fn route_two_force_conflict() {
+    let mut g = RouteGraph::default();
+    g.computes.extend(["A".to_string(), "B".to_string()]);
+    g.links.push(link("L1", cid("A"), cid("B")));
+    g.placement.insert("p".to_string(), "A".to_string());
+    g.placement.insert("q".to_string(), "B".to_string());
+    g.publishes.insert("p".to_string(), singleton("t"));
+    g.consumes.insert("q".to_string(), singleton("t"));
+    let mut forced = singleton_lid("L1");
+    forced.insert(LinkId("L2".to_string()));
+    g.overrides.force.insert("t".to_string(), forced);
+
+    let res = derive(&g);
+    assert!(
+        res.errors
+            .iter()
+            .any(|e| matches!(e, VerifyError::ConflictingRouteOverride { topic } if topic == "t")),
+        "errors: {res:?}"
+    );
+}
+
+/// REQ: REQ-ROUTE-017 — prefer selects among viable paths: the diamond
+/// resolves to the preferred branch.
+#[test]
+fn route_prefer_resolves_ambiguity() {
+    let mut g = diamond();
+    g.overrides
+        .prefer
+        .insert("t".to_string(), LinkId("L2".to_string()));
+
+    let res = derive(&g);
+    assert!(res.errors.is_empty(), "errors: {res:?}");
+    let plan = res.plans.get("t").unwrap_or_else(|| unreachable!("plan"));
+    let egress: Vec<&str> = plan.forwarding["A"]
+        .egress
+        .iter()
+        .map(|e| e.link.0.as_str())
+        .collect();
+    assert_eq!(egress, vec!["L2"], "preferred branch selected");
+}
+
+/// REQ: REQ-ROUTE-003 — prefer off every viable path does not mask the
+/// ambiguity error (never a silent choice).
+#[test]
+fn route_prefer_not_on_path() {
+    let mut g = diamond();
+    g.links.push(link("L9", cid("B"), cid("C")));
+    g.overrides
+        .prefer
+        .insert("t".to_string(), LinkId("L9".to_string()));
+
+    let res = derive(&g);
+    assert!(!res.plans.contains_key("t"));
+    assert!(
+        res.errors
+            .iter()
+            .any(|e| matches!(e, VerifyError::Ambiguous { topic, .. } if topic == "t")),
+        "errors: {res:?}"
+    );
+}
+
+/// REQ: REQ-ROUTE-010 — force resolves one consumer's diamond while a
+/// second consumer on the pinned branch stays unique; the plan merges.
+#[test]
+fn route_force_resolves_ambiguity_multi_consumer() {
+    let mut g = diamond();
+    g.placement.insert("r".to_string(), "B".to_string());
+    g.consumes.insert("r".to_string(), singleton("t"));
+    g.overrides
+        .force
+        .insert("t".to_string(), singleton_lid("L1"));
+
+    let res = derive(&g);
+    assert!(res.errors.is_empty(), "errors: {res:?}");
+    let plan = res.plans.get("t").unwrap_or_else(|| unreachable!("plan"));
+    assert!(plan.forwarding["B"].local_delivery, "consumer on B");
+    assert!(
+        plan.forwarding["A"].egress.contains(&edge("L1")),
+        "pinned branch carries both consumers"
+    );
+    assert!(
+        plan.forwarding["B"].egress.contains(&edge("L3")),
+        "L3 egress from B toward D"
+    );
+    assert_eq!(
+        plan.forwarding["B"].ingress.as_ref().map(|l| l.0.as_str()),
+        Some("L1")
+    );
+}
+
+/// REQ: REQ-ROUTE-015, REQ-ROUTE-016, REQ-ROUTE-017 — the pipeline composes:
+/// deny prunes one diamond branch, prefer selects the remaining viable branch.
+#[test]
+fn route_deny_force_prefer_pipeline() {
+    let mut g = diamond();
+    g.overrides
+        .deny
+        .insert("t".to_string(), singleton_lid("L1"));
+    g.overrides
+        .prefer
+        .insert("t".to_string(), LinkId("L4".to_string()));
+
+    let res = derive(&g);
+    assert!(res.errors.is_empty(), "errors: {res:?}");
+    let plan = res.plans.get("t").unwrap_or_else(|| unreachable!("plan"));
+    let egress: Vec<&str> = plan.forwarding["A"]
+        .egress
+        .iter()
+        .map(|e| e.link.0.as_str())
+        .collect();
+    assert_eq!(egress, vec!["L2"], "denied branch pruned");
+    assert_eq!(
+        plan.forwarding["D"].ingress.as_ref().map(|l| l.0.as_str()),
+        Some("L4"),
+        "prefer satisfied on the remaining branch"
+    );
+}
+
+/// Diamond A→B→D and A→C→D around topic `t` (the ambiguity fixture core).
+fn diamond() -> RouteGraph {
+    let mut g = RouteGraph::default();
+    g.computes.extend([
+        "A".to_string(),
+        "B".to_string(),
+        "C".to_string(),
+        "D".to_string(),
+    ]);
+    g.links.push(link("L1", cid("A"), cid("B")));
+    g.links.push(link("L2", cid("A"), cid("C")));
+    g.links.push(link("L3", cid("B"), cid("D")));
+    g.links.push(link("L4", cid("C"), cid("D")));
+    g.placement.insert("p".to_string(), "A".to_string());
+    g.placement.insert("q".to_string(), "D".to_string());
+    g.publishes.insert("p".to_string(), singleton("t"));
+    g.consumes.insert("q".to_string(), singleton("t"));
+    g
+}
+
 /// REQ: REQ-ROUTE-010 — I-R10: fan-out tree A→B, B→C, B→D plus a local
 /// consumer on B: every reached compute appears exactly once, local and
 /// remote both represented.

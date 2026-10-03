@@ -174,6 +174,15 @@ pub enum VerifyError {
         /// Consumer vertex.
         consumer: VertexId,
     },
+    /// `force` names a link that no viable path traverses (I-R9).
+    ForcedLinkNotViable {
+        /// Topic.
+        topic: String,
+        /// Forced link.
+        link: String,
+        /// Consumer vertex the force could not serve.
+        consumer: VertexId,
+    },
     /// A compute gained a second, different parent (I-R13).
     InconsistentFanout {
         /// Topic.
@@ -206,6 +215,16 @@ impl fmt::Display for VerifyError {
             Self::NoRoute { topic, consumer } => {
                 write!(f, "no route for `{topic}` to {consumer:?}")
             }
+            Self::ForcedLinkNotViable {
+                topic,
+                link,
+                consumer,
+            } => {
+                write!(
+                    f,
+                    "forced link `{link}` is not on any viable path for `{topic}` to {consumer:?}"
+                )
+            }
             Self::InconsistentFanout { topic, compute } => {
                 write!(f, "inconsistent fan-out for `{topic}` at `{compute}`")
             }
@@ -224,6 +243,140 @@ pub struct RouteResult {
 }
 
 type Adj = BTreeMap<VertexId, Vec<(LinkId, VertexId)>>;
+
+/// Path-traverses-link predicate.
+/// REQ: REQ-ROUTE-016.
+fn contains_link(hops: &[Hop], link: &LinkId) -> bool {
+    hops.iter().any(|h| &h.link == link)
+}
+
+/// Endpoints of a link from the adjacency map (both orientations present for
+/// undirected links; the first occurrence pair wins).
+/// REQ: REQ-ROUTE-016.
+fn link_endpoints(adj: &Adj, via: &LinkId) -> Option<(VertexId, VertexId)> {
+    for (v, nbrs) in adj {
+        for (link, w) in nbrs {
+            if link == via {
+                return Some((v.clone(), w.clone()));
+            }
+        }
+    }
+    None
+}
+
+/// Viable path that traverses `via`: `src →(denying via)→ u`, the `via`
+/// traversal, then `v →(denying via)→ dst`, for each of the two orientations
+/// of the undirected link. Polynomial (three BFS per orientation).
+/// REQ: REQ-ROUTE-016.
+fn path_via(
+    adj: &Adj,
+    src: &VertexId,
+    dst: &VertexId,
+    via: &LinkId,
+    deny: Option<&BTreeSet<LinkId>>,
+) -> Option<Vec<Hop>> {
+    let (a, b) = link_endpoints(adj, via)?;
+    let mut pruned: BTreeSet<LinkId> = deny.cloned().unwrap_or_default();
+    pruned.insert(via.clone());
+    for (u, v) in [(&a, &b), (&b, &a)] {
+        let (Some(mut hops), Some(tail)) = (
+            bfs(adj, src, u, None, Some(&pruned)),
+            bfs(adj, v, dst, None, Some(&pruned)),
+        ) else {
+            continue;
+        };
+        hops.push(Hop {
+            from: u.clone(),
+            link: via.clone(),
+            to: v.clone(),
+        });
+        hops.extend(tail);
+        return Some(hops);
+    }
+    None
+}
+
+/// Force/prefer selection outcome for one consumer.
+/// REQ: REQ-ROUTE-016, REQ-ROUTE-017.
+enum Selection {
+    /// Exactly one path survives the policy.
+    Chosen(Vec<Hop>),
+    /// Two or more distinct viable paths remain unresolved.
+    Contested(Vec<Hop>, Vec<Hop>),
+    /// `force` names a link no viable path traverses.
+    NotViable,
+}
+
+/// Collects deduplicated viable candidates that traverse `link`.
+/// REQ: REQ-ROUTE-016.
+fn via_candidates(
+    adj: &Adj,
+    src: &VertexId,
+    dst: &VertexId,
+    link: &LinkId,
+    deny: Option<&BTreeSet<LinkId>>,
+    primary: &[Hop],
+    alternate: Option<&Vec<Hop>>,
+) -> Vec<Vec<Hop>> {
+    let mut cands: Vec<Vec<Hop>> = Vec::new();
+    if contains_link(primary, link) {
+        cands.push(primary.to_vec());
+    }
+    if let Some(alt) = alternate
+        && contains_link(alt, link)
+        && !cands.contains(alt)
+    {
+        cands.push(alt.clone());
+    }
+    if let Some(p) = path_via(adj, src, dst, link, deny)
+        && !cands.contains(&p)
+    {
+        cands.push(p);
+    }
+    cands
+}
+
+/// Applies the selection pipeline for one consumer: `force` pins the route
+/// (a single viable candidate), `prefer` breaks a tie, `auto` demands a
+/// unique path (I-R4). REQ: REQ-ROUTE-016, REQ-ROUTE-017, REQ-ROUTE-003.
+#[allow(clippy::too_many_arguments)]
+fn select_consumer_path(
+    adj: &Adj,
+    src: &VertexId,
+    dst: &VertexId,
+    deny: Option<&BTreeSet<LinkId>>,
+    force: Option<&LinkId>,
+    prefer: Option<&LinkId>,
+    primary: Vec<Hop>,
+    alternate: Option<Vec<Hop>>,
+) -> Selection {
+    if let Some(link) = force {
+        let cands = via_candidates(adj, src, dst, link, deny, &primary, alternate.as_ref());
+        return match cands.len() {
+            0 => Selection::NotViable,
+            1 => Selection::Chosen(cands.into_iter().next().unwrap_or_default()),
+            _ => Selection::Contested(cands[0].clone(), cands[1].clone()),
+        };
+    }
+    let mut cands: Vec<Vec<Hop>> = vec![primary.clone()];
+    if let Some(alt) = &alternate {
+        cands.push(alt.clone());
+    }
+    if cands.len() == 1 {
+        return Selection::Chosen(primary);
+    }
+    if let Some(link) = prefer {
+        let via: Vec<Vec<Hop>> = cands
+            .iter()
+            .filter(|p| contains_link(p, link))
+            .cloned()
+            .collect();
+        if via.len() == 1 {
+            return Selection::Chosen(via.into_iter().next().unwrap_or_default());
+        }
+    }
+    Selection::Contested(primary, alternate.unwrap_or_default())
+}
 
 /// BFS from `src` to `dst` over non-denied links, optionally skipping one
 /// link (alternate-path check). Deterministic: neighbors in link order.
@@ -277,15 +430,67 @@ fn bfs(
     Some(hops)
 }
 
+/// Merge selected hops into the plan (I-R13): source computes gain egress
+/// (with declared export limit, I-R14), destination computes gain at most one
+/// ingress; the ingress link is never re-exported (I-R7). Returns `false`
+/// when an inconsistency was reported.
+/// REQ: REQ-ROUTE-044, REQ-ROUTE-014.
+fn merge_hops(
+    topic: &str,
+    plan: &mut TopicRoutePlan,
+    hops: &[Hop],
+    export_limit: &BTreeMap<(String, LinkId), Rate>,
+    errors: &mut Vec<VerifyError>,
+) -> bool {
+    for hop in hops {
+        if let VertexId::Compute(c) = &hop.from {
+            let rule = plan.forwarding.entry(c.clone()).or_default();
+            if rule.ingress.as_ref() == Some(&hop.link) {
+                errors.push(VerifyError::InconsistentFanout {
+                    topic: topic.to_string(),
+                    compute: c.clone(),
+                });
+                return false;
+            }
+            rule.egress.insert(ForwardingEdge {
+                link: hop.link.clone(),
+                export_limit: export_limit
+                    .get(&(topic.to_string(), hop.link.clone()))
+                    .copied(),
+            });
+        }
+        if let VertexId::Compute(t) = &hop.to {
+            let rule = plan.forwarding.entry(t.clone()).or_default();
+            match &rule.ingress {
+                Some(ing) if ing != &hop.link => {
+                    errors.push(VerifyError::InconsistentFanout {
+                        topic: topic.to_string(),
+                        compute: t.clone(),
+                    });
+                    return false;
+                }
+                Some(_) => {}
+                None => rule.ingress = Some(hop.link.clone()),
+            }
+        }
+    }
+    true
+}
+
 /// Build the forwarding tree for one topic: classify every consumer, merge
-/// hops under the one-parent invariant, validate the arborescence.
-/// REQ: REQ-ROUTE-004, REQ-ROUTE-044.
+/// hops under the one-parent invariant, validate the arborescence. Selection
+/// follows the pipeline: `deny` prunes, `force` pins, `prefer` breaks ties,
+/// `auto` requires a unique path (I-R4).
+/// REQ: REQ-ROUTE-004, REQ-ROUTE-044, REQ-ROUTE-015, REQ-ROUTE-016,
+/// REQ-ROUTE-017.
 #[allow(clippy::too_many_arguments)]
 fn build_tree(
     topic: &str,
     src: &VertexId,
     consumers: &BTreeSet<VertexId>,
     deny: Option<&BTreeSet<LinkId>>,
+    force: Option<&LinkId>,
+    prefer: Option<&LinkId>,
     adj: &Adj,
     export_limit: &BTreeMap<(String, LinkId), Rate>,
     errors: &mut Vec<VerifyError>,
@@ -315,61 +520,31 @@ fn build_tree(
         };
         // Bounded alternate-path check (I-R11): a second path exists iff some
         // primary edge can be avoided; exact and polynomial.
-        let mut alternate = None;
-        for hop in &primary {
-            if let Some(alt) = bfs(adj, src, dst, Some(&hop.link), deny) {
-                alternate = Some(alt);
-                break;
-            }
-        }
-        if let Some(alt) = alternate {
-            errors.push(VerifyError::Ambiguous {
-                topic: topic.to_string(),
-                consumer: dst.clone(),
-                primary,
-                alternate: alt,
-            });
-            continue;
-        }
-        // Merge hops (I-R13): source computes gain egress, destination
-        // computes gain at most one ingress.
-        let mut consistent = true;
-        for hop in &primary {
-            if let VertexId::Compute(c) = &hop.from {
-                let rule = plan.forwarding.entry(c.clone()).or_default();
-                if rule.ingress.as_ref() == Some(&hop.link) {
-                    // I-R7: never re-export back over the ingress link.
-                    errors.push(VerifyError::InconsistentFanout {
+        let alternate = primary
+            .iter()
+            .find_map(|h| bfs(adj, src, dst, Some(&h.link), deny));
+        let selected =
+            match select_consumer_path(adj, src, dst, deny, force, prefer, primary, alternate) {
+                Selection::Chosen(hops) => hops,
+                Selection::Contested(p, a) => {
+                    errors.push(VerifyError::Ambiguous {
                         topic: topic.to_string(),
-                        compute: c.clone(),
+                        consumer: dst.clone(),
+                        primary: p,
+                        alternate: a,
                     });
-                    consistent = false;
-                    break;
+                    continue;
                 }
-                rule.egress.insert(ForwardingEdge {
-                    link: hop.link.clone(),
-                    export_limit: export_limit
-                        .get(&(topic.to_string(), hop.link.clone()))
-                        .copied(),
-                });
-            }
-            if let VertexId::Compute(t) = &hop.to {
-                let rule = plan.forwarding.entry(t.clone()).or_default();
-                match &rule.ingress {
-                    Some(ing) if ing != &hop.link => {
-                        errors.push(VerifyError::InconsistentFanout {
-                            topic: topic.to_string(),
-                            compute: t.clone(),
-                        });
-                        consistent = false;
-                        break;
-                    }
-                    Some(_) => {}
-                    None => rule.ingress = Some(hop.link.clone()),
+                Selection::NotViable => {
+                    errors.push(VerifyError::ForcedLinkNotViable {
+                        topic: topic.to_string(),
+                        link: force.map_or_else(String::new, |l| l.0.clone()),
+                        consumer: dst.clone(),
+                    });
+                    continue;
                 }
-            }
-        }
-        if !consistent {
+            };
+        if !merge_hops(topic, &mut plan, &selected, export_limit, errors) {
             return None;
         }
         if let VertexId::Compute(c) = dst {
@@ -392,6 +567,49 @@ fn build_tree(
         return None;
     }
     Some(plan)
+}
+
+/// Collects producers and consumers as graph vertices: nodes resolved through
+/// their placement plus external endpoints (I-R6).
+/// REQ: REQ-ROUTE-009, REQ-ROUTE-010.
+fn collect_vertices(
+    graph: &RouteGraph,
+) -> (
+    BTreeMap<String, BTreeSet<VertexId>>,
+    BTreeMap<String, BTreeSet<VertexId>>,
+) {
+    let mut producers: BTreeMap<String, BTreeSet<VertexId>> = BTreeMap::new();
+    let mut consumers: BTreeMap<String, BTreeSet<VertexId>> = BTreeMap::new();
+    for (topics, key, out) in [
+        (&graph.publishes, &graph.placement, &mut producers),
+        (&graph.consumes, &graph.placement, &mut consumers),
+    ] {
+        for (node, set) in topics {
+            let Some(compute) = key.get(node) else {
+                continue;
+            };
+            for t in set {
+                out.entry(t.clone())
+                    .or_default()
+                    .insert(VertexId::Compute(compute.clone()));
+            }
+        }
+    }
+    for (name, ext) in &graph.external {
+        for t in &ext.produce {
+            producers
+                .entry(t.clone())
+                .or_default()
+                .insert(VertexId::External(name.clone()));
+        }
+        for t in &ext.consume {
+            consumers
+                .entry(t.clone())
+                .or_default()
+                .insert(VertexId::External(name.clone()));
+        }
+    }
+    (producers, consumers)
 }
 
 /// Derive per-topic forwarding plans (route-derivation.md §Functions).
@@ -417,44 +635,7 @@ pub fn derive(graph: &RouteGraph) -> RouteResult {
     }
 
     // 2. Producers/consumers as graph vertices (nodes ∪ external, I-R6).
-    let mut producers: BTreeMap<String, BTreeSet<VertexId>> = BTreeMap::new();
-    let mut consumers: BTreeMap<String, BTreeSet<VertexId>> = BTreeMap::new();
-    for (node, topics) in &graph.publishes {
-        let Some(compute) = graph.placement.get(node) else {
-            continue;
-        };
-        for t in topics {
-            producers
-                .entry(t.clone())
-                .or_default()
-                .insert(VertexId::Compute(compute.clone()));
-        }
-    }
-    for (node, topics) in &graph.consumes {
-        let Some(compute) = graph.placement.get(node) else {
-            continue;
-        };
-        for t in topics {
-            consumers
-                .entry(t.clone())
-                .or_default()
-                .insert(VertexId::Compute(compute.clone()));
-        }
-    }
-    for (name, ext) in &graph.external {
-        for t in &ext.produce {
-            producers
-                .entry(t.clone())
-                .or_default()
-                .insert(VertexId::External(name.clone()));
-        }
-        for t in &ext.consume {
-            consumers
-                .entry(t.clone())
-                .or_default()
-                .insert(VertexId::External(name.clone()));
-        }
-    }
+    let (producers, consumers) = collect_vertices(graph);
 
     // 3. Adjacency over all links (deny applied during BFS, I-R4).
     let mut adj: Adj = BTreeMap::new();
@@ -492,11 +673,28 @@ pub fn derive(graph: &RouteGraph) -> RouteResult {
             res.plans.insert(topic.clone(), plan);
             continue;
         };
+        // Effective single forced link: multi-link or deny-overlapping force
+        // is already a ConflictingRouteOverride (I-R9); deny pruning proceeds
+        // for that topic without a pin.
+        let forced: Option<&LinkId> = graph
+            .overrides
+            .force
+            .get(topic)
+            .and_then(|f| f.iter().next())
+            .filter(|l| {
+                graph
+                    .overrides
+                    .deny
+                    .get(topic)
+                    .is_none_or(|d| !d.contains(l))
+            });
         if let Some(plan) = build_tree(
             topic,
             &src,
             consumer_set,
             graph.overrides.deny.get(topic),
+            forced,
+            graph.overrides.prefer.get(topic),
             &adj,
             &graph.overrides.export_limit,
             &mut res.errors,
