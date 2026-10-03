@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0]
+Sections are dated when tagged; dateless sections have not been tagged.
+
+## [Unreleased]
+
+## [0.4.0]
 
 ### Added
 
@@ -14,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Record framing (length-prefixed one-sample-per-record with truncation-rejection matrix) and datagram multiplex framing (exact-fit/one-over bound guard, no-partial-write) with a 20 000-case property sweep and a libfuzzer framing target.
 - Model topic attributes (`@history`/`@pool_size`/`@overflow` normalized into `TopicAttrs`).
 
-## [0.4.0]
+## [0.3.0]
 
 ### Added
 
@@ -24,13 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `drm-workspace::topology` route derivation — per-topic forwarding trees, unique/ambiguous/no-route classification via BFS + bounded alternate-path check (no simple-path enumeration), deny-prune + force∧deny conflict validation, external endpoints as first-class vertices, export_limit carried into plan egress, 12 fixtures (REQ-ROUTE-004/010/003/005/009/015/019).
 - Golden composites extended to 10 vectors with 3-lang parity; canonical type-universe property harness (10 000 cases); router-core UDP transport notes (recvmmsg batching, SO_RCVBUF sizing, two-host sim plan).
 
-## [0.3.0]
+## [0.2.0]
 
 ### Added
 
 - Schema type system — two-region layout computation (`TypeLayout`/`StructLayout`, checked u64 arithmetic, u32::MAX sample cap), interpreter codec over parsed types (two-phase encode with gap-zeroing determinism, structural decode re-deriving canonical packing), 48-cell boundary matrix with completeness gate, unbounded-structure rejection (7/7 with exact diagnostics), six hand-authored two-region golden composite vectors with three independent decoders (Rust frozen-oracle runner, C11 two-region reader, Python struct reader — 3/3 langs, primitives 24/24 + composites 6/6), ABI spike probe (exhaustive status switch, opaque-handle pattern, ABI-version guard; gcc+clang × c99+c11), MTU edge matrix (68/1280/1492/1472 + below-floor override rejection), `canon_le_assert` LE byte-oracle guard for aarch64 parity, budget static/activation split + dual-derivation worked example, serial escape/stuffing options table (COBS selected), and the metrics ledger (`docs/metrics/metrics-m01.md`).
 
-## [0.2.0]
+## [0.1.0]
 
 ### Added
 
@@ -47,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SHM platform traits frozen v1 (`drm-core::shm::{ShmBackend, LockBackend}`): method sets and semantics are stable from this point; any breaking change requires a drm-core version bump. Linux bodies (`PosixShm`, `FlockBackend`) are the tagged reference implementation; Windows contract lives in `windows-backends.md` for M06.
 - Toolchain pin bumped 1.89.0 → 1.94.0 (`rust-toolchain.toml`): the 1.89.0 rustfmt tarball is quarantined by Microsoft Defender on dev hosts (false positive); functionally equivalent for edition 2024.
 
-## [0.1.0]
+## [0.0.1]
 
 ### Added
 
@@ -68,8 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RPC/action algorithms revised: one ordered `event/<client>` stream replaces `response/` + `state/`; reactor/worker split with cooperative cancellation (REQ-OPS-011); operation + terminal capacity reserved before a request is consumed — `publish ≠ accepted` (REQ-OPS-021); bounded outbox with guaranteed lifecycle/terminal and advisory progress (REQ-OPS-022); relative `remaining_budget_ns` on the wire (REQ-OPS-023); random server session prevents stale-request re-execution across restarts (REQ-OPS-020); reliable routes required (REQ-OPS-024); per-cid event ordering (REQ-OPS-025); `V-RPC`/`V-REC` verify checks added (verify-engine.md).
 - Spatial algorithm docs revised after falsification audit: `latest()` is now temporally coherent — every path input evaluated at one common timestamp `t* = min_i(t_newest,i)`, empty interval intersection ⇒ `OUT_OF_HISTORY`, and the per-process cache reuses geometry only while freshness/status are always derived per query (REQ-SPATIAL-002/024); transform slots carry sample + receive timestamps with a per-edge clock identity/epoch, and clock mappings are affine (reference pair, rate ratio, bounded uncertainty growth) so a device reset invalidates prior mappings (REQ-SPATIAL-004/035); `predict` integrates a body-frame twist on SE(3) via the exponential map (REQ-SPATIAL-025); `history = H` is a guaranteed sample-time window, `max_samples = N` the capacity, and `min_sample_period = P` the producer-density contract — verification requires `N ≥ ⌊H/P⌋ + 2`, faster-than-P samples are rejected and counted, and rings are sample-time ordered with deterministic duplicate/late policy (REQ-SPATIAL-033/037; `REQ-SPATIAL-037` added to the registry); the result object is split into one hard error plus combinable quality flags (REQ-SPATIAL-032); runtime overlay frames resolve through a bounded, topology-generation-cached overlay prefix with bounded topology-event history (REQ-SPATIAL-008/034); reparenting marks discontinuities per jumped local edge and Preserve-World keeps the world trajectory continuous (REQ-SPATIAL-016/029); the dynamic index uses incremental affected-cell updates under a grid epoch with a single non-blocking updater and full dependency-vector invalidation (REQ-SPATIAL-013/015); the cell-hash table is sized with load-factor headroom (α ≤ 0.70) and backward-shift deletion, queries bound cell enumeration by `max_query_cells` with object-table fallback, and candidate overflow returns `OutputTooSmall{required}` instead of truncating (REQ-SPATIAL-014/018/020); `SpatialId` documented as a persistent object identity, not a slot index (REQ-SPATIAL-009).
 
-[0.5.0]: https://github.com/shakilapr/drm/releases/tag/v0.5.0
-[0.4.0]: https://github.com/shakilapr/drm/compare/v0.3.0...v0.4.0
+[unreleased]: https://github.com/shakilapr/drm/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/shakilapr/drm/releases/tag/v0.4.0
 [0.3.0]: https://github.com/shakilapr/drm/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/shakilapr/drm/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/shakilapr/drm/releases/tag/v0.1.0
+[0.1.0]: https://github.com/shakilapr/drm/compare/v0.0.1...v0.1.0
+[0.0.1]: https://github.com/shakilapr/drm/releases/tag/v0.0.1
