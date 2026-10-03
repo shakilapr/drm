@@ -83,6 +83,87 @@ pub struct ChannelControlBlock {
 // // exact golden offsets pinned in tests/fixtures/golden/descriptor/ and checked by I-M1.
 ```
 
+### Byte-exact descriptor map (Phase 5, hand-computed; frozen by the golden fixture)
+
+All values little-endian; padding bytes are zero and part of the checked image.
+REQ: REQ-CORE-014, REQ-CORE-015, REQ-CORE-016.
+
+*SegmentPrefix — 16 bytes, align 8:*
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | `magic` = `"DRMC"` |
+| 4 | 4 | `layout_version` |
+| 8 | 4 | `segment_state` (0/Init/Ready; I-M6) |
+| 12 | 4 | `descriptor_size` (152, I-M7) |
+
+*ChannelDescriptor — 152 bytes, align 8 (matches `tests/fixtures/golden/descriptor/`):*
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | `flags` (bit 0 TIMING; bit 1 VARIANT; bit 2 E2E_CRC) |
+| 4 | 4 | `pad_header` |
+| 8 | 16 | `schema_hash` |
+| 24 | 16 | `layout_hash` |
+| 40 | 4 | `topic_handle` |
+| 44 | 2 | `topic_name_len` |
+| 46 | 1 | `overflow_policy` (0 overwrite, 1 reject) |
+| 47 | 1 | `pad0` |
+| 48 | 8 | `payload_capacity` |
+| 56 | 8 | `history_depth` |
+| 64 | 8 | `pool_size` |
+| 72 | 4 | `consumer_count` |
+| 76 | 4 | `required_count` |
+| 80 | 4 | `diagnostic_count` |
+| 84 | 4 | `pad_counts` |
+| 88 | 8 | `ccb_offset` |
+| 96 | 8 | `ring_offset` |
+| 104 | 8 | `consumer_offset` |
+| 112 | 8 | `slot_generation_offset` |
+| 120 | 8 | `payload_offset` |
+| 128 | 8 | `segment_size` |
+| 136 | 16 | `reserved` (all zero) |
+
+Hand check behind the golden region values: prefix 16 + descriptor 152 + name
+(`topic_name_len` 10) = 178 → `ccb_offset = align_up(178, 8) = 184 = 0xB8`; the
+TIMING flag is set, so the CCB occupies 64 bytes → `ring_offset = 184 + 64 =
+248 = 0xF8`. Field offsets 0–152 are the frozen byte contract (I-M1); the
+remaining region values in the fixture are illustrative for the byte-table
+test and are not a validated segment image — real segments derive every region
+from the activation layout with checked arithmetic, and attach re-validates
+sizes, ranges, and non-overlap exactly once (I-M7).
+
+*ChannelControlBlock — 56 bytes base, 64 with the TIMING variant, align 8:*
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | `publisher_epoch` |
+| 4 | 4 | `pad_epoch` |
+| 8 | 8 | `first_valid_seq` |
+| 16 | 8 | `write_seq` |
+| 24 | 8 | `drop_count` |
+| 32 | 8 | `overrun_count` |
+| 40 | 8 | `pool_exhausted` |
+| 48 | 1 | `reclaim_requested` |
+| 49 | 1 | `publish_busy` |
+| 50 | 6 | `pad` |
+| 56 | 8 | `last_commit_mono_ns` (TIMING variant only) |
+
+### Sample metadata rules (architecture §No Universal Envelope)
+
+- **Fixed-size topics**: the sample is exactly the payload — no length field,
+  no header, no per-sample CRC (integrity = generation counters +
+  acquire/release ordering; hop/e2e CRCs are transport-plane only).
+- **Variable topics**: the sample is a little-endian `u32` byte length followed
+  by the payload (canon-codec.md single-variable two-region degeneration:
+  the descriptor degenerates to the `u32` length header).
+- **Sensor timestamps**: present only when the topic declares them (e.g.,
+  64-bit nanoseconds field in the schema); DRM never injects transport
+  timestamps into discrete commands or state machines.
+- `sample_len` itself is derived, not stored in the ring cell (canon-codec.md:
+  `sample_len = f(counts)`); the variable length header lives inside the
+  sample, first 4 bytes.
+
 ## Invariants
 
 - **I-M1 ByteExact**: descriptor bytes match the golden table field-for-field (including padding). Test: `descriptor_golden` (byte-inspection harness), `descriptor_offset_asserts` (compile-time + runtime).
