@@ -1,6 +1,13 @@
 # Requirement Registry
 
-Machine-readable traceability registry required by work-plan Phase 1 and consumed by `xtask audit-traceability` (codebase.md §3.1 R2, §6.2).
+Machine-readable traceability registry required by work-plan Phase 1 and consumed by `xtask audit-traceability` (codebase.md §3.1 R2, §6.2). Requirement engineering conventions follow `docs/standards.md` (adopted as concepts, no external standard named).
+
+## Requirement Quality
+
+- Every statement is a single normative sentence with a unique ID; IDs are append-only and never reused.
+- Statements are testable: an implementation or test must be able to verify or refute them.
+- Traceability is bidirectional and enforced: architecture statement ⇄ requirement ID ⇄ implementation ⇄ verification test. A change to any one leg lands in the same PR as the others.
+- Test management chain: requirement → test condition → test case → procedure/environment → execution → actual result → pass/fail → traceability record. The `test` column names the chain's terminal anchor.
 
 ## Layout
 
