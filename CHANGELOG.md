@@ -11,7 +11,12 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week-4 tranche (work-plan M02W4): model topology (computes, links, placement with referential validation) carried into the model and roundtrip; route override pipeline completed to the 8-fixture matrix (deny prune, force pin with viability/conflict errors, prefer tie-break); `publisher_open`/`consumer_open` lifecycle over the SHM backends (held-or-refuse authority, create-or-classify with `Init`/undersized recovery, floor+epoch restart published last, `EpochExhausted`; consumer open-only with bounded startup wait) with in-memory and real-POSIX fork evidence, plus the state-first attach validation fix per channel-metadata I-M6; canonical `Gap` outcome scaffold with the one-to-one status mapping; byte-exact descriptor/CCB/prefix offset maps and sample metadata rules in the channel-metadata spec; `xtask soak` duration-bounded stability skeleton (118 clean iterations over a 1 h budget); Phase 4 gate evidence (`docs/gates/phase-04.md`) with the C++ runner closure recorded for Phase 20.
 - Week-3 tranche (work-plan M02W3): clean-room BLAKE3 in the zero-dependency types crate, verified against all 35 official test vectors, with the schema hash pinned to BLAKE3/128 and the Rust ABI-version mirror of the handwritten `DRM_ABI_VERSION`; channel-descriptor attach validation (compare-once, exact-layout matrix, init refusal, byte-exact descriptor golden with zero-padding sweep and read/write symmetry), publish-ordering two-thread smoke; node manifests (TOML, closed surface) with unknown-topic and duplicate-identity negatives, multi-publisher query, contract fingerprints over pinned serialization (isolation proven), canonical layout hashes, and a 5 000-case model roundtrip; router configuration parsing, handle-keyed route table, CRC-32C known-answer vectors, serial frame draft.
+
+### Fixed
+
+- Router framing decode no longer relies on the never-type `?` special case (`map_err(|_| unreachable!())?` → `unwrap_or_else`), which the first `From<Gap> for Status` implementation exposed.
 
 ## [0.4.0]
 

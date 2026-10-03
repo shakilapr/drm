@@ -54,3 +54,19 @@ Carry-forward (M02W3): reconcile (`drm ids reconcile`), CCB v0 struct, zero-allo
 | `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
 
 Doc gaps found (report-only): router-core.md has no TOML surface (field names derived from architecture.md); export_limit placement derived; serial-mcu draft added as clearly-marked section.
+
+## M02W4 — Phase 4 Gate, Topology, Overrides, Open API, Soak Skeleton
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 4)` | PASS — C/Rust/Python; C++ closure documented | PASS — `docs/gates/phase-04.md`; golden triple green; C++ runner closure recorded in registry `REQ-BIND-013` test field → Phase 20 |
+| `GOLDEN_TOTAL` | ≥ 30 ×3 langs | 35 vectors (24 primitives + 10 composites + 1 descriptor): Rust suites, C11 `golden_composites` (gcc), Python `test_golden_bytes.py`; UTF-8-malformed negative parity |
+| `MODEL_COVERAGE` | topics+nodes+contracts+placement+links | model topology (computes/links/placement) with referential validation (dangling/unknown/duplicate/self-loop), render + roundtrip updated (`cb2d7ed`) |
+| `OPEN_API_SEMANTICS` | I-O1/I-O2 | `publisher_open` held-or-refuse (`Permission` loser), create-or-classify (fresh/adopt/`Init`+undersized recover), restart floor+epoch published last, `EpochExhausted`; `consumer_open` never creates (I-O2), bounded wait retries `NotFound`/`StaleIncomplete`/`NotReady`; 10 in-memory lifecycle tests + 2 real-POSIX fork tests (SIGKILL restart epoch 2 + cross-process single-winner; typechecked, CI-run) (`a5b4d66`) |
+| `ROUTE_OVERRIDES` | 8/8 fixtures (I-R1..R3) | 19 tests in `topology_graph`: force pins viable/not-viable/conflict/multi-consumer-ambiguity, prefer resolves ambiguity/off-path, deny→force→prefer pipeline (`3f8b98d`) |
+| `SOAK_SKELETON` | `xtask soak --duration 1` clean | 118 clean iterations within the 1 h budget (every failure aborts; parser unit test) |
+| `GAP_SCAFFOLD` | outcome + 1:1 status mapping | `drm_types::Gap { missed }`, `From<Gap> for Status` (`-6`), mapping test |
+| `DESCRIPTOR_SPEC` | byte-exact maps (Phase 5 feed) | SegmentPrefix 16 B / ChannelDescriptor 152 B / CCB 56 B (+TIMING 64) offset tables + sample metadata rules in `channel-metadata.md`; hand check: 178→184/248 region math |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Architecture catch (report-only): `validate_prefix` checked magic before state; channel-metadata.md I-M6 is normative state FIRST — zero-filled in-progress segments returned terminal `InvalidData` instead of retryable `NotReady`. Fixed in `a5b4d66`; consequence: first `From<_> for Status` impl exposed a brittle never-type `?` pattern in drm-router (5 sites, `map_err(|_| unreachable!())?` → `unwrap_or_else`).
