@@ -139,7 +139,7 @@ pub struct Mapping {
 impl Mapping {
     /// Backend-internal constructor (Linux backend, unix only).
     #[cfg_attr(
-        not(unix),
+        all(not(unix), not(test)),
         expect(
             dead_code,
             reason = "platform mmap body lands with the OS backend (windows-backends.md)"
@@ -251,15 +251,62 @@ pub trait ShmBackend {
 }
 
 /// Opaque held OS lock; `Drop` releases (flock binds to the open file description
-/// and the kernel releases it when the last duplicate closes — I4). The handle
-/// owns the lock-file descriptor, opened `O_CLOEXEC`.
+/// and the kernel releases it when the last duplicate closes - I4). The handle
+/// owns the lock-file descriptor, opened `O_CLOEXEC`, plus an optional backend
+/// release hook for backends whose lock state is not the OS descriptor itself
+/// (test backends); the hook runs after the descriptor closes.
 /// REQ: REQ-CORE-073, REQ-CORE-069.
-#[derive(Debug)]
 pub struct LockHandle {
     #[cfg(unix)]
-    fd: std::os::fd::OwnedFd,
+    fd: Option<std::os::fd::OwnedFd>,
     #[cfg(not(unix))]
     _priv: (),
+    release_hook: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl std::fmt::Debug for LockHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("LockHandle");
+        #[cfg(unix)]
+        s.field("fd", &self.fd.is_some());
+        #[cfg(not(unix))]
+        s.field("_priv", &());
+        s.field("release_hook", &self.release_hook.is_some());
+        s.finish()
+    }
+}
+
+impl LockHandle {
+    /// OS-descriptor constructor (platform backends).
+    /// REQ: REQ-CORE-073.
+    #[cfg(unix)]
+    pub(crate) fn from_fd(fd: std::os::fd::OwnedFd) -> Self {
+        Self {
+            fd: Some(fd),
+            release_hook: None,
+        }
+    }
+
+    /// Hook constructor (in-process test backends).
+    /// REQ: REQ-CORE-073.
+    #[cfg_attr(not(test), expect(dead_code, reason = "test-backend constructor"))]
+    pub(crate) fn from_hook(hook: Box<dyn FnOnce() + Send>) -> Self {
+        Self {
+            #[cfg(unix)]
+            fd: None,
+            #[cfg(not(unix))]
+            _priv: (),
+            release_hook: Some(hook),
+        }
+    }
+}
+
+impl Drop for LockHandle {
+    fn drop(&mut self) {
+        if let Some(hook) = self.release_hook.take() {
+            hook();
+        }
+    }
 }
 
 /// OS-backed advisory lock lifecycle (`flock` family: `LOCK_EX|LOCK_NB`,

@@ -5,6 +5,7 @@
 //! (delivery).
 
 pub mod ccb;
+pub mod lifecycle;
 pub mod overflow;
 pub mod pool;
 

@@ -49,7 +49,7 @@ fn lock_fd(path: &Path, op: libc::c_int) -> Result<LockHandle, ShmError> {
     if rc != 0 {
         return Err(lock_busy());
     }
-    Ok(LockHandle { fd: file.into() })
+    Ok(LockHandle::from_fd(file.into()))
 }
 
 impl super::LockBackend for FlockBackend {
@@ -62,8 +62,7 @@ impl super::LockBackend for FlockBackend {
     }
 
     fn release(self, h: LockHandle) {
-        let LockHandle { fd } = h;
-        drop(fd);
+        drop(h);
     }
 }
 

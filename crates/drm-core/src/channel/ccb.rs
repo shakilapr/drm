@@ -346,10 +346,7 @@ pub fn write_prefix(buf: &mut [u8], state: u32) -> Result<(), Status> {
 /// (version, descriptor size, layout hash, capacity set, reserved bytes);
 /// [`Status::InvalidConfig`] for structural violations.
 pub fn validate_on_attach(segment: &[u8], expect: &Expectation) -> Result<AttachedView, Status> {
-    let prefix = validate_prefix(segment)?;
-    if prefix.0 != SEGMENT_READY {
-        return Err(Status::NotReady);
-    }
+    validate_prefix(segment)?;
     let dstart = size_of::<SegmentPrefix>();
     let dend = dstart + size_of::<ChannelDescriptor>();
     let db = segment.get(dstart..dend).ok_or(Status::InvalidData)?;
@@ -371,11 +368,17 @@ pub fn validate_on_attach(segment: &[u8], expect: &Expectation) -> Result<Attach
     })
 }
 
-/// Prefix gate: magic, layout version, descriptor size, and lifecycle state.
+/// Prefix gate: lifecycle state FIRST (I-M6 — a non-`Ready` prefix is
+/// `NotReady` and nothing else is interpreted; a zero-filled in-progress
+/// segment is a retryable startup artifact, not a compatibility failure),
+/// then magic, layout version, and descriptor size.
 /// REQ: REQ-CORE-015, REQ-CORE-068.
-fn validate_prefix(segment: &[u8]) -> Result<(u32,), Status> {
+fn validate_prefix(segment: &[u8]) -> Result<(), Status> {
     if segment.len() < size_of::<SegmentPrefix>() {
         return Err(Status::InvalidData);
+    }
+    if read_u32(segment, 8) != SEGMENT_READY {
+        return Err(Status::NotReady);
     }
     if segment[0..4] != *b"DRMC" {
         return Err(Status::InvalidData);
@@ -387,7 +390,7 @@ fn validate_prefix(segment: &[u8]) -> Result<(u32,), Status> {
     if dsize != size_of::<ChannelDescriptor>() {
         return Err(Status::WrongAbi);
     }
-    Ok((read_u32(segment, 8),))
+    Ok(())
 }
 
 /// Immutable-field and structural checks (compare-once). REQ: REQ-CORE-016,
