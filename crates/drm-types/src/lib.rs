@@ -7,6 +7,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod blake3;
+
+pub use blake3::{blake3, blake3_128};
+
+/// Rust mirror of the handwritten `DRM_ABI_VERSION` in
+/// `bindings/c/include/drm/drm.h` (bump on layout change only; additions do
+/// not bump). REQ: REQ-BIND-018, REQ-TOOL-023.
+pub const ABI_VERSION: u32 = 0;
+
 /// DRM status taxonomy. Variants map 1:1 to the append-only C code list in
 /// `bindings/c/include/drm/drm.h` (never renumbered, never reused; no `Internal`
 /// variant — fail-stop, codebase.md 3.2).
