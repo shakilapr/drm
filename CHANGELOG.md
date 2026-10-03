@@ -9,6 +9,10 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ## [Unreleased]
 
+### Added
+
+- Week-3 tranche (work-plan M02W3): clean-room BLAKE3 in the zero-dependency types crate, verified against all 35 official test vectors, with the schema hash pinned to BLAKE3/128 and the Rust ABI-version mirror of the handwritten `DRM_ABI_VERSION`; channel-descriptor attach validation (compare-once, exact-layout matrix, init refusal, byte-exact descriptor golden with zero-padding sweep and read/write symmetry), publish-ordering two-thread smoke; node manifests (TOML, closed surface) with unknown-topic and duplicate-identity negatives, multi-publisher query, contract fingerprints over pinned serialization (isolation proven), canonical layout hashes, and a 5 000-case model roundtrip; router configuration parsing, handle-keyed route table, CRC-32C known-answer vectors, serial frame draft.
+
 ## [0.4.0]
 
 ### Added

@@ -36,3 +36,21 @@ Carry-forward (M02W2): fork/flock lock matrix, precommit_mlock matrix, name_conf
 | `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
 
 Carry-forward (M02W3): reconcile (`drm ids reconcile`), CCB v0 struct, zero-alloc struct-path assertion, status-map both-directions gate, nodes+placement parse, force/prefer selection.
+
+## M02W3 — CCB Attach, Fingerprints, Contracts, Router Config
+
+| Variable | Target | Measured |
+|---|---|---|
+| `BLAKE3_KAT` | official vectors | 35/35 official lengths (0..102 400) pass — clean-room `drm_types::blake3`/`blake3_128`, zero-dep (`2b2634e`); `schema_hash` pinned to BLAKE3-128 (REQ-TOOL-023) |
+| `DESCRIPTOR_BYTE_EXACT` | golden byte-table match (I-M1) | `tests/fixtures/golden/descriptor/descriptor_golden.json` field table + zero-padding sweep + write/read symmetry; runtime offset asserts incl. CCB atomic alignment I-M5 (`3f4b1b3`) |
+| `ATTACH_SEMANTICS` | I-M6/I-M7 explicit errors | `attach_init_refused` (Zero/Init → NotReady, nothing else interpreted); `attach_layout_matrix` 16 tamper cases (hash/handle/name → InvalidData; layout/capacity/reserved → WrongAbi; depth/pool/count/variable-bound/range-order/alignment/pool-overflow → InvalidConfig); compare-once `attach_once` 1e6 view reads |
+| `PUBLISH_ORDERING` | release/acquire smoke (REQ-CORE-051) | 2-thread smoke: 10k samples, observed seq ⇒ payload visibility (no-reuse slots); epoch-word pairing gate |
+| `MODEL_NODES` | publish/consume sets + negatives | 6 tests — parse, unknown-topic (node named), duplicate node (both stems), closed manifest surface, multi-publisher query (`conflicting_publishers`, model builds — I-D12) (`973714a`) |
+| `FINGERPRINT_ISOLATION` | I-D4 | serialization pinned by test (domain tag/format/ABI/count/direction/len/path/schema+layout hash), isolation (unrelated edit ⇒ unchanged), direction + layout participation, determinism, empty-node header (`973714a`) |
+| `MODEL_ROUNDTRIP` | ≥ 5 000 (I-D5) | 5 000 generated trees: model → reconstructed tree → identical model + render; per-case shuffled-order determinism (`973714a`) |
+| `ROUTE_CONFIG_PARSE` | fixtures green | 9 tests — links/bandwidth/overrides, malformed/missing/bad-type/unknown-key/empty-name rejection, rate-unit matrix (`868d610`) |
+| `ROUTE_TABLE` | handle-keyed (REQ-ROUTE-043) | insert/lookup by u32 handle; strings excluded from the data path |
+| `CRC32C_KAT` | known-answer vectors | 6 official vectors + streaming≡one-shot across split patterns (constants cross-verified against a second implementation; 3 supplied values corrected) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Doc gaps found (report-only): router-core.md has no TOML surface (field names derived from architecture.md); export_limit placement derived; serial-mcu draft added as clearly-marked section.
