@@ -274,7 +274,7 @@ Required checks: all `ci.yml` jobs. `audit.yml` runs nightly and on release; fai
 - Terminal gate: 100% REQ → implementation → test → passing result by Phase 34.
 
 ### 6.3 Decision Records
-- `docs/adr/NNNN-<slug>.md` records any decision altering structure, layering, public API, or toolchain.
+- `docs/adr/NNNN-<slug>.md` records any decision altering structure, layering, public API, or toolchain. Format: MADR 4.0.0 (`docs/standards.md`).
 - Accepted ADRs are immutable; supersession creates a new record.
 - ADRs capture rationale and context only; the architecture docs remain normative and win conflicts.
 

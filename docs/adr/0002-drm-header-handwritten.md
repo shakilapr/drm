@@ -1,36 +1,44 @@
 # ADR-0002: drm.h is handwritten; cbindgen rejected
 
-- **Status**: accepted
-- **Date**: 2026-09-29
-- **Deciders**: E4 (bindings), E1 (runtime)
+## Status
 
-## Context
+`accepted`
+Date: 2026-09-29 · Deciders: E4 (bindings), E1 (runtime)
 
-The C ABI (`bindings/c/include/drm/drm.h`) needs a stable, hand-reviewable header that is
-the single source of truth for `drm-ffi` exports (codebase.md 3.3, c-abi-surface.md).
-Generated headers risk drift between the Rust implementation and the published ABI, and
-Rust->C generation cannot express the fixed `int32_t` status vocabulary, `_Static_assert`s,
-or the C11 freestanding subset the MCU targets require.
+## Context and Problem Statement
 
-## Alternatives
+The C ABI (`bindings/c/include/drm/drm.h`) needs a stable, hand-reviewable header that is the single source of truth for `drm-ffi` exports (codebase.md 3.3, c-abi-surface.md). Generated headers risk drift between the Rust implementation and the published ABI, and Rust→C generation cannot express the fixed `int32_t` status vocabulary, `_Static_assert`s, or the C11 freestanding subset the MCU targets require.
 
-1. **cbindgen-generated header** — automatic sync with Rust; rejected: source of truth
-   inverts (Rust defines ABI), cannot emit `_Static_assert`, opaque-type discipline, or the
-   explicit-value status block without hand-maintained annotations; regeneration churn on
-   unrelated edits; clean-room constraint on review.
-2. **Handwritten header + conformance tests** — chosen.
-3. **Doxygen-annotated C header parsed by custom tooling** — over-engineering for a
-   surface that is intentionally small and append-only.
+## Decision Drivers
 
-## Decision
+- Header must be the single source of truth for the ABI.
+- MCU freestanding subset must stay enforceable by inspection.
+- Status vocabulary and static asserts must be expressible exactly.
 
-`drm.h` is handwritten and normative (status: single source of truth). `drm-ffi` exports
-must match it 1:1; `bindings/c/tests/` enforces ABI conformance (layout golden vectors,
-`status_map`, static asserts). Header changes require ADR-grade review; the header is
-never generated.
+## Considered Options
 
-## Consequences
+- **cbindgen-generated header** — rejected: source of truth inverts (Rust defines ABI); cannot emit `_Static_assert`, opaque-type discipline, or the explicit-value status block without hand-maintained annotations; regeneration churn; clean-room constraint on review.
+- **Handwritten header + conformance tests** — chosen.
+- **Doxygen-annotated header parsed by custom tooling** — rejected: over-engineering for a deliberately small, append-only surface.
 
-- Hand sync between `drm.h` and `drm-ffi` — mitigated by conformance tests + semver-checks.
+## Decision Outcome
+
+Chosen: `drm.h` is handwritten and normative (single source of truth). `drm-ffi` exports must match it 1:1; `bindings/c/tests/` enforces ABI conformance (layout golden vectors, `status_map`, static asserts). Header changes require ADR-grade review; the header is never generated.
+
+### Positive Consequences
+
 - MCU freestanding subset stays enforceable by inspection.
 - `DRM_ABI_VERSION` remains a deliberate, reviewable constant.
+
+### Negative Consequences
+
+- Hand sync between `drm.h` and `drm-ffi` — mitigated by conformance tests and semver checks.
+
+## Confirmation
+
+`bindings/c/tests/` (layout golden vectors, `status_map`, static asserts) — existing and permanent gate.
+
+## More Information
+
+- Accepted ADRs are immutable; supersession creates a new record (codebase.md 6.3).
+- Normative home: `docs/spec/abi-policy.md`, `docs/algorithms/bindings/c-abi-surface.md`.
