@@ -56,6 +56,7 @@ fn fixture_tree() -> TreeInput {
                 ],
             },
         ],
+        nodes: Vec::new(),
     }
 }
 
@@ -146,7 +147,10 @@ fn model_conflicts() {
                 drm_workspace::model::ModelError::Parse { topic, .. } => {
                     assert_eq!(topic, "delta/broken");
                 }
-                other @ drm_workspace::model::ModelError::DuplicateTopic { .. } => {
+                other @ (drm_workspace::model::ModelError::DuplicateTopic { .. }
+                | drm_workspace::model::ModelError::DuplicateNode { .. }
+                | drm_workspace::model::ModelError::NodeManifest { .. }
+                | drm_workspace::model::ModelError::UnknownTopic { .. }) => {
                     unreachable!("expected Parse, got {other:?}")
                 }
             }
