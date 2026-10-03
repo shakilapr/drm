@@ -132,9 +132,32 @@ impl Status {
     }
 }
 
+/// Lapped-reader outcome (cursor-delivery.md §Data Structures): exactly
+/// `missed` sequences aged out between the cursor's `last_read` and the
+/// oldest retained sequence (I-C2 `GapExact`); the cursor resumes at the
+/// oldest retained sample afterwards (I-R/I-C4). At least one sequence is
+/// always missing — a fully caught-up reader observes `Status::NoSample`,
+/// never a zero-missed gap.
+/// REQ: REQ-CORE-028, REQ-CORE-029.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Gap {
+    /// Exact count of sequences aged out since the cursor's last read.
+    pub missed: u64,
+}
+
+/// One-to-one status mapping: the gap outcome is signalled through the fixed
+/// `int32_t` result channel as `Status::Gap` (the `missed` count travels
+/// alongside the status in the outcome struct).
+/// REQ: REQ-BIND-007, REQ-CORE-028.
+impl From<Gap> for Status {
+    fn from(_: Gap) -> Self {
+        Self::Gap
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Status;
+    use super::{Gap, Status};
 
     /// REQ: REQ-BIND-007 — every variant has exactly one explicit code value.
     #[test]
@@ -183,5 +206,16 @@ mod tests {
         }
         assert!(Status::from_code(1).is_none());
         assert!(Status::from_code(-22).is_none());
+    }
+
+    /// REQ: REQ-BIND-007, REQ-CORE-028 — the gap outcome maps 1:1 onto
+    /// `Status::Gap` regardless of the missed count.
+    #[test]
+    fn gap_maps_to_status_gap() {
+        for missed in [1, 2, 32, u64::MAX - 1] {
+            let gap = Gap { missed };
+            assert_eq!(Status::from(gap), Status::Gap);
+            assert_eq!(Status::from(gap).code(), -6);
+        }
     }
 }

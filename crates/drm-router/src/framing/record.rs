@@ -53,7 +53,7 @@ pub fn decode_record(src: &[u8], pos: usize) -> Result<(&[u8], usize), Status> {
     let plen = u32::from_le_bytes(
         src[pos..pos + RECORD_PREFIX]
             .try_into()
-            .map_err(|_| unreachable!("sliced with bound check"))?,
+            .unwrap_or_else(|_| unreachable!("sliced with bound check")),
     );
     let body_len = usize::try_from(plen).map_err(|_| Status::InvalidData)?;
     let end = pos

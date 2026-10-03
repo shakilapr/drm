@@ -94,22 +94,22 @@ impl WireHeader {
             wire_channel_id: u32::from_le_bytes(
                 buf[4..8]
                     .try_into()
-                    .map_err(|_| unreachable!("sliced with bound check"))?,
+                    .unwrap_or_else(|_| unreachable!("sliced with bound check")),
             ),
             stream_epoch: u64::from_le_bytes(
                 buf[8..16]
                     .try_into()
-                    .map_err(|_| unreachable!("sliced with bound check"))?,
+                    .unwrap_or_else(|_| unreachable!("sliced with bound check")),
             ),
             source_seq: u64::from_le_bytes(
                 buf[16..24]
                     .try_into()
-                    .map_err(|_| unreachable!("sliced with bound check"))?,
+                    .unwrap_or_else(|_| unreachable!("sliced with bound check")),
             ),
             payload_len: u32::from_le_bytes(
                 buf[24..28]
                     .try_into()
-                    .map_err(|_| unreachable!("sliced with bound check"))?,
+                    .unwrap_or_else(|_| unreachable!("sliced with bound check")),
             ),
         })
     }
