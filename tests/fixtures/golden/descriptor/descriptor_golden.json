@@ -1,0 +1,30 @@
+{
+  "schema": "channel-metadata.md I-M1 descriptor golden",
+  "note": "Field table for a canonical ChannelDescriptor image. Offsets are bytes from the descriptor start; padding fields must be zero. Values chosen for the descriptor_golden test.",
+  "descriptor_size": 152,
+  "align": 8,
+  "fields": [
+    { "name": "flags", "offset": 0, "size": 4, "hex": "01000000" },
+    { "name": "pad_header", "offset": 4, "size": 4, "hex": "00000000" },
+    { "name": "schema_hash", "offset": 8, "size": 16, "hex": "000102030405060708090a0b0c0d0e0f" },
+    { "name": "layout_hash", "offset": 24, "size": 16, "hex": "101112131415161718191a1b1c1d1e1f" },
+    { "name": "topic_handle", "offset": 40, "size": 4, "hex": "07000000" },
+    { "name": "topic_name_len", "offset": 44, "size": 2, "hex": "0a00" },
+    { "name": "overflow_policy", "offset": 46, "size": 1, "hex": "01" },
+    { "name": "pad0", "offset": 47, "size": 1, "hex": "00" },
+    { "name": "payload_capacity", "offset": 48, "size": 8, "hex": "4000000000000000" },
+    { "name": "history_depth", "offset": 56, "size": 8, "hex": "0400000000000000" },
+    { "name": "pool_size", "offset": 64, "size": 8, "hex": "0800000000000000" },
+    { "name": "consumer_count", "offset": 72, "size": 4, "hex": "03000000" },
+    { "name": "required_count", "offset": 76, "size": 4, "hex": "01000000" },
+    { "name": "diagnostic_count", "offset": 80, "size": 4, "hex": "01000000" },
+    { "name": "pad_counts", "offset": 84, "size": 4, "hex": "00000000" },
+    { "name": "ccb_offset", "offset": 88, "size": 8, "hex": "b800000000000000" },
+    { "name": "ring_offset", "offset": 96, "size": 8, "hex": "f800000000000000" },
+    { "name": "consumer_offset", "offset": 104, "size": 8, "hex": "0801000000000000" },
+    { "name": "slot_generation_offset", "offset": 112, "size": 8, "hex": "2001000000000000" },
+    { "name": "payload_offset", "offset": 120, "size": 8, "hex": "3001000000000000" },
+    { "name": "segment_size", "offset": 128, "size": 8, "hex": "3003000000000000" },
+    { "name": "reserved", "offset": 136, "size": 16, "hex": "00000000000000000000000000000000" }
+  ]
+}
