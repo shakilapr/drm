@@ -70,6 +70,7 @@ fn model_attrs_through_build() {
             ],
         }],
         nodes: Vec::new(),
+        topology: None,
     };
     let m = fixture(build(&tree), "build");
     let bounded = &m.topics["pkg/bounded"];

@@ -1,7 +1,8 @@
 //! `WorkspaceModel` construction — start slice (work-plan M02W1-E2-T3): topics
-//! parse→model, sorted discovery, error collection. Structural integrity only;
-//! policy checks belong to `drm verify` (REQ-TOOL-070). Total-reload build
-//! ([workspace-model.md](../../docs/algorithms/toolchain/workspace-model.md)):
+//! parse→model, sorted discovery, error collection; node manifests and the
+//! topology manifest follow (M02W3-E2-T2, M02W4-E2-T2). Structural integrity
+//! only; policy checks belong to `drm verify` (REQ-TOOL-070). Total-reload
+//! build ([workspace-model.md](../../docs/algorithms/toolchain/workspace-model.md)):
 //! every parse rebuilds the full model; no incremental caches.
 //! REQ: REQ-TOOL-045, REQ-TOOL-047, REQ-TOOL-013.
 
@@ -15,12 +16,14 @@ use crate::parser::{self, TopicFile};
 pub mod fingerprint;
 pub mod handles;
 pub mod nodes;
+pub mod topology;
 
 pub use fingerprint::{
     ContractFingerprint, FINGERPRINT_FORMAT_VERSION, conflicting_publishers, contract_fingerprint,
     layout_hash,
 };
 pub use nodes::{NodeManifest, parse_node_manifest};
+pub use topology::{ComputeEntry, LinkEntry, TopologyManifest, parse_topology_manifest};
 
 /// Canonical topic path: `package/stem`, lowercase ASCII (REQ-TOOL-056).
 pub type TopicName = String;
@@ -94,6 +97,16 @@ pub struct WorkspaceModel {
     pub packages: BTreeMap<PackageName, PackageMeta>,
     /// Node identity → interfaces.
     pub nodes: BTreeMap<NodeName, NodeEntry>,
+    /// Compute vertices: name → identity (placement targets). A map, not a
+    /// set, so per-compute data can be added without changing the type; the
+    /// value is zero-sized for now.
+    #[allow(clippy::zero_sized_map_values)]
+    pub computes: BTreeMap<String, ComputeEntry>,
+    /// Undirected compute↔compute links, sorted by id after build (I-D1);
+    /// `Vec` because duplicate ids are reported, not keyed (I-D2).
+    pub links: Vec<LinkEntry>,
+    /// Node placement: node → compute.
+    pub placement: BTreeMap<String, String>,
 }
 
 /// Build failure with location context. REQ: REQ-TOOL-045.
@@ -139,6 +152,35 @@ pub enum ModelError {
         /// Referenced topic path.
         topic: TopicName,
     },
+    /// Topology manifest failed TOML parsing or surface validation.
+    Topology {
+        /// Defect description with location from the TOML parser.
+        message: String,
+    },
+    /// A link endpoint references a compute that `[computes]` does not declare.
+    UnknownLinkEndpoint {
+        /// Link id.
+        link: String,
+        /// Referenced, undeclared compute name.
+        vertex: String,
+    },
+    /// The same link id is declared twice.
+    DuplicateLink {
+        /// Repeated link id.
+        link: String,
+    },
+    /// A placement names a node that no manifest declares.
+    DanglingPlacement {
+        /// Placed node name.
+        node: NodeName,
+    },
+    /// A placement targets a compute that `[computes]` does not declare.
+    PlacementUnknownCompute {
+        /// Placed node name.
+        node: NodeName,
+        /// Referenced, undeclared compute name.
+        compute: String,
+    },
 }
 
 impl fmt::Display for ModelError {
@@ -165,6 +207,20 @@ impl fmt::Display for ModelError {
             Self::UnknownTopic { node, topic } => {
                 write!(f, "node `{node}` references undefined topic `{topic}`")
             }
+            Self::Topology { message } => write!(f, "topology manifest: {message}"),
+            Self::UnknownLinkEndpoint { link, vertex } => {
+                write!(f, "link `{link}` references undefined compute `{vertex}`")
+            }
+            Self::DuplicateLink { link } => write!(f, "duplicate link `{link}`"),
+            Self::DanglingPlacement { node } => {
+                write!(f, "placement references undefined node `{node}`")
+            }
+            Self::PlacementUnknownCompute { node, compute } => {
+                write!(
+                    f,
+                    "placement of node `{node}` references undefined compute `{compute}`"
+                )
+            }
         }
     }
 }
@@ -187,6 +243,8 @@ pub struct TreeInput {
     pub packages: Vec<PackageInput>,
     /// `(file stem, TOML manifest bytes)` pairs; order carries no meaning.
     pub nodes: Vec<(String, Vec<u8>)>,
+    /// Topology manifest TOML bytes; `None` ⇒ no computes/links/placement.
+    pub topology: Option<Vec<u8>>,
 }
 
 /// Total-reload build: parse every topic file, collect every failure (I-D2),
@@ -265,6 +323,7 @@ pub fn build(tree: &TreeInput) -> Result<WorkspaceModel, Vec<ModelError>> {
     // unique (I-D2); references checked against the parsed topics.
     // Structural integrity only — policy checks stay in `drm verify` (I-D12).
     build_nodes(&tree.nodes, &mut model, &mut errs);
+    build_topology(tree, &mut model, &mut errs);
 
     if errs.is_empty() {
         Ok(model)
@@ -324,9 +383,63 @@ fn build_nodes(
     }
 }
 
+/// Parses the optional topology manifest into the model: computes, links
+/// (sorted by id), placement; every referential defect is collected with the
+/// other build defects (I-D2), structural integrity only (I-D12).
+/// REQ: REQ-TOOL-047, REQ-TOOL-070.
+fn build_topology(tree: &TreeInput, model: &mut WorkspaceModel, errs: &mut Vec<ModelError>) {
+    let Some(src) = tree.topology.as_deref() else {
+        return;
+    };
+    let manifest = match topology::parse_topology_manifest(src) {
+        Ok(manifest) => manifest,
+        Err(message) => {
+            errs.push(ModelError::Topology { message });
+            return;
+        }
+    };
+    for name in &manifest.computes {
+        model.computes.insert(name.clone(), ComputeEntry);
+    }
+    let mut links = manifest.links;
+    links.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for link in &links {
+        for vertex in [&link.a, &link.b] {
+            if !manifest.computes.contains(vertex) {
+                errs.push(ModelError::UnknownLinkEndpoint {
+                    link: link.id.clone(),
+                    vertex: vertex.clone(),
+                });
+            }
+        }
+        if !seen.insert(link.id.as_str()) {
+            errs.push(ModelError::DuplicateLink {
+                link: link.id.clone(),
+            });
+        }
+    }
+    for (node, compute) in &manifest.placement {
+        if !model.nodes.contains_key(node) {
+            errs.push(ModelError::DanglingPlacement { node: node.clone() });
+        }
+        if !manifest.computes.contains(compute) {
+            errs.push(ModelError::PlacementUnknownCompute {
+                node: node.clone(),
+                compute: compute.clone(),
+            });
+        }
+    }
+    if errs.is_empty() {
+        model.links = links;
+        model.placement = manifest.placement;
+    }
+}
+
 /// Deterministic model render (I-D1): packages in sorted order, per-package
-/// topics sorted, schema hash + canonical schema render per topic. The exact
-/// format is internal; the contract is that identical trees render to
+/// topics sorted, schema hash + canonical schema render per topic, nodes in
+/// sorted order, computes/links/placement sorted after the node sections. The
+/// exact format is internal; the contract is that identical trees render to
 /// byte-identical text under any input order. REQ: REQ-TOOL-045.
 #[must_use]
 pub fn render_model(m: &WorkspaceModel) -> String {
@@ -368,6 +481,27 @@ pub fn render_model(m: &WorkspaceModel) -> String {
         }
         out.push('\n');
         out.push_str("end\n");
+    }
+    for name in m.computes.keys() {
+        out.push_str("compute ");
+        out.push_str(name);
+        out.push('\n');
+    }
+    for link in &m.links {
+        out.push_str("link ");
+        out.push_str(&link.id);
+        out.push(' ');
+        out.push_str(&link.a);
+        out.push(' ');
+        out.push_str(&link.b);
+        out.push('\n');
+    }
+    for (node, compute) in &m.placement {
+        out.push_str("place ");
+        out.push_str(node);
+        out.push(' ');
+        out.push_str(compute);
+        out.push('\n');
     }
     out
 }

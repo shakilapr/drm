@@ -57,6 +57,7 @@ fn fixture_tree() -> TreeInput {
             },
         ],
         nodes: Vec::new(),
+        topology: None,
     }
 }
 
@@ -150,7 +151,12 @@ fn model_conflicts() {
                 other @ (drm_workspace::model::ModelError::DuplicateTopic { .. }
                 | drm_workspace::model::ModelError::DuplicateNode { .. }
                 | drm_workspace::model::ModelError::NodeManifest { .. }
-                | drm_workspace::model::ModelError::UnknownTopic { .. }) => {
+                | drm_workspace::model::ModelError::UnknownTopic { .. }
+                | drm_workspace::model::ModelError::Topology { .. }
+                | drm_workspace::model::ModelError::UnknownLinkEndpoint { .. }
+                | drm_workspace::model::ModelError::DuplicateLink { .. }
+                | drm_workspace::model::ModelError::DanglingPlacement { .. }
+                | drm_workspace::model::ModelError::PlacementUnknownCompute { .. }) => {
                     unreachable!("expected Parse, got {other:?}")
                 }
             }

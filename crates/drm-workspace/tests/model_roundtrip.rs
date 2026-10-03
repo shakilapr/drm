@@ -82,8 +82,10 @@ fn gen_tree(rng: &mut Rng) -> TreeInput {
     }
     let n_nodes = rng.below(5);
     let mut nodes = Vec::new();
+    let mut node_names: Vec<String> = Vec::new();
     for n in 0..n_nodes {
         let name = format!("n{n}");
+        node_names.push(name.clone());
         let mut publishes = Vec::new();
         let mut consumes = Vec::new();
         if !all_topics.is_empty() && rng.next().is_multiple_of(2) {
@@ -107,7 +109,77 @@ fn gen_tree(rng: &mut Rng) -> TreeInput {
         );
         nodes.push((name, manifest.into_bytes()));
     }
-    TreeInput { packages, nodes }
+    let topology = if rng.next().is_multiple_of(4) {
+        None
+    } else {
+        Some(gen_topology(rng, &node_names).into_bytes())
+    };
+    TreeInput {
+        packages,
+        nodes,
+        topology,
+    }
+}
+
+/// Generates a valid topology manifest: 1–3 computes, links over distinct
+/// compute pairs, and placement of a random subset of the given nodes.
+fn gen_topology(rng: &mut Rng, node_names: &[String]) -> String {
+    let mut src = String::new();
+    src.push_str("[computes]\n");
+    let n_computes = rng.pick_index(3) + 1;
+    let computes: Vec<String> = (0..n_computes).map(|c| format!("c{c}")).collect();
+    for c in &computes {
+        let _ = writeln!(src, "{c} = true");
+    }
+    let mut link_id = 0;
+    for a in 0..n_computes {
+        for b in (a + 1)..n_computes {
+            if rng.next().is_multiple_of(2) {
+                let _ = writeln!(
+                    src,
+                    "\n[[links]]\nid = \"l{link_id}\"\na = \"{}\"\nb = \"{}\"",
+                    computes[a], computes[b]
+                );
+                link_id += 1;
+            }
+        }
+    }
+    let mut placed = false;
+    for name in node_names {
+        if rng.next().is_multiple_of(2) {
+            if !placed {
+                src.push_str("\n[placement]\n");
+                placed = true;
+            }
+            let c = &computes[rng.pick_index(n_computes)];
+            let _ = writeln!(src, "{name} = \"{c}\"");
+        }
+    }
+    src
+}
+
+/// Reconstructs the topology manifest from the model (same closed surface as
+/// the generator; `computes` → `true`, links in sorted order, placement).
+fn reconstruct_topology(m: &WorkspaceModel) -> String {
+    let mut src = String::new();
+    src.push_str("[computes]\n");
+    for name in m.computes.keys() {
+        let _ = writeln!(src, "{name} = true");
+    }
+    for link in &m.links {
+        let _ = writeln!(
+            src,
+            "\n[[links]]\nid = \"{}\"\na = \"{}\"\nb = \"{}\"",
+            link.id, link.a, link.b
+        );
+    }
+    if !m.placement.is_empty() {
+        src.push_str("\n[placement]\n");
+        for (node, compute) in &m.placement {
+            let _ = writeln!(src, "{node} = \"{compute}\"");
+        }
+    }
+    src
 }
 
 /// REQ: REQ-TOOL-045 — model → equivalent tree → identical model render and
@@ -161,7 +233,16 @@ fn model_roundtrip_5000() {
                 )
             })
             .collect();
-        let tree2 = TreeInput { packages, nodes };
+        let topology = if m1.computes.is_empty() && m1.links.is_empty() && m1.placement.is_empty() {
+            None
+        } else {
+            Some(reconstruct_topology(&m1).into_bytes())
+        };
+        let tree2 = TreeInput {
+            packages,
+            nodes,
+            topology,
+        };
 
         let m2 = fixture(build(&tree2), "m2");
         assert_eq!(
@@ -179,6 +260,7 @@ fn model_roundtrip_5000() {
         let tree3 = TreeInput {
             packages: reversed,
             nodes: rnodes,
+            topology: tree.topology.clone(),
         };
         let m3 = fixture(build(&tree3), "m3");
         assert_eq!(render_model(&m3), rendered, "case {case}: order leaked");

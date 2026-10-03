@@ -55,6 +55,7 @@ fn tree_with(nodes: &[(&str, String)]) -> TreeInput {
             .iter()
             .map(|(stem, src)| ((*stem).to_string(), src.clone().into_bytes()))
             .collect(),
+        topology: None,
     }
 }
 

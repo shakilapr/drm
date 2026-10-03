@@ -55,6 +55,7 @@ fn tree(nodes: &[NodeSpec<'_>], front: Option<&str>, telemetry: Option<&str>) ->
                 ((*stem).to_string(), s.into_bytes())
             })
             .collect(),
+        topology: None,
     }
 }
 
