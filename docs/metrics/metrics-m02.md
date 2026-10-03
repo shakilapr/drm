@@ -22,3 +22,17 @@ cannot execute them). REQ: REQ-QAL-007, REQ-TOOL-001.
 | `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
 
 Carry-forward (M02W2): fork/flock lock matrix, precommit_mlock matrix, name_conformance generator, active_hold_lifecycle; force/prefer selection semantics; model nodes+placement parse; ws determinism×100 → CI.
+
+## M02W2 — Handles, Layout Crosscheck, Framing
+
+| Variable | Target | Measured |
+|---|---|---|
+| `LAYOUT_CROSSCHECK` | 0 mismatches (I6, permanent) | 10/10 fixtures — `emit_layout_json` regen gate (`layout_emit_stable`) + runtime re-derivation/write/validate/short-buffer probes (`fc7f279`); wired into `xtask test` |
+| `HANDLE_STABILITY` | I-H1/I-H2/I-H3 | 7 tests — determinism ×100, fresh-deterministic sorted allocation, add-no-renumber, delete/readd tombstones (no silent reuse), exhaustion typed error incl. last-slot saturation, compact_repack (`db6fcd4`) |
+| `FRAMING_PROPERTY_CASES` | ≥ 20 000 | 20 000 × 3 properties (record roundtrip+truncation matrix, multiplex identity+bound, total-decode no-panic) |
+| `FRAMING_FIXTURES` | record + mux | 4 tests — roundtrip incl. 4 KiB, every-truncation rejection, stream cursor, exact-fit/one-over bound (`a6599bb`) |
+| `FUZZ_FRAMING` | PR smoke | `tests/fuzz/fuzz_targets/framing.rs` (record ×4 positions + mux; decoded-subslice invariant), CI nightly |
+| `MODEL_ATTRS` | corpus-level | 4 tests — all keys normalize, latest/overwrite, absent defaults, attrs through build (`0778d0d`) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Carry-forward (M02W3): reconcile (`drm ids reconcile`), CCB v0 struct, zero-alloc struct-path assertion, status-map both-directions gate, nodes+placement parse, force/prefer selection.
