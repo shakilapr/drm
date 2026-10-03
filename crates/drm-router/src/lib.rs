@@ -6,9 +6,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod config;
 pub mod crc32c;
 pub mod framing;
 pub mod mtu;
+pub mod routes;
 pub mod shaping;
 pub mod wire;
 

@@ -120,3 +120,31 @@ Decision lands with Phase 32; until then COBS is the provisionally binding choic
 | `mcu_host_interop` (cross-decode matrix) | I-SR6 |
 | `serial_blocking_estimate` (verify report vs declared deadlines) | I-SR7 |
 | MCU steady-state suite on target | loop/stack bounds and allocation barriers pass |
+
+## Draft: frame limits, CRC, escape options (M02W3-E3-T3)
+
+Draft for Phase 32 confirmation. Alters neither the COBS selection nor I-SR1–I-SR7 above; bounds below derive from the declared `max_frame_bytes` (I-SR2) and never split a sample (I-SR1).
+
+### Frame limits per MTU class
+
+`max_frame_bytes` is the decoded frame bound per serial link; classes below are recommended presets (deployments may declare any value; verify gates the blocking bound against deadlines, I-SR7). `max_payload = max_frame_bytes − 28 − (4 if e2e CRC)`; `max_wire = max_frame_bytes + ceil(max_frame_bytes/254) + 1` (COBS overhead, I-SR2).
+
+| Class | `max_frame_bytes` | max payload (no e2e CRC) | max payload (e2e CRC) | max wire bytes |
+|---|---|---|---|---|
+| `serial-64` | 64 | 36 | 32 | 66 |
+| `serial-256` | 256 | 228 | 224 | 259 |
+| `serial-1400` | 1400 | 1372 | 1368 | 1407 |
+| `serial-4096` | 4096 | 4068 | 4064 | 4114 |
+
+### CRC32C trailer binding
+
+| Trailer | Covered bytes | Checked by |
+|---|---|---|
+| Serial CRC32C | decoded bytes preceding it: 28-byte `WireHeader` + payload + optional e2e trailer (I-SR3) | every host and MCU decoder, at every hop |
+| e2e CRC32C (flag bit 0) | `{stream_epoch, source_seq, payload_len, payload}` (I-RT12) | final router / consumer profile |
+
+The serial CRC covers the e2e trailer when present. A transit remap of `wire_channel_id` re-computes the serial CRC at that hop and preserves the e2e trailer and its covered fields (I-RT12).
+
+### Escape/stuffing options
+
+Unchanged: COBS remains selected per the decision table above (criteria 1–4; `0x00` delimiter resync, I-SR4). PPP/SLIP/HDLC stay rejected. Re-opening requires a new ADR against the same criteria.
