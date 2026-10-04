@@ -37,3 +37,18 @@ patterned-payload integrity scheme (`drm-core::channel::pattern`) +
 permanent fault-injection (`pattern_corruption`); structured stress harness +
 `tests/stress/README.md` runbook. Verify hook R≥1 covered by schema parser
 (`Depth(0)` rejected at parse).
+
+## M03W3 — Phase 9 Gate, Rings Complete, Priority Skeleton
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 9)` | PASS | PASS — `docs/gates/phase-09.md`: 3 × 10⁹ publish/read cycles, 0 torn / 0 mixed-gen / 0 invalid / 0 monotonic violations, fault injection exact-class |
+| `RING_DEPTHS_GREEN` | R ∈ 1..=64 exhaustive; sampled 65..4096 | `retention_depths_1_to_64` + `ring_depths_property` 65/100/333/1000/4096; nightly `stress_ring_depth_sweep` pseudo-random 65..8192 |
+| `RETENTION_EXACT` | exactly R addressable (I1) | `retention_exact`, `retention_depths_1_to_64`, `ring_depths_property`, `wraparound` |
+| `PRIORITY_ORDER` | class order exact in queue tests | `drm-router::priority`: `priority_order` (safety→control→status→diagnostics, FIFO within class), `priority_fifo_and_empty` incl. static-cap `QueueFull` |
+| `CURSOR_STRUCT` | `ReaderState`/`ReadOutcome` + empty-channel tests | `drm-core::channel` cursor state/outcome (empty path in round-trip/retention suites); full `next`/`latest` bodies track cursor-delivery |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `docs/gates/phase-09.md`; `drm-router::priority` pre-stream
+class queues (seed, DRR Phase 30); bounded drop-newest UDP receive path
+(`RecvQueue`, `udp_backpressure`); ring nightly property sweep.
