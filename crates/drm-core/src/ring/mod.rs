@@ -315,7 +315,7 @@ impl RingCell {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelControlBlock, HistoryRing, LookupErr, RingEntry};
+    use super::{ChannelControlBlock, HistoryRing, LookupErr, RingCell, RingEntry};
     use std::sync::atomic::Ordering;
 
     fn ccb() -> ChannelControlBlock {
@@ -404,6 +404,111 @@ mod tests {
             Err(drm_types::Status::SequenceExhausted)
         );
         assert!(ChannelControlBlock::check_sequence_free(0).is_ok());
+    }
+
+    /// REQ: REQ-CORE-066 — every depth 1..=64 retains exactly R addressable
+    /// sequences ending at the newest commit (I1).
+    #[test]
+    fn retention_depths_1_to_64() {
+        for r in 1..=64u64 {
+            let ring = assert_ok(HistoryRing::new(r));
+            let c = ccb();
+            let ws = r * 2 + 1;
+            for s in 0..ws {
+                let stable = assert_preflight(&ring, s);
+                ring.commit(s, u32::try_from(s % r).unwrap_or(0), s, stable);
+                c.write_seq.store(s + 1, Ordering::Release);
+            }
+            for target in 0..ws {
+                let ok = target + r > ws - 1;
+                assert_eq!(ring.lookup(&c, target).is_ok(), ok, "r={r} target={target}");
+            }
+        }
+    }
+
+    /// REQ: REQ-CORE-064 — fixed-width naturally aligned cells, no aggregate
+    /// atomic; lock-free probe passes (I6).
+    #[test]
+    fn ring_layout_golden() {
+        use std::mem::{align_of, offset_of, size_of};
+        assert_eq!(align_of::<super::RingBank>(), 8);
+        assert_eq!(size_of::<super::RingBank>(), 32);
+        assert_eq!(offset_of!(super::RingBank, stamp), 0);
+        assert_eq!(offset_of!(super::RingBank, sequence), 8);
+        assert_eq!(offset_of!(super::RingBank, generation), 16);
+        assert_eq!(offset_of!(super::RingBank, slot), 24);
+        assert_eq!(size_of::<RingCell>(), 64);
+        assert_eq!(align_of::<RingCell>(), 8);
+        assert!(HistoryRing::atomics_lock_free());
+    }
+
+    /// REQ: REQ-CORE-065 — an interleaving of commits into the same cell never
+    /// yields a mixed field tuple; aged re-lapped sequences are `AgedOut` (I3).
+    #[test]
+    fn ring_entry_coherence() {
+        let ring = assert_ok(HistoryRing::new(4));
+        let c = ccb();
+        for s in [0_u64, 4, 8] {
+            let stable = assert_preflight(&ring, s);
+            ring.commit(s, (s % 4) as u32, s, stable);
+            c.write_seq.store(s + 1, Ordering::Release);
+        }
+        assert_eq!(ring.lookup(&c, 0), Err(LookupErr::AgedOut));
+        assert_eq!(ring.lookup(&c, 4), Err(LookupErr::AgedOut));
+        let e = ring
+            .lookup(&c, 8)
+            .unwrap_or_else(|err| unreachable!("{err:?}"));
+        assert_eq!(
+            e,
+            RingEntry {
+                sequence: 8,
+                slot: 0,
+                generation: 8,
+            }
+        );
+        // A never-committed slot in the retained window is not fabricated.
+        assert_eq!(ring.lookup(&c, 5), Err(LookupErr::AgedOut));
+    }
+
+    /// REQ: REQ-CORE-065 — release ordering: a reader that observes
+    /// `write_seq = s + 1` finds entry `s` committed and coherent (I4).
+    #[test]
+    fn ring_release_order() {
+        use std::sync::Arc;
+        const N: u64 = 200_000;
+        let ring = Arc::new(assert_ok(HistoryRing::new(8)));
+        let ccb = Arc::new(ccb());
+        let writer = {
+            let ring = Arc::clone(&ring);
+            let ccb = Arc::clone(&ccb);
+            std::thread::spawn(move || {
+                for s in 0..N {
+                    let Ok(stable) = ring.preflight_commit(s) else {
+                        continue;
+                    };
+                    ring.commit(s, (s % 8) as u32, s, stable);
+                    ccb.write_seq.store(s + 1, Ordering::Release);
+                }
+            })
+        };
+        let mut observed: u64 = 0;
+        while observed < N {
+            let ws = ccb.write_seq.load(Ordering::Acquire);
+            if ws == 0 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let s = ws - 1;
+            if let Ok(e) = ring.lookup(&ccb, s) {
+                assert_eq!(e.sequence, s, "entry sequence");
+                assert_eq!(e.generation, s, "entry generation");
+                assert_eq!(e.slot, (s % 8) as u32, "entry slot");
+                observed = ws;
+            } else {
+                std::hint::spin_loop();
+            }
+        }
+        writer.join().unwrap_or(());
     }
 
     fn assert_ok(r: Result<HistoryRing, drm_types::Status>) -> HistoryRing {

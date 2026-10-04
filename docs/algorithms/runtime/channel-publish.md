@@ -172,3 +172,27 @@ in-progress loan slot is unreachable until commit, exactly like the copy form's 
 | `publish_error_precedence` | table order is stable, identical for copy and loan |
 | `publish_counter_exhaustion` | no wrap or payload write |
 | crash injection before/after each step (both forms) | only a stable old or complete new sample is readable |
+
+## Stress Integrity Harness
+
+Billion-cycle and billions-of-cycles stress runs need a cheap, self-describing
+sample check that can classify a bad read without a software CRC (architecture
+§Local Integrity: concurrency safety comes from generation counters and
+acquire/release ordering, not per-sample CRCs).
+
+The harness payload starts with a self-describing pattern:
+`{sequence: u64, slot_echo: u32, generation: u64}` plus repeated
+`(sequence, generation)` probe blocks, and a fill region derived from
+`(sequence, generation)`. A reader validates the pattern against itself:
+
+- probe blocks disagree on `sequence` ⇒ **torn** (partial overwrite across two
+  committed samples);
+- probes agree on `sequence` but disagree on `generation` ⇒ **mixed
+  generation** (stale slot reuse);
+- probes agree but a fill byte does not match its derived value ⇒ **invalid**
+  (single-byte corruption).
+
+Because the pattern is written once per sample and checked per read, the
+detector is exact for the three anomaly classes and needs no CRC over the
+payload. The scheme is diagnostic stress instrumentation, not a data-path
+feature. REQ: REQ-CORE-082, REQ-QAL-006.

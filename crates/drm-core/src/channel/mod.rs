@@ -7,6 +7,7 @@
 pub mod ccb;
 pub mod lifecycle;
 pub mod overflow;
+pub mod pattern;
 pub mod pool;
 
 pub use overflow::OverflowPolicy;
@@ -51,6 +52,13 @@ struct Arena {
 // (single writer), and read through hazard-protected transient views; the
 // UnsafeCell is the shared-mapping mirror.
 unsafe impl Sync for Arena {}
+
+// SAFETY: every field is either an atomic, immutable after activation, or
+// interior-mutable only under the `publish_busy` guard (`scratch`, `arena`
+// bytes). The single-writer guard makes `&Channel` safe to share: multiple
+// reader threads only run the copy/borrow read path, and at most one publisher
+// mutates the guarded state at a time (I-HZ6).
+unsafe impl Sync for Channel {}
 
 /// Consumer cursor: process-local reader position.
 /// REQ: REQ-CORE-011.
