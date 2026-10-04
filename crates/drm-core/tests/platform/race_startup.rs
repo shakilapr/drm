@@ -25,10 +25,13 @@ struct Counters {
 /// REQ: REQ-CORE-072.
 fn child_counters(out: &Output) -> Counters {
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let Some(line) = stdout.lines().find(|l| l.starts_with("COUNTERS ")) else {
+    let Some(line) = stdout
+        .lines()
+        .find_map(|l| l.split_once("COUNTERS ").map(|(_, rest)| rest))
+    else {
         unreachable!("platform suite: child counters");
     };
-    let fields: Vec<u32> = line[9..]
+    let fields: Vec<u32> = line
         .split_whitespace()
         .map(
             |f| match f.split_once('=').and_then(|(_, v)| v.parse::<u32>().ok()) {
@@ -123,7 +126,7 @@ fn race_child() {
         }
     }
     println!(
-        "COUNTERS {} {} {}",
+        "COUNTERS winners={} already={} other={}",
         c.winners, c.already_exists, c.other_errors
     );
     assert_eq!(c.other_errors, 0);
