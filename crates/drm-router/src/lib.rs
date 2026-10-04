@@ -12,6 +12,7 @@ pub mod framing;
 pub mod mtu;
 pub mod routes;
 pub mod shaping;
+pub mod transport;
 pub mod wire;
 
 #[cfg(test)]
