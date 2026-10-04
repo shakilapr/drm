@@ -28,9 +28,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: structured billion-cycle stress (1e8 CI budget)
-        run: cargo test --release -p drm-core --test stress_structured_billions -- --ignored --nocapture | tee stress-structured.log
+        run: |
+          cargo test --release -p drm-core --test stress_structured_billions \
+            -- --ignored --nocapture | tee stress-structured.log
       - name: ring depth sweep (extended property)
-        run: cargo test --release -p drm-core --lib -- --ignored stress --nocapture | tee -a stress-structured.log
+        run: |
+          cargo test --release -p drm-core --lib -- --ignored stress --nocapture \
+            | tee -a stress-structured.log
       - uses: actions/upload-artifact@v4
         with:
           name: stress-structured
