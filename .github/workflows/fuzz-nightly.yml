@@ -19,3 +19,17 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: nightly
         run: cargo fuzz run --fuzz-dir tests/fuzz schema -- -max_total_time=3600 -timeout=5
+
+  stress:
+    runs-on: ubuntu-latest
+    env:
+      DRM_STRESS_CYCLES: "100000000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: structured billion-cycle stress (1e8 CI budget)
+        run: cargo test --release -p drm-core --test stress_structured_billions -- --ignored --nocapture | tee stress-structured.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stress-structured
+          path: stress-structured.log

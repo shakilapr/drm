@@ -19,3 +19,21 @@ plans (work-plan M03W1–W4). Values marked `CI` are verified on runners only
 Deliverables: `docs/spec/metadata-layout.md` (derived spec, Phase 5),
 `docs/gates/phase-05.md`, transport/language conformance cell scaffold
 (`tests/conformance/README.md`).
+
+## M03W2 — Structured Channels: Billions-Cycle Stress, Rings
+
+| Variable | Target | Measured |
+|---|---|---|
+| `BILLIONS_CYCLES_LOCAL` | ≥ 1e9 publish/read; 0 torn / 0 mixed-gen / 0 invalid | 3e9 cycles (1e9 × depths 1/3/16), release build, local Windows: `published=3000000000 dropped=0 torn=0 mixed=0 invalid=0`; `stress_structured_billions.rs` |
+| `MONOTONIC_SEQUENCE` | strictly monotonic per channel | 0 violations across 3e9 (pattern sequence checked every read) |
+| `RING_DEPTH_TESTS` | unit tests depth 1..=64 green | `ring::tests` 10/10 incl. `retention_depths_1_to_64`, `retention_exact`, `wraparound`, `ring_entry_coherence`, `ring_release_order`, `ring_layout_golden` |
+| `UDP_1H_STABILITY` | 1 h continuous loopback, 0 malformed | deferred to CI (long run); adapter round-trip green (`udp_adapter_roundtrip`) |
+| `FAST_PATH_AUDIT` | 0 alloc / 0 syscall on steady loop | alloc 0/0 (`alloc_counter`, `--features test-count-allocs`); syscall `strace` audit Linux-only → deferred |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `TransportAdapter` + `Reliability` v1 + UDP impl
+(`drm-router::transport`, `adapter_capability`, `udp_adapter_roundtrip`);
+patterned-payload integrity scheme (`drm-core::channel::pattern`) +
+permanent fault-injection (`pattern_corruption`); structured stress harness +
+`tests/stress/README.md` runbook. Verify hook R≥1 covered by schema parser
+(`Depth(0)` rejected at parse).
