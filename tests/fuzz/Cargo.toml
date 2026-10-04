@@ -29,5 +29,5 @@ test = false
 doc = false
 bench = false
 
-[package.metadata.cargo-fuzz]
-name = "drm-fuzz"
+[package.metadata]
+cargo-fuzz = true
