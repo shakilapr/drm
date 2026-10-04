@@ -50,6 +50,64 @@ pub trait TransportAdapter {
 /// REQ: REQ-ROUTE-009.
 pub use crate::wire::HEADER_LEN;
 
+use std::collections::VecDeque;
+
+/// Bounded receive queue: overflow drops the newest arrival and counts it,
+/// so a receive thread is never blocked by downstream pressure (I-LS5
+/// best-effort path). REQ: REQ-ROUTE-032.
+#[derive(Debug, Clone)]
+pub struct RecvQueue<T> {
+    items: VecDeque<T>,
+    cap: usize,
+    dropped: u64,
+}
+
+impl<T> RecvQueue<T> {
+    /// Creates a queue with a static capacity (activation-time sizing).
+    #[must_use]
+    pub fn new(cap: usize) -> Self {
+        Self {
+            items: VecDeque::new(),
+            cap,
+            dropped: 0,
+        }
+    }
+
+    /// Pushes at the tail; a full queue drops this newest item and returns
+    /// `false` (the drop is counted). REQ: REQ-ROUTE-032.
+    pub fn push(&mut self, item: T) -> bool {
+        if self.items.len() >= self.cap {
+            self.dropped += 1;
+            return false;
+        }
+        self.items.push_back(item);
+        true
+    }
+
+    /// Pops the oldest queued item.
+    pub fn pop(&mut self) -> Option<T> {
+        self.items.pop_front()
+    }
+
+    /// Items dropped because the queue was full.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    /// Queued items.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Whether the queue holds nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Reliability, TransportAdapter};
@@ -116,5 +174,20 @@ mod tests {
             }
             other => unreachable!("recv: {other:?}"),
         }
+    }
+
+    /// REQ: REQ-ROUTE-032 — a full receive queue drops the newest arrival and
+    /// counts it; queued items keep FIFO order.
+    #[test]
+    fn recv_queue_policy() {
+        let mut q = super::RecvQueue::new(2);
+        assert!(q.push(1));
+        assert!(q.push(2));
+        assert!(!q.push(3), "newest dropped");
+        assert_eq!(q.dropped(), 1);
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.pop(), Some(1));
+        assert_eq!(q.pop(), Some(2));
+        assert!(q.is_empty());
     }
 }

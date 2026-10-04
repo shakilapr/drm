@@ -273,4 +273,50 @@ mod tests {
         over.payload_len = 1401;
         assert_eq!(tx.send_frame(&over, &[0_u8; 1401]), Err(Status::InvalidArg));
     }
+
+    /// REQ: REQ-ROUTE-032 — a bounded receive queue drops the newest arrivals
+    /// under burst (counted), and the receive path never blocks.
+    #[test]
+    fn udp_backpressure() {
+        use crate::transport::{RecvQueue, TransportAdapter};
+        use crate::wire::WireHeader;
+
+        let mut rx =
+            UdpTransport::bind("127.0.0.1:0", 1400).unwrap_or_else(|e| unreachable!("{e:?}"));
+        let dst = rx.local_addr().unwrap_or_else(|e| unreachable!("{e:?}"));
+        let mut tx = UdpTransport::bind_peer("127.0.0.1:0", 1400, dst)
+            .unwrap_or_else(|e| unreachable!("{e:?}"));
+        let header = WireHeader {
+            flags: 0,
+            wire_channel_id: 1,
+            stream_epoch: 1,
+            source_seq: 0,
+            payload_len: 1,
+        };
+        for i in 0..5_u8 {
+            let mut h = header;
+            h.source_seq = u64::from(i);
+            assert_eq!(tx.send_frame(&h, &[i]), Ok(()));
+        }
+
+        let mut q = RecvQueue::new(3);
+        let mut buf = [0_u8; 64];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while q.len() + usize::try_from(q.dropped()).unwrap_or(0) < 5
+            && std::time::Instant::now() < deadline
+        {
+            match rx.recv_frame(&mut buf) {
+                Ok(Some((h, p))) => {
+                    q.push((h.source_seq, p[0]));
+                }
+                Ok(None) | Err(Status::Retry) => std::hint::spin_loop(),
+                Err(e) => unreachable!("recv: {e:?}"),
+            }
+        }
+        assert_eq!(q.dropped(), 2, "newest two dropped");
+        assert_eq!(q.len(), 3);
+        assert_eq!(q.pop(), Some((0, 0)));
+        assert_eq!(q.pop(), Some((1, 1)));
+        assert_eq!(q.pop(), Some((2, 2)));
+    }
 }

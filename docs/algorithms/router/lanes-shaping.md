@@ -56,6 +56,11 @@ Priority classes (scheduler service order — applied before stream entry or dat
 | 2 status/telemetry | state, battery, imu | DRR quantum 1 |
 | 3 diagnostics/bulk | traces, logs, metrics, maps, frames, files | bulk; drained after realtime |
 
+*Seed (M03W3):* `drm-router::priority` implements the pre-stream class queues
+with strict class service order and FIFO within a class (REQ-ROUTE-020/021);
+DRR quanta, token budgets, and ordered-stream entry land with the Phase 30
+scheduler.
+
 ## Invariants
 
 - **I-LS1 DrmBoundaryIsolation**: bulk bytes never queue ahead of realtime bytes in DRM's own queues and ordered streams. Downstream shared resources (kernel socket buffers, qdisc, NIC, switches, remote kernel) can still add latency; end-to-end isolation is a deployment QoS concern and is measured, not guaranteed by lane separation. Test: `priority_saturation` (bulk flood + critical burst; DRM-queue latency bounded; physical matrix reports shared-link reality).
