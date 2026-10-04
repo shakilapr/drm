@@ -60,10 +60,10 @@ mod tests {
     /// REQ: REQ-CORE-036 — field 22 lands on the 19th token after `comm`.
     #[test]
     fn stat_parse_field22() {
-        let mut line = String::from("42 (drm-node) R 1");
-        for i in 0..18 {
+        let mut line = String::from("42 (drm-node)");
+        for field in 3..=21 {
             line.push(' ');
-            line.push_str(&i.to_string());
+            line.push_str(&field.to_string());
         }
         line.push_str(" 123456789");
         line.push_str(" 0 0 0 0 0 0 0");
@@ -74,10 +74,10 @@ mod tests {
     /// parentheses must not shift the field index (proc(5) anomaly).
     #[test]
     fn stat_parse_hostile_comm() {
-        let mut line = String::from("7 ((we)rd (name)) S 1");
-        for i in 0..18 {
+        let mut line = String::from("7 ((we)rd (name))");
+        for field in 3..=21 {
             line.push(' ');
-            line.push_str(&i.to_string());
+            line.push_str(&field.to_string());
         }
         line.push_str(" 987654321");
         assert_eq!(parse_stat_starttime(&line), Some(987_654_321));
