@@ -16,4 +16,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz
       - name: schema (3600s)
+        env:
+          RUSTUP_TOOLCHAIN: nightly
         run: cargo fuzz run --fuzz-dir tests/fuzz schema -- -max_total_time=3600 -timeout=5

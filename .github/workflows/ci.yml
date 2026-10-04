@@ -92,6 +92,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz
       - name: fuzz smoke (schema, 120s)
+        env:
+          RUSTUP_TOOLCHAIN: nightly
         run: cargo fuzz run --fuzz-dir tests/fuzz schema -- -max_total_time=120 -timeout=5
 
   frontend:

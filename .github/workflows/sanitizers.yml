@@ -32,6 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - env:
+          RUSTUP_TOOLCHAIN: nightly
           RUSTFLAGS: "-Zsanitizer=address"
           ASAN_OPTIONS: "abort_on_error=1:handle_abort=2"
           RUSTDOCFLAGS: "-Zsanitizer=address"
@@ -49,5 +50,5 @@ jobs:
           components: miri
       - name: Miri on pure-safe targets (parser, codec)
         run: |
-          cargo +nightly miri test -p drm-core --test canon_primitives
+          cargo +nightly miri test -p drm-core --test canon_le_assert
           cargo +nightly miri test -p drm-workspace --lib
