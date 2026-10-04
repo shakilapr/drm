@@ -51,6 +51,17 @@ pub enum WireFrame {
 // OwnedFrame is a slice into a router-owned bounded buffer; it NEVER aliases DRM shared memory.
 // No DRM-level fragmentation/reassembly — oversize belongs on stream transports (build-rejected).
 
+// v1 media surface (M03W2; media-pluggable per I-RT11). Adapters own link framing;
+// the router hands them a header + router-owned payload and gets back bytes/an owned frame.
+pub enum Reliability { BestEffort, Reliable }
+pub trait TransportAdapter {
+ fn send_frame(&mut self, header: &WireHeader, payload: &[u8]) -> Result<(), Status>;
+ fn recv_frame<'a>(&mut self, buf: &'a mut [u8]) -> Result<Option<(WireHeader, &'a [u8])>, Status>;
+ fn capabilities(&self) -> Reliability;
+}
+// Capability mapping is authoritative from the transport binding: UDP unicast/multicast =
+// BestEffort; reliable streams = Reliable (verify-engine.md V-REL, REQ-TOOL-061).
+
 pub struct StreamKey { epoch: u64, seq: u64 }
 pub struct IngressState { newest: Option<StreamKey> } // per (link, wire_channel_id); reset on reconnect
 pub struct EgressCursor { next: Option<StreamKey> } // router-private per (topic, link) sequential position;
@@ -225,3 +236,4 @@ fn ingress(&mut self, link: LinkId, frame: WireFrame) -> Result<(), Status> {
 | `stream_record_bound` (declared length > generated max) | I-RT18: protocol error, no allocation |
 | `remote_restart_reset` (epoch max → 0) | I-RT9: wrap-free restart recognized |
 | `e2e_integrity_profile` (CRC32C over `stream_epoch`/`source_seq`/`payload_len`/payload; transit remap preserves covered fields + trailer) | I-RT12 |
+| `adapter_capability` (each adapter reports its table capability; trait round-trip) | I-RT11 + REQ-TOOL-061 |

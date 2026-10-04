@@ -9,12 +9,17 @@ use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 
 use drm_types::Status;
 
+use crate::transport::{Reliability, TransportAdapter};
+use crate::wire::{HEADER_LEN, WireHeader};
+
 /// A non-blocking UDP endpoint carrying at most one sample per datagram.
 /// REQ: REQ-ROUTE-032.
 #[derive(Debug)]
 pub struct UdpTransport {
     socket: UdpSocket,
     max_payload: usize,
+    peer: Option<SocketAddr>,
+    scratch: Vec<u8>,
 }
 
 impl UdpTransport {
@@ -30,7 +35,34 @@ impl UdpTransport {
         Ok(Self {
             socket,
             max_payload: usize::from(max_payload),
+            peer: None,
+            scratch: vec![0_u8; usize::from(max_payload) + HEADER_LEN + 4],
         })
+    }
+
+    /// Binds with a configured link peer for the [`TransportAdapter`] surface.
+    ///
+    /// # Errors
+    /// As [`UdpTransport::bind`].
+    pub fn bind_peer(
+        addr: impl ToSocketAddrs,
+        max_payload: u16,
+        peer: SocketAddr,
+    ) -> Result<Self, Status> {
+        let mut t = Self::bind(addr, max_payload)?;
+        t.peer = Some(peer);
+        Ok(t)
+    }
+
+    /// Sets the link peer used by [`TransportAdapter::send_frame`].
+    pub fn set_peer(&mut self, peer: SocketAddr) {
+        self.peer = Some(peer);
+    }
+
+    /// Configured link peer, if any.
+    #[must_use]
+    pub fn peer(&self) -> Option<SocketAddr> {
+        self.peer
     }
 
     /// The local bound address.
@@ -72,6 +104,52 @@ impl UdpTransport {
     /// the socket IO mapping.
     pub fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), Status> {
         self.socket.recv_from(buf).map_err(|e| map_io(&e))
+    }
+}
+
+/// Adapter surface (I-RT11): UDP is best-effort; a frame is one datagram.
+/// REQ: REQ-TOOL-061, REQ-ROUTE-032.
+impl TransportAdapter for UdpTransport {
+    fn send_frame(&mut self, header: &WireHeader, payload: &[u8]) -> Result<(), Status> {
+        if header.payload_len as usize != payload.len() {
+            return Err(Status::InvalidArg);
+        }
+        let total = header.encoded_len();
+        if total > self.max_payload || self.scratch.len() < total {
+            return Err(Status::InvalidArg); // I-RT3: before any syscall
+        }
+        let Some(peer) = self.peer else {
+            return Err(Status::InvalidConfig);
+        };
+        header.encode(&mut self.scratch[..HEADER_LEN]);
+        self.scratch[HEADER_LEN..HEADER_LEN + payload.len()].copy_from_slice(payload);
+        self.socket
+            .send_to(&self.scratch[..total], peer)
+            .map(|_| ())
+            .map_err(|e| map_io(&e))
+    }
+
+    fn recv_frame<'a>(
+        &mut self,
+        buf: &'a mut [u8],
+    ) -> Result<Option<(WireHeader, &'a [u8])>, Status> {
+        let n = match self.socket.recv_from(buf) {
+            Ok((n, _)) => n,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+            Err(e) => return Err(map_io(&e)),
+        };
+        if n < HEADER_LEN {
+            return Err(Status::InvalidData);
+        }
+        let header = WireHeader::decode(&buf[..n])?;
+        if header.payload_len as usize != n - HEADER_LEN {
+            return Err(Status::InvalidData);
+        }
+        Ok(Some((header, &buf[HEADER_LEN..n])))
+    }
+
+    fn capabilities(&self) -> Reliability {
+        Reliability::BestEffort
     }
 }
 
@@ -148,5 +226,51 @@ mod tests {
         let (n, from) = recv_wait(&a, &mut buf);
         assert_eq!(&buf[..n], &reply);
         assert_eq!(from, peer_b);
+    }
+
+    /// REQ: REQ-TOOL-061, REQ-ROUTE-032 — the adapter surface reports
+    /// best-effort and round-trips a framed sample over loopback.
+    #[test]
+    fn udp_adapter_roundtrip() {
+        use crate::transport::{Reliability, TransportAdapter};
+        use crate::wire::WireHeader;
+
+        let mut rx =
+            UdpTransport::bind("127.0.0.1:0", 1400).unwrap_or_else(|e| unreachable!("{e:?}"));
+        let dst = rx.local_addr().unwrap_or_else(|e| unreachable!("{e:?}"));
+        let mut tx = UdpTransport::bind_peer("127.0.0.1:0", 1400, dst)
+            .unwrap_or_else(|e| unreachable!("{e:?}"));
+        assert_eq!(tx.capabilities(), Reliability::BestEffort);
+        assert_eq!(tx.peer(), Some(dst));
+
+        let header = WireHeader {
+            flags: 0,
+            wire_channel_id: 5,
+            stream_epoch: 2,
+            source_seq: 7,
+            payload_len: 4,
+        };
+        assert_eq!(tx.send_frame(&header, &[4, 3, 2, 1]), Ok(()));
+
+        let mut buf = [0_u8; 1400];
+        let mut got = None;
+        for _ in 0..10_000_000 {
+            match rx.recv_frame(&mut buf) {
+                Ok(Some((h, p))) => {
+                    got = Some((h, p.to_vec()));
+                    break;
+                }
+                Ok(None) | Err(Status::Retry) => std::hint::spin_loop(),
+                Err(e) => unreachable!("recv: {e:?}"),
+            }
+        }
+        let (h, p) = got.unwrap_or_else(|| unreachable!("no frame"));
+        assert_eq!(h, header);
+        assert_eq!(p, vec![4, 3, 2, 1]);
+
+        // Oversize is refused before the syscall (I-RT3).
+        let mut over = header;
+        over.payload_len = 1401;
+        assert_eq!(tx.send_frame(&over, &[0_u8; 1401]), Err(Status::InvalidArg));
     }
 }
