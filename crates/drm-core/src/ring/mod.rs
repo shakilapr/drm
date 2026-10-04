@@ -426,6 +426,67 @@ mod tests {
         }
     }
 
+    /// REQ: REQ-CORE-066 — sampled larger depths keep the exact window
+    /// boundaries: `{ws - R ..= ws - 1}` addressable, one older aged out (I1).
+    #[test]
+    fn ring_depths_property() {
+        for r in [65_u64, 100, 333, 1000, 4096] {
+            let ring = assert_ok(HistoryRing::new(r));
+            let c = ccb();
+            let ws = 2 * r + 3;
+            for s in 0..ws {
+                let stable = assert_preflight(&ring, s);
+                ring.commit(s, u32::try_from(s % r).unwrap_or(0), s, stable);
+                c.write_seq.store(s + 1, Ordering::Release);
+            }
+            let oldest = ws - r;
+            assert_eq!(
+                ring.lookup(&c, oldest - 1),
+                Err(LookupErr::AgedOut),
+                "r={r}"
+            );
+            assert!(ring.lookup(&c, oldest).is_ok(), "r={r} oldest");
+            assert!(ring.lookup(&c, ws - 1).is_ok(), "r={r} newest");
+            assert_eq!(ring.lookup(&c, ws), Err(LookupErr::Future), "r={r}");
+            assert_eq!(
+                ring.newest(&c).map(|o| o.map(|(s, _)| s)),
+                Ok(Some(ws - 1)),
+                "r={r}"
+            );
+        }
+    }
+
+    /// REQ: REQ-CORE-066 — deterministic pseudo-random depth sweep up to 8192
+    /// keeps the exact addressable window (nightly extended property).
+    #[test]
+    #[ignore = "stress suite: cargo xtask test --stress"]
+    fn stress_ring_depth_sweep() {
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..48 {
+            x = x
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let r = 65 + (x % 8128);
+            let ring = assert_ok(HistoryRing::new(r));
+            let c = ccb();
+            let ws = r + 3;
+            for s in 0..ws {
+                let stable = assert_preflight(&ring, s);
+                ring.commit(s, u32::try_from(s % r).unwrap_or(0), s, stable);
+                c.write_seq.store(s + 1, Ordering::Release);
+            }
+            let oldest = ws - r;
+            assert_eq!(
+                ring.lookup(&c, oldest - 1),
+                Err(LookupErr::AgedOut),
+                "r={r}"
+            );
+            assert!(ring.lookup(&c, oldest).is_ok(), "r={r}");
+            assert!(ring.lookup(&c, ws - 1).is_ok(), "r={r}");
+            assert_eq!(ring.lookup(&c, ws), Err(LookupErr::Future), "r={r}");
+        }
+    }
+
     /// REQ: REQ-CORE-064 — fixed-width naturally aligned cells, no aggregate
     /// atomic; lock-free probe passes (I6).
     #[test]
