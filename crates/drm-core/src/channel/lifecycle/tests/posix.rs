@@ -5,7 +5,7 @@
 use std::io::{Read, Write};
 use std::mem::offset_of;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -76,7 +76,7 @@ unsafe fn kill_reap(pid: libc::pid_t) {
     unsafe {
         libc::kill(pid, libc::SIGKILL);
         let mut st: libc::c_int = 0;
-        libc::waitpid(pid, &mut st, 0);
+        libc::waitpid(pid, std::ptr::addr_of_mut!(st), 0);
     }
 }
 
@@ -125,14 +125,14 @@ fn read_child_byte(s: &mut UnixStream) -> u8 {
 /// authority or exit after reporting (`1` won, `2` refused, `0` unexpected).
 /// REQ: REQ-CORE-054.
 fn child_racer(
-    shm: &PosixShm,
-    path: &PathBuf,
+    shm: PosixShm,
+    path: &Path,
     n: &SegmentName,
     e: &Expectation,
     mut s: UnixStream,
 ) -> ! {
     match publisher_open(
-        shm,
+        &shm,
         &FlockBackend,
         path,
         n,
@@ -178,7 +178,7 @@ fn publisher_kill_restart() {
     if pid == 0 {
         drop(parent);
         let mut s = child;
-        match publisher_open(
+        if let Ok(p) = publisher_open(
             &shm,
             &FlockBackend,
             &path,
@@ -187,18 +187,15 @@ fn publisher_kill_restart() {
             &e,
             &spec(),
         ) {
-            Ok(p) => {
-                plant_floor(&p, 7);
-                send_byte(&mut s, 1);
-                loop {
-                    std::thread::sleep(Duration::from_secs(3600));
-                }
+            plant_floor(&p, 7);
+            send_byte(&mut s, 1);
+            loop {
+                std::thread::sleep(Duration::from_secs(3600));
             }
-            Err(_) => {
-                send_byte(&mut s, 0);
-                // SAFETY: raw exit skips test-harness teardown in the fork.
-                unsafe { libc::_exit(1) };
-            }
+        } else {
+            send_byte(&mut s, 0);
+            // SAFETY: raw exit skips test-harness teardown in the fork.
+            unsafe { libc::_exit(1) };
         }
     }
     drop(child);
@@ -241,7 +238,7 @@ fn publisher_race_processes() {
         // SAFETY: the child body diverges; the loop continues in the parent only.
         let pid = unsafe { fork_or_fail() };
         if pid == 0 {
-            child_racer(&shm, &path, &n, &e, child);
+            child_racer(shm, &path, &n, &e, child);
         }
         drop(child);
         parent_ends.push(parent);
