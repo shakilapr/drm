@@ -68,3 +68,64 @@ pub fn write_checked(
 pub const fn default_pool_size(history_is_latest: bool) -> u64 {
     if history_is_latest { 3 } else { 8 }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PoolLayout, slot_offset, write_checked};
+    use drm_types::Status;
+
+    fn layout(count: u64) -> PoolLayout {
+        PoolLayout {
+            base: 64,
+            stride: 32,
+            count,
+            header_size: 0,
+            sample_max: 16,
+            slot_align: 8,
+        }
+    }
+
+    /// REQ: REQ-CORE-044 — slot `i` sits at `base + i*stride`, stable across
+    /// repeated derivation (I-P1); out-of-range is denied.
+    #[test]
+    fn pool_offsets() {
+        let l = layout(4);
+        for i in 0..4_u64 {
+            let expect = usize::try_from(64 + i * 32).unwrap_or(0);
+            assert_eq!(slot_offset(&l, i), Ok(expect), "slot {i}");
+            assert_eq!(slot_offset(&l, i), Ok(expect), "re-derived slot {i}");
+        }
+        assert_eq!(slot_offset(&l, 4), Err(Status::InvalidArg));
+    }
+
+    /// REQ: REQ-CORE-046 — per-topic pools are independent partitions: a write
+    /// into one pool's slot never mutates another pool's bytes (I-P2).
+    #[test]
+    fn pool_isolation() {
+        let a = layout(2);
+        let b = layout(2);
+        let mut buf_a = [0xAA_u8; 128];
+        let mut buf_b = [0xBB_u8; 128];
+        assert_eq!(write_checked(&mut buf_a, &a, 0, &[1_u8; 16]), Ok(16));
+        assert_eq!(&buf_b[64..80], &[0xBB_u8; 16], "pool b untouched");
+        assert_eq!(&buf_a[64..80], &[1_u8; 16]);
+        assert_eq!(write_checked(&mut buf_b, &b, 0, &[2_u8; 16]), Ok(16));
+        assert_eq!(&buf_a[64..80], &[1_u8; 16], "pool a untouched");
+    }
+
+    /// REQ: REQ-CORE-048 — oversize payload rejected before any write: the
+    /// destination keeps its sentinel fill (I-P3); `max` and empty pass.
+    #[test]
+    fn pool_size_reject() {
+        let l = layout(2);
+        let mut buf = [0x5A_u8; 128];
+        assert_eq!(write_checked(&mut buf, &l, 0, &[9_u8; 16]), Ok(16));
+        let before = buf;
+        assert_eq!(
+            write_checked(&mut buf, &l, 0, &[7_u8; 17]),
+            Err(Status::InvalidArg)
+        );
+        assert_eq!(buf, before, "no destination byte changed");
+        assert_eq!(write_checked(&mut buf, &l, 1, &[]), Ok(0));
+    }
+}
