@@ -46,6 +46,9 @@ name = "drm-cli"
 version = "0.1.0"
 dependencies = [
  "drm-types",
+ "drm-workspace",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]
