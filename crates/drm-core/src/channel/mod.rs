@@ -889,6 +889,52 @@ mod tests {
         assert_eq!(c.next(&mut fast, 0, &mut buf), Ok(ReadOutcome::Empty));
     }
 
+    /// REQ: REQ-CORE-012 — `latest()` resolves the newest committed sequence
+    /// regardless of backlog, independent of the `next()` cursor (I-C3).
+    #[test]
+    fn latest_newest() {
+        let c = ch(Pol::Overwrite, 4, 5, 0);
+        let mut buf = [0_u8; 16];
+        let mut st = c.reader();
+        assert_eq!(c.latest(&mut st, 0, &mut buf), Ok(ReadOutcome::Empty));
+        for v in 0..6_u8 {
+            assert!(c.publish(&pat(v)).is_ok(), "v={v}");
+        }
+        // `next` starts at the oldest retained backlog (seq 2 of 0..6)...
+        assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Sample));
+        assert_eq!(buf, pat(2));
+        // ...while `latest` jumps to the newest committed sample (seq 5).
+        assert_eq!(c.latest(&mut st, 0, &mut buf), Ok(ReadOutcome::Sample));
+        assert_eq!(buf, pat(5));
+    }
+
+    /// REQ: REQ-CORE-029 — after a `Gap`, `next()` resumes at the oldest retained
+    /// sequence and continues in order; retained samples are never skipped (I-C4).
+    #[test]
+    fn next_resume_oldest() {
+        let c = ch(Pol::Overwrite, 2, 3, 0);
+        let mut buf = [0_u8; 16];
+        for v in 0..2_u8 {
+            assert!(c.publish(&pat(v)).is_ok(), "v={v}");
+        }
+        let mut st = c.reader();
+        assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Sample));
+        assert_eq!(buf, pat(0));
+        // Sequences 0..=3 age out (depth 2): oldest retained becomes 4.
+        for v in 2..6_u8 {
+            assert!(c.publish(&pat(v)).is_ok(), "v={v}");
+        }
+        assert_eq!(
+            c.next(&mut st, 0, &mut buf),
+            Ok(ReadOutcome::Gap { missed: 3 })
+        );
+        assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Sample));
+        assert_eq!(buf, pat(4));
+        assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Sample));
+        assert_eq!(buf, pat(5));
+        assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Empty));
+    }
+
     /// REQ: REQ-CORE-010 — restart invalidates acquired payloads; epoch observed at
     /// entry resets cursors (I-C6/I-C6b).
     #[test]
