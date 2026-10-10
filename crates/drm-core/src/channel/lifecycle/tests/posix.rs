@@ -164,6 +164,7 @@ fn child_racer(
 /// with epoch + 1 and the preserved floor (I-L1/I-L3).
 #[test]
 fn publisher_kill_restart() {
+    let _serial = crate::test_guard::acquire();
     let shm = PosixShm;
     let n = segment_name("killrestart");
     let e = expect("pkg/topic-a");
@@ -223,6 +224,7 @@ fn publisher_kill_restart() {
 /// reads `Permission`.
 #[test]
 fn publisher_race_processes() {
+    let _serial = crate::test_guard::acquire();
     let shm = PosixShm;
     let n = segment_name("race");
     let e = expect("pkg/topic-a");

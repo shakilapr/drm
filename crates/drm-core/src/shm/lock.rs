@@ -83,6 +83,7 @@ mod tests {
     /// fails busy; releasing the hold re-enables acquisition (I4 in-process).
     #[test]
     fn exclusive_is_exclusive() {
+        let _serial = crate::test_guard::acquire();
         let b = FlockBackend;
         let p = lock_path("ex-ex");
         let h = match b.try_exclusive(&p) {
@@ -104,6 +105,7 @@ mod tests {
     /// drop (active-lock / cleanup-probe model).
     #[test]
     fn shared_blocks_exclusive() {
+        let _serial = crate::test_guard::acquire();
         let b = FlockBackend;
         let p = lock_path("sh-ex");
         let s1 = match b.try_shared(&p) {

@@ -8,3 +8,6 @@ pub mod channel;
 pub mod hazard;
 pub mod ring;
 pub mod shm;
+
+#[cfg(test)]
+pub(crate) mod test_guard;

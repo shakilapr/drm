@@ -116,6 +116,7 @@ mod tests {
     /// documented diagnostics-only limitation).
     #[test]
     fn alive_probe() {
+        let _serial = crate::test_guard::acquire();
         let me = current_identity().pid;
         assert!(is_alive(me));
         assert!(!is_alive(0));
