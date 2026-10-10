@@ -801,12 +801,12 @@ mod tests {
         assert_eq!(c.publish(&pat(1)), Err(Status::InvalidConfig));
     }
 
-    /// REQ: REQ-CORE-028, REQ-CORE-029 — lap k (k ∈ 1..=8) yields Gap { missed: k }
+    /// REQ: REQ-CORE-028, REQ-CORE-029 — lap k (k ∈ 1..=32) yields Gap { missed: k }
     /// exactly, then the cursor resumes at the oldest retained sample (I-C2, I-C4).
     #[test]
     fn gap_exact_laps() {
         let mut buf = [0_u8; 16];
-        for k in 1..=8_u64 {
+        for k in 1..=32_u64 {
             let c = ch(Pol::Overwrite, 4, 5, 0);
             for v in 0..6_u8 {
                 assert!(c.publish(&pat(v)).is_ok(), "k={k} v={v}");
@@ -855,6 +855,38 @@ mod tests {
             Ok(ReadOutcome::Sample) => assert_eq!(buf, pat(1)),
             other => unreachable!("slow wants seq 1, got {other:?}"),
         }
+    }
+
+    /// REQ: REQ-CORE-011 — a lapped reader's `Gap` never perturbs a fast peer's
+    /// cursor (I-C1): reader positions are process-local; no reader shares state.
+    #[test]
+    fn cursor_independence_lapped() {
+        let c = ch(Pol::Overwrite, 4, 5, 0);
+        for v in 0..4_u8 {
+            assert!(c.publish(&pat(v)).is_ok(), "v={v}");
+        }
+        let mut fast = c.reader();
+        let mut held = c.reader();
+        let mut buf = [0_u8; 16];
+        for v in 0..4_u8 {
+            assert_eq!(c.next(&mut fast, 0, &mut buf), Ok(ReadOutcome::Sample));
+            assert_eq!(buf, pat(v));
+        }
+        assert_eq!(c.next(&mut held, 1, &mut buf), Ok(ReadOutcome::Sample));
+        assert_eq!(buf, pat(0));
+        // Publisher advances 8 samples; `fast` keeps pace, `held` stalls and laps.
+        for v in 4..12_u8 {
+            assert!(c.publish(&pat(v)).is_ok(), "v={v}");
+            assert_eq!(c.next(&mut fast, 0, &mut buf), Ok(ReadOutcome::Sample));
+            assert_eq!(buf, pat(v));
+        }
+        assert_eq!(
+            c.next(&mut held, 1, &mut buf),
+            Ok(ReadOutcome::Gap { missed: 7 }),
+            "held laps seq 1..8 (oldest retained 8)"
+        );
+        // `held`'s Gap left `fast` untouched: it is simply caught up.
+        assert_eq!(c.next(&mut fast, 0, &mut buf), Ok(ReadOutcome::Empty));
     }
 
     /// REQ: REQ-CORE-010 — restart invalidates acquired payloads; epoch observed at

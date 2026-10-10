@@ -54,6 +54,7 @@ version = "0.1.0"
 dependencies = [
  "drm-types",
  "libc",
+ "proptest",
  "serde_json",
  "thiserror",
 ]
