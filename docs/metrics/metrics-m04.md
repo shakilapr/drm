@@ -34,3 +34,18 @@ overflow combination matrix (`drm-core::channel`); TCP stream adapter
 
 Deliverables: `docs/gates/phase-12.md`; named pool suites (I-P1..I-P3); TCP
 reconnect / session-scoped reliability (`drm-router::transport::tcp`).
+
+## M04W3 — Phase 13 Gate (Payload Pool), Hazard Protocol Start
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 13)` | PASS | PASS — `docs/gates/phase-13.md` |
+| `HAZARD_ACQUIRE_GREEN` | 6-step acquisition single-threaded semantics green | `drm-core::hazard` tests (10: NONE sentinel, set/clear/CAS, acquire newest, lookup-and-busy, close-vs-acquire, intent-store Retry) |
+| `SELECTION_PROPERTY` | `select_slot` never returns referenced/protected slot | `hazard_selection_property` (H=3 distinct consumers, 20 000 iterations, no sleeps) |
+| `RACE_MATRIX_DESIGNED` | R1–R6 enumerated with forcing strategies | [hazard-protocol.md](../algorithms/runtime/hazard-protocol.md) race matrix; Retry test mirrors R2 (publisher roll between the two `lookup_sc` snapshots) |
+| `LANE_SOCKETS` | per-peer lane connect/disconnect green | `drm-router` `lane` 9 tests (4 new: transition, best-effort/reliable bulk disposition, caps+FIFO while connected) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `docs/gates/phase-13.md`; hazard slot + acquisition + selection
+suites and the `hazard_storm` scaffold (`drm-core`); per-peer lane socket
+lifecycle (`drm-router::lane`).
