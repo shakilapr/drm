@@ -9,6 +9,7 @@
 pub mod config;
 pub mod crc32c;
 pub mod framing;
+pub mod lane;
 pub mod mtu;
 pub mod priority;
 pub mod routes;
