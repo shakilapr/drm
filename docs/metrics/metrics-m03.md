@@ -52,3 +52,23 @@ permanent fault-injection (`pattern_corruption`); structured stress harness +
 Deliverables: `docs/gates/phase-09.md`; `drm-router::priority` pre-stream
 class queues (seed, DRR Phase 30); bounded drop-newest UDP receive path
 (`RecvQueue`, `udp_backpressure`); ring nightly property sweep.
+
+## M03W4 — Phase 6 + Phase 10 Gates, GAP Delivery, Lanes Seed
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 6)` | PASS | PASS — `docs/gates/phase-06.md` (handle stability, add-no-renumber, delete/readd, compact explicit-only) |
+| `GATE_STATUS(Phase 10)` | PASS | PASS — `docs/gates/phase-10.md` (depth 1..=64 exhaustive, wraparound, exact retention) |
+| `GAP_EXACTNESS` | lap k ⇒ `missed: k`, k ∈ 1..=32 (I-C2) | `channel::tests::gap_exact_laps` (1..=32), `next_resume_oldest` |
+| `CURSOR_INDEPENDENCE` | fast/slow/lapped never interact (I-C1) | `cursor_independence`, `cursor_independence_lapped` |
+| `NO_SKIP` | exactly-once unless aged out (I-C4) | `next_no_skip` proptest (400 cases, independent model); `latest_newest` |
+| `HANDLE_E2E` | rebuild/add/delete/compact green (I-H1..I-H4) | `handle_stability` 7/7 + CLI `compact_refuses_without_yes` (no `--yes` ⇒ refuse) |
+| `LANE_FIFO` | order + caps | `drm-router` `lane` 5 tests (FIFO within class, class order, caps) |
+| `TRANSPORT_REGISTRY` | unknown mapping ⇒ startup error | `drm-router` `registry` 4 tests |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `docs/gates/phase-06.md`, `docs/gates/phase-10.md`; GAP
+delivery in `drm-core::channel` (laps/independence/no-skip); `drm ids` +
+`drm ids compact --yes` + `drm assign` CLI (ADR 0004); transport registry +
+`PeerLanes` seed. Flake repair: `shm::lock` tests serialized against
+fork/spawn tests (0/40 failures after; was ~3/30).
