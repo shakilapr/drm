@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 use drm_types::Status;
 
 use crate::priority::PriorityClass;
+use crate::transport::Reliability;
 
 /// Number of realtime classes sharing the realtime lane (safety, control,
 /// status); diagnostics/bulk is the bulk lane.
@@ -155,5 +156,191 @@ impl<T> PeerLanes<T> {
             Some(idx) => self.realtime[idx].len(),
             None => self.bulk.len(),
         }
+    }
+}
+
+/// Per-peer lane socket state (lanes-shaping.md §Data Structures `PeerLanes`).
+/// A peer is either connected or not; connecting and draining are explicit, so
+/// no queue is created or dropped implicitly on a state flip.
+/// REQ: REQ-ROUTE-013.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneState {
+    /// Lanes accept and serve traffic.
+    Connected,
+    /// Lanes are quiescent; a disconnect has already reported queued items.
+    Disconnected,
+}
+
+/// Disposition of the bulk lane's queued items when a peer disconnects
+/// (I-LS5 reliability policy). Best-effort bulk drops and counts; reliable
+/// bulk surfaces the items as ended, because a gone peer can no longer absorb
+/// publisher backpressure.
+/// REQ: REQ-ROUTE-013.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BulkDisposition<T> {
+    /// Best-effort bulk: `n` items dropped and counted (I-LS5).
+    Dropped {
+        /// Number of items dropped.
+        n: u64,
+    },
+    /// Reliable bulk: the items surfaced as ended (peer gone).
+    Ended(Vec<T>),
+}
+
+/// What a disconnect did to a peer's queued items. Realtime classes never
+/// silently drop (I-LS5); with the peer gone they are surfaced as ended in
+/// class-then-FIFO service order, so the caller can observe the loss.
+/// REQ: REQ-ROUTE-013, REQ-ROUTE-020.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisconnectReport<T> {
+    /// Realtime items surfaced as ended, in service order.
+    pub realtime_ended: Vec<(PriorityClass, T)>,
+    /// Bulk lane disposition per its reliability (see [`BulkDisposition`]).
+    pub bulk: BulkDisposition<T>,
+}
+
+/// Per-peer lane socket: the existing [`PeerLanes`] plus an explicit
+/// connect/disconnect lifecycle (REQ-ROUTE-013). Pure in-memory state — no
+/// networking; only reliable ordered streams use lanes (REQ-ROUTE-034). FIFO
+/// within a class (I-LS2) and the static caps (I-LS5) are unchanged while
+/// connected, because every data-path call delegates to the same lanes.
+/// REQ: REQ-ROUTE-013, REQ-ROUTE-012, REQ-ROUTE-034.
+#[derive(Debug, Clone)]
+pub struct LaneSocket<T> {
+    lanes: PeerLanes<T>,
+    state: LaneState,
+    bulk_reliability: Reliability,
+    bulk_dropped: u64,
+}
+
+impl<T> LaneSocket<T> {
+    /// Creates a per-peer lane socket in the [`LaneState::Disconnected`] state
+    /// with static caps and the bulk lane's reliability. Empty queues; nothing
+    /// is created on connect.
+    /// REQ: REQ-ROUTE-013.
+    #[must_use]
+    pub fn new(caps: LaneCaps, bulk_reliability: Reliability) -> Self {
+        Self {
+            lanes: PeerLanes::new(caps),
+            state: LaneState::Disconnected,
+            bulk_reliability,
+            bulk_dropped: 0,
+        }
+    }
+
+    /// Current connect state of this peer's lanes.
+    /// REQ: REQ-ROUTE-013.
+    #[must_use]
+    pub fn state(&self) -> LaneState {
+        self.state
+    }
+
+    /// Static caps of the underlying lanes.
+    /// REQ: REQ-ROUTE-013.
+    #[must_use]
+    pub fn caps(&self) -> LaneCaps {
+        self.lanes.caps()
+    }
+
+    /// Reliability class of the bulk lane (best-effort or reliable).
+    /// REQ: REQ-ROUTE-013.
+    #[must_use]
+    pub fn bulk_reliability(&self) -> Reliability {
+        self.bulk_reliability
+    }
+
+    /// Bulk items dropped by the best-effort disconnect policy so far (I-LS5).
+    /// REQ: REQ-ROUTE-013.
+    #[must_use]
+    pub fn bulk_dropped(&self) -> u64 {
+        self.bulk_dropped
+    }
+
+    /// Connects the peer: flips the state to [`LaneState::Connected`].
+    /// Creating and draining are explicit — queues are untouched, so connecting
+    /// neither allocates nor discards a queued item (idempotent).
+    /// REQ: REQ-ROUTE-013.
+    pub fn connect(&mut self) {
+        self.state = LaneState::Connected;
+    }
+
+    /// Disconnects the peer and reports the disposition of every queued item.
+    /// Realtime items are surfaced as ended in service order (never silently
+    /// dropped, I-LS5); the bulk lane is dropped-and-counted (best-effort) or
+    /// surfaced as ended (reliable) per its reliability. Idempotent: a second
+    /// disconnect reports empty.
+    /// REQ: REQ-ROUTE-013, REQ-ROUTE-020.
+    pub fn disconnect(&mut self) -> DisconnectReport<T> {
+        self.state = LaneState::Disconnected;
+        let mut realtime_ended = Vec::new();
+        let mut bulk_items = Vec::new();
+        while let Some((class, item)) = self.lanes.dequeue() {
+            if realtime_index(class).is_some() {
+                realtime_ended.push((class, item));
+            } else {
+                bulk_items.push(item);
+            }
+        }
+        let bulk = match self.bulk_reliability {
+            Reliability::BestEffort => {
+                let n = u64::try_from(bulk_items.len()).unwrap_or(u64::MAX);
+                self.bulk_dropped = self.bulk_dropped.saturating_add(n);
+                BulkDisposition::Dropped { n }
+            }
+            Reliability::Reliable => BulkDisposition::Ended(bulk_items),
+        };
+        DisconnectReport {
+            realtime_ended,
+            bulk,
+        }
+    }
+
+    /// Enqueues `item` at the tail of `class`'s FIFO while connected
+    /// (I-LS2). Enqueue is refused while disconnected, so a queued item is
+    /// never silently accepted for a gone peer.
+    /// REQ: REQ-ROUTE-021, REQ-ROUTE-012.
+    ///
+    /// # Errors
+    /// [`Status::NotReady`] when the peer is disconnected;
+    /// [`Status::QueueFull`] when the target lane is at its static cap — a
+    /// realtime class never silently drops (I-LS5) and the reliable ordered
+    /// bulk lane applies backpressure.
+    pub fn enqueue(&mut self, class: PriorityClass, item: T) -> Result<(), Status> {
+        if self.state == LaneState::Disconnected {
+            return Err(Status::NotReady);
+        }
+        self.lanes.enqueue(class, item)
+    }
+
+    /// Dequeues the head of the highest non-empty realtime class (strict class
+    /// order, then FIFO); bulk drains only when realtime is empty. Nothing is
+    /// served while disconnected.
+    /// REQ: REQ-ROUTE-020, REQ-ROUTE-012.
+    pub fn dequeue(&mut self) -> Option<(PriorityClass, T)> {
+        if self.state == LaneState::Disconnected {
+            return None;
+        }
+        self.lanes.dequeue()
+    }
+
+    /// Items queued across both lanes.
+    /// REQ: REQ-ROUTE-013.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.lanes.len()
+    }
+
+    /// Whether both lanes hold nothing.
+    /// REQ: REQ-ROUTE-013.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.lanes.is_empty()
+    }
+
+    /// Items queued in `class`'s lane (realtime class or bulk).
+    /// REQ: REQ-ROUTE-013.
+    #[must_use]
+    pub fn class_len(&self, class: PriorityClass) -> usize {
+        self.lanes.class_len(class)
     }
 }

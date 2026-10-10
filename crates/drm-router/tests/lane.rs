@@ -5,8 +5,11 @@
 
 use std::collections::VecDeque;
 
-use drm_router::lane::{LaneCaps, PeerLanes, REALTIME_CLASSES, realtime_index};
+use drm_router::lane::{
+    BulkDisposition, LaneCaps, LaneSocket, LaneState, PeerLanes, REALTIME_CLASSES, realtime_index,
+};
 use drm_router::priority::PriorityClass;
+use drm_router::transport::Reliability;
 use drm_types::Status;
 
 fn fixture<T, E: std::fmt::Debug>(r: Result<T, E>, what: &str) -> T {
@@ -218,4 +221,139 @@ fn dequeue_model(model: &mut [VecDeque<u64>; 4]) -> Option<(PriorityClass, u64)>
     model[PriorityClass::Diagnostics.index()]
         .pop_front()
         .map(|v| (PriorityClass::Diagnostics, v))
+}
+
+fn enqueue_socket<T>(sock: &mut LaneSocket<T>, class: PriorityClass, item: T, what: &str) {
+    fixture(sock.enqueue(class, item), what);
+}
+
+/// REQ: REQ-ROUTE-013 — a fresh peer socket is disconnected; `connect` flips to
+/// connected without creating or draining any queued item, and `disconnect`
+/// returns to disconnected. Both transitions are idempotent.
+#[test]
+fn lane_socket_connect_disconnect_transition() {
+    let caps = LaneCaps::new([4, 4, 4], 4);
+    let mut sock: LaneSocket<u32> = LaneSocket::new(caps, Reliability::BestEffort);
+    assert_eq!(sock.state(), LaneState::Disconnected);
+    assert!(sock.is_empty());
+    // Disconnected enqueue is refused, not silently accepted.
+    assert_eq!(
+        sock.enqueue(PriorityClass::Safety, 1),
+        Err(Status::NotReady)
+    );
+    assert_eq!(sock.dequeue(), None);
+
+    sock.connect();
+    assert_eq!(sock.state(), LaneState::Connected);
+    // Connecting creates nothing implicit.
+    assert!(sock.is_empty());
+    sock.connect();
+    assert_eq!(sock.state(), LaneState::Connected);
+
+    enqueue_socket(&mut sock, PriorityClass::Safety, 7, "safety");
+    assert_eq!(sock.state(), LaneState::Connected);
+    assert_eq!(sock.class_len(PriorityClass::Safety), 1);
+
+    let report = sock.disconnect();
+    assert_eq!(sock.state(), LaneState::Disconnected);
+    assert_eq!(report.realtime_ended, vec![(PriorityClass::Safety, 7)]);
+    assert!(sock.is_empty());
+    // Idempotent: a second disconnect reports nothing.
+    let empty = sock.disconnect();
+    assert!(empty.realtime_ended.is_empty());
+    assert_eq!(empty.bulk, BulkDisposition::Dropped { n: 0 });
+}
+
+/// REQ: REQ-ROUTE-013, REQ-ROUTE-020 — disconnect surfaces realtime items as
+/// ended in class-then-FIFO service order (never silently dropped, I-LS5);
+/// best-effort bulk is dropped-and-counted.
+#[test]
+fn lane_socket_disconnect_disposition_best_effort() {
+    let caps = LaneCaps::new([4, 4, 4], 4);
+    let mut sock: LaneSocket<u32> = LaneSocket::new(caps, Reliability::BestEffort);
+    sock.connect();
+    enqueue_socket(&mut sock, PriorityClass::Diagnostics, 100, "diag");
+    enqueue_socket(&mut sock, PriorityClass::Control, 1, "control");
+    enqueue_socket(&mut sock, PriorityClass::Safety, 0, "safety");
+    enqueue_socket(&mut sock, PriorityClass::Control, 2, "control");
+    enqueue_socket(&mut sock, PriorityClass::Diagnostics, 101, "diag");
+
+    let report = sock.disconnect();
+    assert_eq!(
+        report.realtime_ended,
+        vec![
+            (PriorityClass::Safety, 0),
+            (PriorityClass::Control, 1),
+            (PriorityClass::Control, 2),
+        ],
+        "realtime surfaced as ended in class-then-FIFO order"
+    );
+    assert_eq!(report.bulk, BulkDisposition::Dropped { n: 2 });
+    assert_eq!(sock.bulk_dropped(), 2);
+    assert!(sock.is_empty());
+}
+
+/// REQ: REQ-ROUTE-013 — for a reliable bulk lane the disconnect surfaces the
+/// queued bulk items as ended (a gone peer cannot absorb backpressure) and
+/// counts no drops.
+#[test]
+fn lane_socket_disconnect_disposition_reliable_bulk() {
+    let caps = LaneCaps::new([4, 4, 4], 4);
+    let mut sock: LaneSocket<u32> = LaneSocket::new(caps, Reliability::Reliable);
+    assert_eq!(sock.bulk_reliability(), Reliability::Reliable);
+    sock.connect();
+    enqueue_socket(&mut sock, PriorityClass::Diagnostics, 10, "diag");
+    enqueue_socket(&mut sock, PriorityClass::Diagnostics, 11, "diag");
+    enqueue_socket(&mut sock, PriorityClass::Status, 5, "status");
+
+    let report = sock.disconnect();
+    assert_eq!(report.realtime_ended, vec![(PriorityClass::Status, 5)]);
+    assert_eq!(report.bulk, BulkDisposition::Ended(vec![10, 11]));
+    assert_eq!(sock.bulk_dropped(), 0);
+    assert!(sock.is_empty());
+}
+
+/// REQ: REQ-ROUTE-021, REQ-ROUTE-020, REQ-ROUTE-013 — while connected the
+/// socket preserves per-class FIFO (I-LS2), strict class service order, and the
+/// static caps (I-LS5): a full realtime class returns `QueueFull`.
+#[test]
+fn lane_socket_caps_and_fifo_while_connected() {
+    let caps = LaneCaps::new([2, 3, 1], 2);
+    let mut sock: LaneSocket<u32> = LaneSocket::new(caps, Reliability::BestEffort);
+    sock.connect();
+    assert_eq!(sock.caps(), caps);
+    assert_eq!(sock.caps().cap_for(PriorityClass::Safety), 2);
+    assert_eq!(sock.caps().cap_for(PriorityClass::Diagnostics), 2);
+
+    enqueue_socket(&mut sock, PriorityClass::Safety, 1, "safety");
+    enqueue_socket(&mut sock, PriorityClass::Safety, 2, "safety");
+    assert_eq!(
+        sock.enqueue(PriorityClass::Safety, 3),
+        Err(Status::QueueFull),
+        "realtime class never silently drops while connected"
+    );
+    assert_eq!(sock.class_len(PriorityClass::Safety), 2);
+
+    enqueue_socket(&mut sock, PriorityClass::Status, 9, "status");
+    assert_eq!(
+        sock.enqueue(PriorityClass::Status, 8),
+        Err(Status::QueueFull),
+        "status class at static cap"
+    );
+    enqueue_socket(&mut sock, PriorityClass::Diagnostics, 20, "diag");
+    enqueue_socket(&mut sock, PriorityClass::Diagnostics, 21, "diag");
+    assert_eq!(
+        sock.enqueue(PriorityClass::Diagnostics, 22),
+        Err(Status::QueueFull),
+        "bulk backpressure at cap"
+    );
+    assert_eq!(sock.len(), 5);
+
+    assert_eq!(sock.dequeue(), Some((PriorityClass::Safety, 1)));
+    assert_eq!(sock.dequeue(), Some((PriorityClass::Safety, 2)));
+    assert_eq!(sock.dequeue(), Some((PriorityClass::Status, 9)));
+    assert_eq!(sock.dequeue(), Some((PriorityClass::Diagnostics, 20)));
+    assert_eq!(sock.dequeue(), Some((PriorityClass::Diagnostics, 21)));
+    assert_eq!(sock.dequeue(), None);
+    assert!(sock.is_empty());
 }
