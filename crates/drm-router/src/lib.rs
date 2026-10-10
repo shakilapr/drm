@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod crc32c;
+pub mod egress;
 pub mod framing;
 pub mod lane;
 pub mod mtu;
