@@ -6,6 +6,12 @@
 //! half-written record. Length-framed decode is bounds-checked (I-RT18): a
 //! malformed or oversized declared length is an explicit error, never a panic
 //! and never an unbounded allocation.
+//!
+//! Reconnect and session-scoped reliability (I-RT5) live in
+//! [`crate::transport::session`]: a read error or clean close ends the session
+//! ([`TcpTransport::is_session_end`]), and a fresh session is re-established by
+//! a bounded, deterministic backoff (`session::redial`) — reliable delivery
+//! never survives the restart.
 //! REQ: REQ-ROUTE-029, REQ-ROUTE-038.
 
 use std::io::{self, Read};
@@ -88,6 +94,18 @@ impl TcpTransport {
     /// [`Status::InvalidArg`] when the address cannot be read.
     pub fn peer_addr(&self) -> Result<SocketAddr, Status> {
         self.stream.peer_addr().map_err(|e| map_io(&e))
+    }
+
+    /// Whether `status` reports the end of the transport session (I-RT5): a
+    /// clean close — [`TransportAdapter::recv_frame`] maps peer EOF to
+    /// [`Status::InvalidData`] — or a fatal link error. Anything other than
+    /// success or "no data yet" ([`Status::Retry`]) ends the session; the
+    /// caller then reconnects via [`crate::transport::session::redial`], which
+    /// starts a clean session (no historical retransmit).
+    /// REQ: REQ-ROUTE-029.
+    #[must_use]
+    pub fn is_session_end(status: Status) -> bool {
+        !matches!(status, Status::Ok | Status::Retry)
     }
 }
 
