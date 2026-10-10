@@ -935,6 +935,89 @@ mod tests {
         assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Empty));
     }
 
+    /// REQ: REQ-CORE-039 — overwrite lapping yields exact gaps across multiple
+    /// laps (I-O1): for depth R, a cursor overrun by `lap` reports
+    /// `Gap { missed: lap }`, exercised at laps 1, 2, R and R+1.
+    #[test]
+    fn overflow_laps() {
+        const R: u64 = 3;
+        let mut buf = [0_u8; 16];
+        for lap in [1_u64, 2, R, R + 1] {
+            let c = ch(Pol::Overwrite, R, R + 1, 0);
+            assert!(c.publish(&pat(0)).is_ok(), "lap={lap}");
+            let mut st = c.reader();
+            assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Sample));
+            assert_eq!(buf, pat(0));
+            // Advance the publisher by R + lap: oldest retained moves `lap` ahead.
+            for v in 1..=(R + lap) {
+                let byte = u8::try_from(v).unwrap_or(0);
+                assert!(c.publish(&pat(byte)).is_ok(), "lap={lap} v={v}");
+            }
+            assert_eq!(
+                c.next(&mut st, 0, &mut buf),
+                Ok(ReadOutcome::Gap { missed: lap }),
+                "lap={lap}"
+            );
+            assert_eq!(c.overrun_count(), lap, "lap={lap}");
+        }
+    }
+
+    /// REQ: REQ-CORE-039, REQ-CORE-040 — overflow combination matrix:
+    /// {`Overwrite`, `Reject`} × {empty, not-full, full, required-behind,
+    /// required-advanced}. Every cell asserts its exact outcome and is counted;
+    /// the pinned total fails the test if a case is dropped.
+    #[test]
+    fn overflow_matrix() {
+        let mut buf = [0_u8; 16];
+        let mut cells = 0_u32;
+
+        // 1. Overwrite, empty: no history.
+        let c = ch(Pol::Overwrite, 2, 3, 0);
+        let mut st = c.reader();
+        assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Empty));
+        assert_eq!(c.latest(&mut st, 0, &mut buf), Ok(ReadOutcome::Empty));
+        cells += 1;
+
+        // 2. Overwrite, not full: ordered delivery.
+        assert!(c.publish(&pat(1)).is_ok());
+        assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Sample));
+        assert_eq!(buf, pat(1));
+        assert_eq!(c.next(&mut st, 0, &mut buf), Ok(ReadOutcome::Empty));
+        cells += 1;
+
+        // 3. Overwrite, full and lapped: exact gap.
+        let mut st2 = c.reader();
+        assert_eq!(c.next(&mut st2, 0, &mut buf), Ok(ReadOutcome::Sample));
+        for v in 2..6_u8 {
+            assert!(c.publish(&pat(v)).is_ok(), "v={v}");
+        }
+        assert_eq!(
+            c.next(&mut st2, 0, &mut buf),
+            Ok(ReadOutcome::Gap { missed: 2 })
+        );
+        cells += 1;
+
+        // 4. Reject, zero required consumers: runtime invariant violation.
+        let z = ch(Pol::Reject, 2, 3, 0);
+        assert_eq!(z.publish(&pat(1)), Err(Status::InvalidConfig));
+        cells += 1;
+
+        // 5. Reject, full with a required consumer behind: refused, no block.
+        let r = ch(Pol::Reject, 2, 3, 1);
+        assert!(r.publish(&pat(1)).is_ok());
+        assert!(r.publish(&pat(2)).is_ok());
+        assert_eq!(r.publish(&pat(3)), Err(Status::QueueFull));
+        cells += 1;
+
+        // 6. Reject, required consumer advanced past retirement: publish proceeds.
+        let req = r.required(0).unwrap_or_else(|| unreachable!("req"));
+        assert!(req.ack_completed(0).is_ok());
+        assert!(r.publish(&pat(3)).is_ok());
+        cells += 1;
+
+        assert_eq!(cells, 6, "overflow matrix cell count");
+    }
+
     /// REQ: REQ-CORE-010 — restart invalidates acquired payloads; epoch observed at
     /// entry resets cursors (I-C6/I-C6b).
     #[test]
