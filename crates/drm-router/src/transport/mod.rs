@@ -9,6 +9,7 @@ use drm_types::Status;
 use crate::wire::WireHeader;
 
 pub mod registry;
+pub mod tcp;
 pub mod udp;
 
 /// Capability class of a transport binding (router-core.md `Reliability`).
