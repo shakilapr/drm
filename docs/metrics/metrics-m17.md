@@ -56,3 +56,57 @@ make -C bindings/c/mcu host-test host-audit
 cargo xtask audit-traceability
 cargo xtask check-layering
 ```
+
+## M17W2 — Phase 32 Gate + Studio Protocol Doc
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 32)` | PASS — every submodule conformance suite green | PASS — all Phase 32 suites re-run in-session: `drm-diag` 10/10 (I-OB1..I-OB5/I-OB7), `drm-core --test trace` 4/4 (I-OB1/I-OB2/I-OB6), `drm-rpc` 12/12 (I-RPC1..I-RPC3/I-RPC6/I-RPC7), `drm-record` 18/18 (I-RC1..I-RC6), `drm-router` serial 15/15 (I-SR1..I-SR6), `drm-workspace` handles 10/10 + verify 12/12 (I-H3/I-H4/I-H7), MCU host parity + zero-forbidden-heap audit; `cargo xtask test` green |
+| `STUDIO_PROTOCOL_DOC` | merged (protocol-level scope) | merged — [studio-protocol.md](../algorithms/studio/studio-protocol.md): `StudioTransport` + `EventStream`; capability handshake; typed command set; revisioned concurrency (`base_revision`/`CONFLICT`); journaled ChangeSets; conditional undo; format-preserving editing; run-session supervisor; control/data-plane separation; trust gate; extension budgets; I-ST1..I-ST13; explicit post-1.0 deferred list |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Phase 32 gate** ([m17w2.md](../gates/m17w2.md)): criteria → evidence across
+  every Phase 32 submodule suite; signed by E4. Tracker
+  [phase-32.md](../gates/phase-32.md) status → **PASS** (M17W2); the stale
+  "RPC/actions, full diag daemon pending" row resolved to the completed M16/M17
+  evidence.
+- **Studio protocol doc** ([studio-protocol.md](../algorithms/studio/studio-protocol.md)
+  §Formal Merge (M17W2)): protocol-level scope locked; `StudioTransport`
+  abstraction and named events (`workspaceChanged`, `diagnosticsChanged`,
+  `buildOutput`, `nodeStarted`, `nodeStopped`, `runtimeStats`); I-ST1..I-ST10
+  (plus I-ST11..I-ST13) defined; explicit deferred post-1.0 list (creation
+  dialogs, editors, Inspector UI, command palette/keyboard, DataStore UI, remote
+  web mode, web sandbox, native adapters, `.drmx`, `drm-visual-schemas`).
+- **Registry + changelog**: [CHANGELOG.md](../../CHANGELOG.md) M17W2 tranche;
+  [registry.csv](../req/registry.csv) `REQ-STUDIO-*` rows already map the doc's
+  test matrix (protocol-level, `specified`).
+
+Notes:
+
+- No architecture divergence: pinned invariants only; no ADR.
+- Studio scope stays protocol-level; UI surfaces are deferred post-1.0. Studio
+  implementation (`drm studio --stdio` host, JSON-RPC dispatch, TS codegen)
+  starts M17W3.
+
+### Weekly gate checklist (chaired by E4, Friday)
+
+- [x] `GATE_STATUS(Phase 32) = PASS` (E4 signs)
+- [x] `STUDIO_PROTOCOL_DOC = merged`
+- [x] Variables measured; PR hygiene
+- **`GATE_STATUS(Phase 32) = PASS`**
+
+### How to reproduce
+
+```text
+cargo test -p drm-diag
+cargo test -p drm-core --test trace
+cargo test -p drm-rpc
+cargo test -p drm-record
+cargo test -p drm-router --lib transport::serial
+cargo test -p drm-workspace --test handle_stability --test verify_engine
+make -C bindings/c/mcu host-test host-audit
+cargo xtask audit-traceability
+cargo xtask check-layering
+```

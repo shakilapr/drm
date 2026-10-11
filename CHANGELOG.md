@@ -11,6 +11,22 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M17 W2 tranche: Phase 32 gate (operational tooling) + Studio protocol doc.
+  The Phase 32 gate closes with every submodule conformance suite green
+  (introspection/diag, trace, RPC, record/replay, serial interop, handles/verify,
+  MCU host parity + zero-forbidden-heap audit); evidence
+  [m17w2.md](docs/gates/m17w2.md), tracker
+  [phase-32.md](docs/gates/phase-32.md) status → PASS. The protocol-level Studio
+  doc [studio-protocol.md](docs/algorithms/studio/studio-protocol.md) is merged:
+  `StudioTransport` abstraction, capability handshake, typed command set, named
+  events, revisioned optimistic concurrency, journaled ChangeSets, conditional
+  undo, format-preserving editing, run-session supervisor, control/data-plane
+  separation, workspace-trust gate, and extension-host budgets; invariants
+  I-ST1..I-ST13 defined with an explicit post-1.0 deferred list (creation
+  dialogs, editors, Inspector UI, command palette/keyboard, DataStore UI, remote
+  web mode, web sandbox, native adapters, `.drmx`, `drm-visual-schemas`).
+  [metrics-m17.md](docs/metrics/metrics-m17.md) records
+  `GATE_STATUS(Phase 32) = PASS`, `STUDIO_PROTOCOL_DOC = merged`.
 - Week M17 W1 tranche: Phase 32 close-out gates — introspection, trace, RPC.
   `drm-rpc` adds `rpc_capacity_busy_gap_forward` (the `rpc_capacity` cell): a full
   client correlation table returns `RpcError::Busy`; a full server operation table

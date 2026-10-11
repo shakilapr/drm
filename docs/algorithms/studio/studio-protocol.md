@@ -74,6 +74,18 @@ pub struct RunSession {
     nodes: Vec<NodeProcess>,                   // pid, stdout/stderr capture, status
     run_config: RunConfig,                     // disconnect policy lives here
 }
+
+// Frontend transport abstraction (ui-architecture §Control and Data Planes):
+// desktop stdio and remote web share one React app; only the transport changes.
+pub trait StudioTransport {
+    fn request(&mut self, command: StudioRequest) -> Result<StudioResponse, Status>;
+    fn events(&mut self) -> EventStream;
+    fn open_data_stream(&mut self, request: StreamRequest) -> BinaryStream; // control plane never carries sample bytes (I-ST3)
+}
+pub enum EventStream {
+    WorkspaceChanged, DiagnosticsChanged, BuildOutput,
+    NodeStarted, NodeStopped, RuntimeStats,
+}
 ```
 
 ## Invariants
@@ -190,6 +202,31 @@ The formal Studio doc is authored M17W2; this week locks the approach.
 
 Deferred scope (post-1.0): creation UI, editors, Inspector, and remote-web serving. Deltas:
 none — this section records the review; implementation starts Phase 32/33 (M15W1+).
+
+## Formal Merge (M17W2)
+
+The protocol-level doc is merged at M17W2 (E4 author, E2 review). Scope is
+protocol-level only: the engine bridge, transport abstraction, handshake,
+revisioned concurrency, journaled ChangeSets, conditional undo,
+format-preserving editing, run-session supervisor, control/data-plane
+separation, trust gate, and extension budgets. Invariants I-ST1..I-ST10 (plus
+I-ST11..I-ST13) are defined above; the test matrix names each anchor. Creation
+UI/editors/Inspector/remote-web are deferred — see the explicit list below.
+
+### Deferred Post-1.0 Scope (explicit)
+
+| Item | Disposition |
+|---|---|
+| Creation dialogs (wizards/forms) | deferred post-1.0 |
+| Editors (text/graph) | deferred post-1.0 |
+| Inspector UI | deferred post-1.0 |
+| Command palette / keyboard map | deferred post-1.0 |
+| DataStore UI | deferred post-1.0 |
+| Remote web mode | deferred post-1.0; direct listening disabled until TLS, origin validation, authentication |
+| Web sandbox | deferred post-1.0 |
+| Native adapters | deferred post-1.0 |
+| `.drmx` packaging | deferred post-1.0 |
+| `drm-visual-schemas` | deferred post-1.0 |
 
 ## Edge Cases & Errors
 

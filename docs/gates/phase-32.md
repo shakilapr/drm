@@ -1,4 +1,4 @@
-# Phase 32 Gate — Operational Tooling (in progress)
+# Phase 32 Gate — Operational Tooling
 
 Normative sources: [work-plan.md](../../work-plan.md) W6 Phase 32;
 [observability-plane.md](../algorithms/ops/observability-plane.md),
@@ -7,8 +7,10 @@ Normative sources: [work-plan.md](../../work-plan.md) W6 Phase 32;
 [serial-mcu.md](../algorithms/router/serial-mcu.md). Owner: E1 (trace/RPC),
 E2 (spatial parser groundwork), E3 (serial/MCU), E4 (introspection/diag).
 
-Status: **IN PROGRESS** (opens M15, Phase 32 gate at M17W2). Sub-designs locked
-at M14W4 ([tooling-design-lock.md](../spec/tooling-design-lock.md)).
+Status: **PASS** (M17W2) — every Phase 32 submodule conformance suite is green;
+sub-designs locked at M14W4 ([tooling-design-lock.md](../spec/tooling-design-lock.md));
+gate evidence [m17w2.md](m17w2.md). Studio protocol doc merged protocol-level
+([studio-protocol.md](../algorithms/studio/studio-protocol.md)).
 
 ## Wave A (M15) — introspection + trace + diag + MCU start
 
@@ -25,7 +27,7 @@ at M14W4 ([tooling-design-lock.md](../spec/tooling-design-lock.md)).
 | Record-core ingress (borrow-copy-release, bounded slabs, policies) | `crates/drm-record`; `record_borrow_scope`/`record_bounded`/`record_policies`/`record_gap_ledger` (I-RC1/2/3/5); [m15w2.md](m15w2.md) | PASS |
 | Record disk stage + MCAP framing (DRM metadata, gaps) | `crates/drm-record/src/{mcap,disk}.rs`; `record_disk_mcap`/`record_mcap_drm_meta`/`record_mcap_zstd` (I-RC6, REQ-OPS-006); [m15w4.md](m15w4.md) | PASS |
 | Replay pipeline (faithful read/publish, scheduler, isolated namespace) | `crates/drm-record/src/replay.rs`; `replay_roundtrip`/`replay_publisher_faithful`/`replay_reader_epoch` (I-RC4, REQ-OPS-009); [m15w4.md](m15w4.md) | PASS |
-| RPC/actions, full diag daemon | scheduled M16–M18 | pending |
+| RPC/actions, full diag daemon | `drm-rpc` + `drm-diag`; `dispatch_concurrent_no_cross_correlation`/`cancel_at_each_phase_boundary`/`diag_observed_rate`/`diag_deadline_matrix` (I-RPC1..I-RPC3/I-OB3/I-OB4, REQ-OPS-001/011/013); [m16w1.md](m16w1.md)–[m17w1.md](m17w1.md) | PASS (M17W1) |
 | RPC request/response + cid dispatch + deadline (unary) | `crates/drm-rpc`; `call_round_trip`/`call_remote_failure`/`dispatch_concurrent_no_cross_correlation`/`dispatch_admission_busy`/`dispatch_timeout_expires_and_late_terminal_stale`/`server_session_stale_dropped`/`event_order_invalid_terminal_first` (I-RPC1/3/4/6/7/9/10, REQ-OPS-011/012/013/020/021/022/023/025); [m16w1.md](m16w1.md) | PASS (M16W1) |
 | RPC action phase machine + phase-boundary cancel; dispatch ×16 | `crates/drm-rpc/src/action.rs`; `action_runs_all_phases`/`cancel_at_each_phase_boundary`/`dispatch_concurrent_no_cross_correlation` (C ∈ 1..=16) (I-RPC1/2/8, REQ-OPS-010/011/013); [m16w2.md](m16w2.md) | PASS (M16W2) |
 | RPC per-phase state-transition observation + cancel ack | `crates/drm-rpc/src/client.rs` per-kind counters; `action_runs_all_phases`/`cancel_at_each_phase_boundary` (I-RPC2/I-RPC10, REQ-OPS-010/011/025); [m16w3.md](m16w3.md) | PASS (M16W3) |
@@ -96,8 +98,18 @@ protocol-level; the following Studio UI items stay out of 1.0 scope.
   suites are wired as permanent blocking CI gates. Deferred post-1.0 Studio UI
   scope recorded above. The Phase 32 gate (all submodules) closes at M17W2
   ([m17w1.md](m17w1.md)).
+- M17W2 closed the Phase 32 gate: all submodule conformance suites re-run green
+  (introspection/diag 10/10, trace 4/4, RPC 12/12, record/replay 18/18, serial
+  15/15, handles/verify 10/10 + 12/12, MCU host parity + zero-heap audit) and
+  the protocol-level Studio doc merged
+  ([studio-protocol.md](../algorithms/studio/studio-protocol.md), I-ST1..I-ST13;
+  [m17w2.md](m17w2.md)). Studio implementation starts M17W3.
 
-REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004, REQ-OPS-005,
+REQ: REQ-STUDIO-001, REQ-STUDIO-002, REQ-STUDIO-003, REQ-STUDIO-004,
+REQ-STUDIO-005, REQ-STUDIO-006, REQ-STUDIO-007, REQ-STUDIO-008,
+REQ-STUDIO-009, REQ-STUDIO-010, REQ-STUDIO-011, REQ-STUDIO-012,
+REQ-STUDIO-013, REQ-STUDIO-014,
+REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004, REQ-OPS-005,
 REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-009, REQ-OPS-010,
 REQ-OPS-011, REQ-OPS-012, REQ-OPS-013, REQ-OPS-014,
 REQ-OPS-015, REQ-OPS-016, REQ-OPS-017, REQ-OPS-018, REQ-OPS-019,
