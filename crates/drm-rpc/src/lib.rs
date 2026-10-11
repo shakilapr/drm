@@ -13,18 +13,24 @@
 //! Layer `ops` (codebase.md 2.1): depends on `drm-types` + `drm-core` only,
 //! never on another ops crate. `#![forbid(unsafe_code)]`.
 //!
-//! M16W1 scope: unary request/response (`call`/`serve`), cid dispatch
-//! (`I-RPC1`), relative-budget deadlines (`I-RPC3`), and server-session
-//! identity (`I-RPC9`); the action phase machine and deterministic cancel
-//! protocol land in M16W2/M16W3.
+//! M16W2 scope adds the action phase machine with phase-boundary cancellation
+//! (`I-RPC2`): a long-running action executes one declared [`action::Phase`]
+//! per reactor worker step and stops at the next boundary once the cancel token
+//! is observed, with `Terminal(Cancelled)` following. `expected_max_duration_ns`
+//! is SLO metadata only (`I-RPC8`). The unary request/response slice
+//! (`call`/`serve`), cid dispatch (`I-RPC1`), relative-budget deadlines
+//! (`I-RPC3`), and server-session identity (`I-RPC9`) landed in M16W1.
 //! REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-012, REQ-OPS-013, REQ-OPS-020,
 //! REQ-OPS-021, REQ-OPS-022, REQ-OPS-023, REQ-OPS-024, REQ-OPS-025.
 
 #![forbid(unsafe_code)]
 
+pub mod action;
 pub mod client;
 pub mod codec;
 pub mod server;
+
+pub use action::{ActionContext, ActionExec, ActionState, ActionStep, Phase};
 
 use drm_types::Status;
 

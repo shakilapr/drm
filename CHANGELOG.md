@@ -11,6 +11,20 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M16 W2 tranche: RPC action phase machine + trace/record gate prep. NEW
+  [action.rs](crates/drm-rpc/src/action.rs) (`ActionState`/`ActionContext`/
+  `Phase`/`ActionExec`) executes one declared phase per reactor worker step so
+  the reactor observes the cancel token at every phase boundary; no new phase
+  starts after observation and the terminal is `Terminal(Cancelled)` (`I-RPC2`),
+  with `expected_max_duration_ns` SLO metadata only (`I-RPC8`). The
+  [server](crates/drm-rpc/src/server.rs) gains a shared cancel token,
+  `UnaryService::action`/`finish`, and the `action_phases_run` counter; the
+  dispatch fixture now covers `C ∈ 1..=16`. `drm-record` adds
+  `record_slab_full_boundary_exact` (slab boundary exactness; backpressure loses
+  nothing). Trace gates re-run (`trace_never_blocks`/`trace_drop_counter`, I-OB1/
+  I-OB6). Gate evidence [m16w2.md](docs/gates/m16w2.md); [metrics-m16.md](docs/metrics/metrics-m16.md)
+  records `TRACE_GATES = 1`, `RPC_DISPATCH_FULL = 1`, `RPC_CANCEL_GREEN = 1`,
+  `DIAG_POLISH = 1`.
 - Week M16 W1 tranche: RPC implementation start. NEW [drm-rpc](crates/drm-rpc)
   ops crate (`#![forbid(unsafe_code)]`; depends on `drm-types` + `drm-core` only):
   a bounded wire [codec](crates/drm-rpc/src/codec.rs) for

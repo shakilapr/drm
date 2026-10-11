@@ -594,6 +594,92 @@ fn record_slow_disk_policy() {
     assert_eq!(bp_summary.gap_sequences, 0);
 }
 
+/// REQ: REQ-OPS-008, REQ-OPS-019 — I-RC2/I-RC3: the slab pool admits exactly
+/// `slot_count` samples; the next sample hits the boundary and follows the
+/// policy, and freeing one slot restores admission (no off-by-one in the
+/// accounting). `Backpressure` pauses at the same boundary with the slot
+/// retained and loses nothing.
+#[test]
+fn record_slab_full_boundary_exact() {
+    let ch = chan(8, 9);
+    let mut rec = build(vec![spec(1, 16, 2, 8)], OnFull::Drop, 8);
+    for i in 0..2_u64 {
+        assert!(ch.publish(&[u8::try_from(i).unwrap_or(0); 16]).is_ok());
+        assert_eq!(
+            rec.ingress_step(0, &ch, 0, i, i)
+                .unwrap_or_else(|e| unreachable!("{e:?}")),
+            IngressStep::Recorded,
+            "sample {i} admitted at the boundary"
+        );
+    }
+    assert_eq!(
+        rec.slab(0)
+            .unwrap_or_else(|| unreachable!("slab"))
+            .free_count(),
+        0,
+        "exactly capacity slots consumed"
+    );
+    assert!(ch.publish(&[0xEE; 16]).is_ok());
+    assert_eq!(
+        rec.ingress_step(0, &ch, 0, 2, 2)
+            .unwrap_or_else(|e| unreachable!("{e:?}")),
+        IngressStep::PolicyDropped,
+        "one past capacity drops"
+    );
+    assert_eq!(
+        rec.ledger(0)
+            .unwrap_or_else(|| unreachable!("ledger"))
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![PendingGap {
+            first_seq: 2,
+            last_seq: 2,
+            reason: GapReason::PolicyDrop,
+        }],
+        "the boundary drop is exact"
+    );
+    assert!(rec.drain_one().is_some(), "frees exactly one slot");
+    assert_eq!(
+        rec.slab(0)
+            .unwrap_or_else(|| unreachable!("slab"))
+            .free_count(),
+        1
+    );
+    assert!(ch.publish(&[0x11; 16]).is_ok());
+    assert_eq!(
+        rec.ingress_step(0, &ch, 0, 3, 3)
+            .unwrap_or_else(|e| unreachable!("{e:?}")),
+        IngressStep::Recorded,
+        "admission resumes after a slot frees"
+    );
+    assert_eq!(rec.active_borrows(), 0);
+
+    let bp_ch = chan(8, 9);
+    let mut bp = build(vec![spec(1, 16, 1, 8)], OnFull::Backpressure, 8);
+    assert!(bp_ch.publish(&[1_u8; 16]).is_ok());
+    assert_eq!(
+        bp.ingress_step(0, &bp_ch, 0, 0, 0)
+            .unwrap_or_else(|e| unreachable!("{e:?}")),
+        IngressStep::Recorded
+    );
+    assert!(bp_ch.publish(&[2_u8; 16]).is_ok());
+    assert_eq!(
+        bp.ingress_step(0, &bp_ch, 0, 1, 1)
+            .unwrap_or_else(|e| unreachable!("{e:?}")),
+        IngressStep::Paused,
+        "backpressure pauses at the boundary"
+    );
+    assert_eq!(bp.active_borrows(), 0);
+    assert_eq!(
+        bp.ledger(0)
+            .unwrap_or_else(|| unreachable!("ledger"))
+            .live_ranges(),
+        0,
+        "no loss at the boundary"
+    );
+}
+
 /// REQ: REQ-OPS-007 — I-RC1: the disk stage runs on a dedicated OS thread,
 /// holds no DRM handle, and the recorder observes zero outstanding borrows
 /// (thread-affinity isolation).

@@ -9,11 +9,13 @@
 //! REQ-OPS-025.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use drm_core::channel::{Channel, ReadOutcome, ReaderState};
 use drm_types::Status;
 
+use crate::action::{ActionContext, ActionExec, ActionStep, Phase, outcome_from};
 use crate::codec::{self, Cancel, Request, RpcEvent};
 use crate::{CorrelationId, EventKind, Outcome, RpcError};
 
@@ -22,13 +24,29 @@ use crate::{CorrelationId, EventKind, Outcome, RpcError};
 const RETRY_BUDGET: u32 = 4;
 
 /// One admitted operation's execution contract. The M16W1 server runs unary
-/// handlers; the action phase machine lands in M16W3.
+/// handlers; the M16W2 server also drives declared [`Phase`] sequences via
+/// [`UnaryService::action`].
 /// REQ: REQ-OPS-010.
 pub trait UnaryService {
     /// Executes one admitted request from owned bytes, returning the terminal
     /// status and payload. Runs on the bounded worker pool, never the reactor.
     /// REQ: REQ-OPS-010.
     fn handle(&mut self, request: &[u8]) -> (Status, Vec<u8>);
+
+    /// Declared action phases for an admitted request, or `None` for a unary
+    /// request (`I-RPC4`: no new channel semantics). Phases run one per worker
+    /// step so the reactor observes cancellation between them (`I-RPC2`).
+    /// REQ: REQ-OPS-010, REQ-OPS-011.
+    fn action(&self, _request: &[u8]) -> Option<&'static [Phase]> {
+        None
+    }
+
+    /// Terminal payload derived from a completed action's final state; empty by
+    /// default. Called only on a natural `Terminal` (never on `Cancelled`).
+    /// REQ: REQ-OPS-010.
+    fn finish(&self, _state: &crate::action::ActionState) -> Vec<u8> {
+        Vec::new()
+    }
 }
 
 /// Bounded per-client outbox (`rpc-actions.md` §Functions outbox). Lifecycle and
@@ -207,7 +225,8 @@ struct Operation {
     client_id: u32,
     request: Vec<u8>,
     server_deadline_ns: Option<u64>,
-    cancel_requested: bool,
+    cancel_token: Arc<AtomicBool>,
+    action: Option<ActionExec>,
 }
 
 /// Fixed-capacity operation table; a reservation includes the operation's
@@ -281,6 +300,7 @@ pub struct RpcServer<'a, S: UnaryService> {
     unknown_cancel_count: u64,
     duplicate_cid_count: u64,
     outbox_overflow_count: u64,
+    action_phases_run: u64,
     served: u64,
 }
 
@@ -316,6 +336,7 @@ impl<'a, S: UnaryService> RpcServer<'a, S> {
             unknown_cancel_count: 0,
             duplicate_cid_count: 0,
             outbox_overflow_count: 0,
+            action_phases_run: 0,
             served: 0,
         })
     }
@@ -351,41 +372,118 @@ impl<'a, S: UnaryService> RpcServer<'a, S> {
 
     /// Runs the bounded worker pool once: executes each ready operation's
     /// handler (or `Cancelled` when the token was observed) and commits the
-    /// terminal to its outbox (`rpc-actions.md` §Functions `run_unary`).
-    /// REQ: REQ-OPS-010, REQ-OPS-022.
+    /// terminal to its outbox (`rpc-actions.md` §Functions `run_unary`). A
+    /// declared action advances exactly one phase per call and is re-queued, so
+    /// the reactor observes cancellation at every phase boundary (`I-RPC2`).
+    /// REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-022.
     pub fn run_workers(&mut self) -> usize {
         let mut ran = 0;
-        while let Some(slot) = self.ready.pop_front() {
+        let batch = self.ready.len();
+        for _ in 0..batch {
+            let Some(slot) = self.ready.pop_front() else {
+                break;
+            };
             let Some(op) = self.ops.take(slot) else {
                 continue;
             };
-            let cid = op.cid;
-            let client_id = op.client_id;
-            let terminal = if op.cancel_requested {
-                self.event(
-                    cid,
-                    EventKind::Terminal(Outcome::Cancelled),
-                    Status::Ok,
-                    Vec::new(),
-                )
+            if op.action.is_some() {
+                self.run_action_step(slot, op);
             } else {
-                let (status, payload) = self.service.handle(&op.request);
-                let outcome = if status == Status::Ok {
-                    Outcome::Succeeded
-                } else {
-                    Outcome::Aborted
-                };
-                self.event(cid, EventKind::Terminal(outcome), status, payload)
-            };
-            if let Some(link) = self.clients.iter_mut().find(|c| c.client_id == client_id)
-                && !link.outbox.commit(terminal)
-            {
-                self.outbox_overflow_count = self.outbox_overflow_count.saturating_add(1);
+                self.run_unary(&op);
             }
-            self.served = self.served.saturating_add(1);
             ran += 1;
         }
         ran
+    }
+
+    /// Executes one unary operation: the handler, or `Terminal(Cancelled)` when
+    /// the token was observed before the handler ran.
+    /// REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-022.
+    fn run_unary(&mut self, op: &Operation) {
+        let terminal = if op.cancel_token.load(Ordering::Acquire) {
+            self.event(
+                op.cid,
+                EventKind::Terminal(Outcome::Cancelled),
+                Status::Ok,
+                Vec::new(),
+            )
+        } else {
+            let (status, payload) = self.service.handle(&op.request);
+            let outcome = outcome_from(status);
+            self.event(op.cid, EventKind::Terminal(outcome), status, payload)
+        };
+        self.commit_to(op.client_id, terminal);
+        self.served = self.served.saturating_add(1);
+    }
+
+    /// Advances a declared action by one phase, emitting `Started` on the first
+    /// step, `Progress` after each completed phase, and `Terminal` on completion
+    /// or cancellation. A cancelled action stops at the next phase boundary with
+    /// no further phase executed (`I-RPC2`).
+    /// REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-022, REQ-OPS-025.
+    fn run_action_step(&mut self, slot: usize, mut op: Operation) {
+        let Some(mut exec) = op.action.take() else {
+            return;
+        };
+        let ctx = ActionContext::new(&op.cancel_token);
+        if !exec.started() {
+            if ctx.cancelled() {
+                let ev = self.event(
+                    op.cid,
+                    EventKind::Terminal(Outcome::Cancelled),
+                    Status::Ok,
+                    Vec::new(),
+                );
+                self.commit_to(op.client_id, ev);
+                self.served = self.served.saturating_add(1);
+                return;
+            }
+            exec.mark_started();
+            let ev = self.event(op.cid, EventKind::Started, Status::Ok, Vec::new());
+            self.commit_to(op.client_id, ev);
+        }
+        let before = exec.phase_index();
+        let step = exec.step(&ctx);
+        let ran = exec.phase_index().saturating_sub(before);
+        self.action_phases_run = self
+            .action_phases_run
+            .saturating_add(u64::try_from(ran).unwrap_or(0));
+        match step {
+            ActionStep::Cancelled => {
+                let ev = self.event(
+                    op.cid,
+                    EventKind::Terminal(Outcome::Cancelled),
+                    Status::Ok,
+                    Vec::new(),
+                );
+                self.commit_to(op.client_id, ev);
+                self.served = self.served.saturating_add(1);
+            }
+            ActionStep::Progress => {
+                let ev = self.event(op.cid, EventKind::Progress, Status::Ok, Vec::new());
+                self.commit_to(op.client_id, ev);
+                op.action = Some(exec);
+                self.ops.place(slot, op);
+                self.ready.push_back(slot);
+            }
+            ActionStep::Done(outcome, status) => {
+                let payload = self.service.finish(exec.state());
+                let ev = self.event(op.cid, EventKind::Terminal(outcome), status, payload);
+                self.commit_to(op.client_id, ev);
+                self.served = self.served.saturating_add(1);
+            }
+        }
+    }
+
+    /// Commits an event to the outbox of `client_id`, counting a guaranteed
+    /// overflow (which admission sizing prevents).
+    /// REQ: REQ-OPS-022.
+    fn commit_to(&mut self, client_id: u32, ev: RpcEvent) {
+        if let Some(link) = self.clients.iter_mut().find(|c| c.client_id == client_id)
+            && !link.outbox.commit(ev)
+        {
+            self.outbox_overflow_count = self.outbox_overflow_count.saturating_add(1);
+        }
     }
 
     /// Builds an event stamped with this server's session.
@@ -434,23 +532,13 @@ impl<'a, S: UnaryService> RpcServer<'a, S> {
             self.unknown_cancel_count = self.unknown_cancel_count.saturating_add(1);
             return;
         };
-        let mut first = false;
-        if let Some(op) = self.ops.get_mut(slot)
-            && !op.cancel_requested
-        {
-            op.cancel_requested = true;
-            first = true;
-        }
+        let first = self
+            .ops
+            .get_mut(slot)
+            .is_some_and(|op| !op.cancel_token.swap(true, Ordering::AcqRel));
         if first {
             let ev = self.event(cid, EventKind::CancelAccepted, Status::Ok, Vec::new());
-            if let Some(link) = self
-                .clients
-                .iter_mut()
-                .find(|c| c.client_id == cid.client_id)
-                && !link.outbox.commit(ev)
-            {
-                self.outbox_overflow_count = self.outbox_overflow_count.saturating_add(1);
-            }
+            self.commit_to(cid.client_id, ev);
         }
     }
 
@@ -494,20 +582,23 @@ impl<'a, S: UnaryService> RpcServer<'a, S> {
             let deadline = request
                 .remaining_budget_ns
                 .map(|budget| now_ns.saturating_add(budget));
+            let (request_bytes, action) = match self.service.action(&request.payload) {
+                Some(phases) => (Vec::new(), Some(ActionExec::new(phases, request.payload))),
+                None => (request.payload, None),
+            };
             self.ops.place(
                 slot,
                 Operation {
                     cid,
                     client_id,
-                    request: request.payload,
+                    request: request_bytes,
                     server_deadline_ns: deadline,
-                    cancel_requested: false,
+                    cancel_token: Arc::new(AtomicBool::new(false)),
+                    action,
                 },
             );
             let accepted = self.event(cid, EventKind::Accepted, Status::Ok, Vec::new());
-            if !self.clients[i].outbox.commit(accepted) {
-                self.outbox_overflow_count = self.outbox_overflow_count.saturating_add(1);
-            }
+            self.commit_to(client_id, accepted);
             self.ready.push_back(slot);
         }
         if n != 0 {
@@ -521,12 +612,11 @@ impl<'a, S: UnaryService> RpcServer<'a, S> {
     /// REQ: REQ-OPS-023.
     fn expire_deadlines(&mut self, now_ns: u64) {
         for op in self.ops.iter_mut() {
-            if !op.cancel_requested
-                && op
-                    .server_deadline_ns
-                    .is_some_and(|deadline| now_ns >= deadline)
+            if op
+                .server_deadline_ns
+                .is_some_and(|deadline| now_ns >= deadline)
             {
-                op.cancel_requested = true;
+                op.cancel_token.store(true, Ordering::Release);
             }
         }
     }
@@ -583,6 +673,15 @@ impl<'a, S: UnaryService> RpcServer<'a, S> {
     #[must_use]
     pub fn served(&self) -> u64 {
         self.served
+    }
+
+    /// Total action phases executed across the server's lifetime; a cancel
+    /// observed at a boundary leaves this unchanged for the cancelled operation
+    /// (`I-RPC2`).
+    /// REQ: REQ-OPS-010, REQ-OPS-011.
+    #[must_use]
+    pub fn action_phases_run(&self) -> u64 {
+        self.action_phases_run
     }
 
     /// Operation-table occupancy.

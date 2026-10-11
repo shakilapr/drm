@@ -57,3 +57,56 @@ cargo test -p drm-record replay_roundtrip
 cargo xtask audit-traceability
 cargo xtask check-layering
 ```
+
+## M16W2 — Record Gate Prep, Trace Gates, RPC Completion
+
+| Variable | Target | Measured |
+|---|---|---|
+| `TRACE_GATES` | I-OB1/I-OB6 suites green | 1 — `cargo test -p drm-core trace` 4/4: `trace_never_blocks` (1/2/4/16 producers, stopped reader, bounded tail cost, every excess emit counted once), `trace_drop_counter` (full lane retains exactly capacity), `trace_lane_exhaustion` (`no_lane_drops`, no growth) |
+| `RPC_DISPATCH_FULL` | I-RPC1 C ∈ 1..=16 green | 1 — `dispatch_concurrent_no_cross_correlation` loops `C ∈ 1..=16`; every client receives its own distinct response, zero stale |
+| `RPC_CANCEL_GREEN` | I-RPC2 deterministic cancel green | 1 — `cancel_at_each_phase_boundary` (`k ∈ 0..4`; cancel observed exactly at the next boundary, `action_phases_run` unchanged, `Terminal(Cancelled)`), `action_runs_all_phases` (Started → Progress ×4 → Succeeded), `cancel_accepted_terminal_cancelled` |
+| `DIAG_POLISH` | report complete; all conditions detected (I-OB4) | 1 — `drm-diag` `diag_deadline_matrix`, `diag_condition_matrix`, `diag_aggregate_report` (missed deadline, gap, pool exhaustion, epoch change, link down) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **RPC action phase machine** (`crates/drm-rpc/src/action.rs`): `ActionState`,
+  `ActionContext` (`cancelled`/`checkpoint`), `Phase`, `ActionExec`. The reactor
+  advances exactly one phase per `run_workers` call and re-queues the operation,
+  so cancellation is observed at every phase boundary; `expected_max_duration_ns`
+  stays SLO metadata (`I-RPC8`). `server.rs` gains the shared cancel token,
+  `UnaryService::action`/`finish`, and the `action_phases_run` counter. The
+  `dispatch` fixture covers `C ∈ 1..=16`.
+- **Record boundary test** (`record_slab_full_boundary_exact`): the slab pool
+  admits exactly `slot_count` samples, drops one past the boundary with an exact
+  ledger range, and resumes after a slot frees; `Backpressure` pauses at the same
+  boundary losing nothing.
+- Gate evidence [m16w2.md](../gates/m16w2.md); phase tracker
+  [phase-32.md](../gates/phase-32.md); [CHANGELOG.md](../../CHANGELOG.md) M16W2
+  tranche.
+
+Notes:
+
+- No architecture divergence: pinned invariants only (rpc-actions I-RPC2/I-RPC8,
+  observability-plane I-OB1/I-OB6, record-replay I-RC1..I-RC3/I-RC6); no ADR.
+- MCU 2 h target soak is deferred to the `mcu-cross` hardware lane (handover
+  deferral policy); host parity (`make host-test`) and the zero-forbidden-heap
+  audit (`make host-audit`) are green in-session.
+
+### Weekly gate checklist (chaired by E1, Friday)
+
+- [x] `TRACE_GATES = 1`; `RPC_DISPATCH_FULL = 1`; `RPC_CANCEL_GREEN = 1`; `DIAG_POLISH = 1`
+- [x] Variables measured; PR hygiene
+- **`GATE_STATUS(M16W2) = PASS`**
+
+### How to reproduce
+
+```text
+cargo test -p drm-core trace
+cargo test -p drm-rpc cancel
+cargo test -p drm-rpc dispatch
+cargo test -p drm-record
+make -C bindings/c/mcu host-test host-audit
+cargo xtask audit-traceability
+cargo xtask check-layering
+```

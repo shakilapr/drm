@@ -27,13 +27,31 @@ Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
 | Replay pipeline (faithful read/publish, scheduler, isolated namespace) | `crates/drm-record/src/replay.rs`; `replay_roundtrip`/`replay_publisher_faithful`/`replay_reader_epoch` (I-RC4, REQ-OPS-009); [m15w4.md](m15w4.md) | PASS |
 | RPC/actions, full diag daemon | scheduled M16–M18 | pending |
 | RPC request/response + cid dispatch + deadline (unary) | `crates/drm-rpc`; `call_round_trip`/`call_remote_failure`/`dispatch_concurrent_no_cross_correlation`/`dispatch_admission_busy`/`dispatch_timeout_expires_and_late_terminal_stale`/`server_session_stale_dropped`/`event_order_invalid_terminal_first` (I-RPC1/3/4/6/7/9/10, REQ-OPS-011/012/013/020/021/022/023/025); [m16w1.md](m16w1.md) | PASS (M16W1) |
-| RPC action phase machine + cancel protocol; dispatch ×16 | scheduled M16W2–M16W3 | pending |
+| RPC action phase machine + phase-boundary cancel; dispatch ×16 | `crates/drm-rpc/src/action.rs`; `action_runs_all_phases`/`cancel_at_each_phase_boundary`/`dispatch_concurrent_no_cross_correlation` (C ∈ 1..=16) (I-RPC1/2/8, REQ-OPS-010/011/013); [m16w2.md](m16w2.md) | PASS (M16W2) |
+
+## Phase 32 submodule suite mapping (M16W2)
+
+Each work-plan #32 criterion maps to a submodule suite with its artifact, test,
+and result. `PASS` = green in-session; `deferred` = hardware/CI-owned lane.
+
+| Submodule | Artifact | Test | Result |
+|---|---|---|---|
+| Introspection (`echo`/`hz`/`log`) | `crates/drm-cli/src/{echo,hz,log}.rs`; `drm-diag` `Observer` | `introspect_no_pin`; `echo_copies_and_reports_empty`, `hz_tolerance`, `render_and_filter` | PASS |
+| Diag aggregation | `crates/drm-diag/src/lib.rs` | `diag_no_overhead`, `diag_observed_rate`, `diag_deadline_matrix`, `diag_epoch_sandwich`, `diag_condition_matrix` | PASS |
+| Record / replay | `crates/drm-record/src/{lib,disk,mcap,replay}.rs` | `record_borrow_scope`, `record_bounded`, `record_slab_full_boundary_exact`, `record_policies`, `record_mcap_drm_meta`, `replay_roundtrip` | PASS |
+| Trace | `crates/drm-core/src/trace/mod.rs` | `trace_never_blocks`, `trace_drop_counter`, `trace_lane_exhaustion`, `trace_dict_roundtrip` | PASS |
+| RPC / actions | `crates/drm-rpc/src/{lib,codec,client,server,action}.rs` | `call_round_trip`, `dispatch_concurrent_no_cross_correlation` (C ∈ 1..=16), `cancel_at_each_phase_boundary`, `action_runs_all_phases` | PASS |
+| Serial / MCU | `crates/drm-router/src/transport/serial.rs`; `bindings/c/mcu/` | serial COBS/CRC32C host loopback; `make host-test host-audit` | PASS (host); 2 h target soak deferred |
 
 ## Notes
 
 - No architecture divergence in wave A: pinned invariants only; no ADR.
 - Remaining Phase 32 output (`drm record`, replay, `drm diag`, RPC/actions,
   constrained-device data path) is tracked in the M16–M19 weekly plans.
+- M16W2 closed the trace gates (I-OB1/I-OB6 re-run, `m16w2.md`) and the RPC
+  phase-boundary cancel + `C ∈ 1..=16` dispatch slice (I-RPC2, `m16w2.md`). The
+  action state-per-phase observations and the serial interop matrix continue in
+  M16W3.
 
 REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004, REQ-OPS-005,
 REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-009, REQ-OPS-010,

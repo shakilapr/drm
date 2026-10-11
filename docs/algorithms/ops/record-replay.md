@@ -134,6 +134,22 @@ Recorder pipeline reviewed against architecture §Memory Ownership (record lifec
 Deltas: none — the doc already states these; this section records the review. The
 implementation lands in Phase 32 (M15W1).
 
+## Implementation Status (M16W2)
+
+Record gate evidence re-run: `record_borrow_scope` (I-RC1 borrow window),
+`record_bounded` + `record_slab_full_boundary_exact` (I-RC2 exact budget, no
+off-by-one at the slab boundary), `record_policies` + `record_slow_disk_policy`
+(I-RC3 exact policy behavior at the descriptor/slab boundary), and
+`record_mcap_drm_meta` (I-RC6 DRM metadata + third-party MCAP parse).
+
+| Element | Location | Test |
+|---|---|---|
+| slab/decriptor boundary exactness | `crates/drm-record/src/lib.rs` | `record_slab_full_boundary_exact` |
+| slow-disk policy boundary | `crates/drm-record/src/tests.rs` | `record_slow_disk_policy` |
+| MCAP DRM metadata interop | `crates/drm-record/src/mcap.rs` | `record_mcap_drm_meta` |
+
+REQ: REQ-OPS-005, REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-019.
+
 ## Edge Cases & Errors
 
 | Case | Result |

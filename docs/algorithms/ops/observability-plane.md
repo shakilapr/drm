@@ -153,6 +153,15 @@ deployment metadata and report `NotFound` without a running publisher
 REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-014, REQ-OPS-015,
 REQ-OPS-016, REQ-OPS-017, REQ-CORE-093, REQ-CORE-094.
 
+### Trace gate evidence (M16W2)
+
+`cargo test -p drm-core trace` re-runs the never-blocks and drop-counter suites
+as gate M17W2 evidence: `trace_never_blocks` (1/2/4/16 producers, stopped
+reader, bounded tail cost; every excess emit counted once) and
+`trace_drop_counter` (full lane retains exactly capacity, counts each excess
+once) plus `trace_lane_exhaustion` (`no_lane_drops`, no growth). No invariant
+changed.
+
 ## Edge Cases & Errors
 
 | Case | Result |

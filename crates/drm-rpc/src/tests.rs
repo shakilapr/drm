@@ -1,12 +1,15 @@
 //! `drm-rpc` suite (`docs/algorithms/ops/rpc-actions.md` §Test Matrix;
-//! §Invariants I-RPC1/I-RPC3/I-RPC7/I-RPC9/I-RPC10). M16W1 covers unary
-//! request/response, cid dispatch, deadlines, and session identity.
+//! §Invariants I-RPC1/I-RPC2/I-RPC3/I-RPC7/I-RPC8/I-RPC9/I-RPC10). M16W1 covers
+//! unary request/response, cid dispatch, deadlines, and session identity;
+//! M16W2 adds the action phase machine with phase-boundary cancellation and the
+//! C ∈ 1..=16 dispatch fixture.
 //! REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-012, REQ-OPS-013, REQ-OPS-020,
 //! REQ-OPS-021, REQ-OPS-022, REQ-OPS-023, REQ-OPS-025.
 
 use drm_core::channel::{Channel, OverflowPolicy};
 use drm_types::Status;
 
+use crate::action::{ActionContext, ActionState, Phase};
 use crate::client::{CallConfig, RpcClient};
 use crate::codec::{self, Request, RpcEvent};
 use crate::server::{ClientLink, RpcServer, UnaryService};
@@ -60,6 +63,79 @@ struct Failing;
 impl UnaryService for Failing {
     fn handle(&mut self, _request: &[u8]) -> (Status, Vec<u8>) {
         (Status::InvalidArg, Vec::new())
+    }
+}
+
+/// Appends a distinct marker per phase; the terminal payload is the working
+/// bytes, so the test reads exactly which phases executed.
+/// REQ: REQ-OPS-010.
+fn phase_a(state: &mut ActionState, _ctx: &ActionContext) -> Status {
+    state.scratch_mut().push(b'A');
+    Status::Ok
+}
+
+/// Phase B marker (`phase_a`).
+/// REQ: REQ-OPS-010.
+fn phase_b(state: &mut ActionState, _ctx: &ActionContext) -> Status {
+    state.scratch_mut().push(b'B');
+    Status::Ok
+}
+
+/// Phase C marker; uses the cooperative checkpoint so a token observed
+/// mid-phase stops before the marker is written (`I-RPC2`).
+/// REQ: REQ-OPS-010, REQ-OPS-011.
+fn phase_c(state: &mut ActionState, ctx: &ActionContext) -> Status {
+    if !ctx.checkpoint() {
+        return Status::Ok;
+    }
+    state.scratch_mut().push(b'C');
+    Status::Ok
+}
+
+/// Phase D marker (`phase_a`).
+/// REQ: REQ-OPS-010.
+fn phase_d(state: &mut ActionState, _ctx: &ActionContext) -> Status {
+    state.scratch_mut().push(b'D');
+    Status::Ok
+}
+
+/// The four declared phases of [`PhaseAction`].
+/// REQ: REQ-OPS-010.
+static ACTION_PHASES: [Phase; 4] = [
+    Phase {
+        expected_max_duration_ns: 1_000_000,
+        execute: phase_a,
+    },
+    Phase {
+        expected_max_duration_ns: 1_000_000,
+        execute: phase_b,
+    },
+    Phase {
+        expected_max_duration_ns: 1_000_000,
+        execute: phase_c,
+    },
+    Phase {
+        expected_max_duration_ns: 1_000_000,
+        execute: phase_d,
+    },
+];
+
+/// Declares [`ACTION_PHASES`] for every request; the terminal payload is the
+/// accumulated phase markers.
+/// REQ: REQ-OPS-010, REQ-OPS-011.
+struct PhaseAction;
+
+impl UnaryService for PhaseAction {
+    fn handle(&mut self, request: &[u8]) -> (Status, Vec<u8>) {
+        (Status::Ok, request.to_vec())
+    }
+
+    fn action(&self, _request: &[u8]) -> Option<&'static [Phase]> {
+        Some(&ACTION_PHASES)
+    }
+
+    fn finish(&self, state: &ActionState) -> Vec<u8> {
+        state.scratch().to_vec()
     }
 }
 
@@ -145,65 +221,76 @@ fn call_remote_failure() {
     );
 }
 
-/// REQ: REQ-OPS-013 — I-RPC1: with C ∈ 1..=4 concurrent calls, every response is
-/// delivered to exactly its requesting client; responses never cross-correlate.
+/// REQ: REQ-OPS-013 — I-RPC1: with C ∈ 1..=16 concurrent calls, every response
+/// is delivered to exactly its requesting client; responses never
+/// cross-correlate.
 #[test]
 fn dispatch_concurrent_no_cross_correlation() {
-    let clients_n = 4_u32;
-    let mut requests: Vec<Channel> = Vec::new();
-    let mut cancels: Vec<Channel> = Vec::new();
-    let mut events: Vec<Channel> = Vec::new();
-    for _ in 0..clients_n {
-        requests.push(topic());
-        cancels.push(topic());
-        events.push(topic());
-    }
-    let mut clients: Vec<RpcClient<'_>> = Vec::new();
-    let mut links: Vec<ClientLink<'_>> = Vec::new();
-    for i in 0..clients_n {
-        let idx = usize::try_from(i).unwrap_or(0);
-        clients.push(
-            RpcClient::new(i, 1, &requests[idx], &cancels[idx], &events[idx], 4)
-                .unwrap_or_else(|e| unreachable!("client: {e:?}")),
-        );
-        links.push(
-            ClientLink::new(i, &requests[idx], &cancels[idx], &events[idx])
-                .unwrap_or_else(|e| unreachable!("link: {e:?}")),
-        );
-    }
-    let mut server =
-        RpcServer::new(0xBEEF, Reverse, links, 4).unwrap_or_else(|e| unreachable!("server: {e:?}"));
+    for clients_n in 1..=16_u32 {
+        let mut requests: Vec<Channel> = Vec::new();
+        let mut cancels: Vec<Channel> = Vec::new();
+        let mut events: Vec<Channel> = Vec::new();
+        for _ in 0..clients_n {
+            requests.push(topic());
+            cancels.push(topic());
+            events.push(topic());
+        }
+        let mut clients: Vec<RpcClient<'_>> = Vec::new();
+        let mut links: Vec<ClientLink<'_>> = Vec::new();
+        for i in 0..clients_n {
+            let idx = usize::try_from(i).unwrap_or(0);
+            clients.push(
+                RpcClient::new(i, 1, &requests[idx], &cancels[idx], &events[idx], 4)
+                    .unwrap_or_else(|e| unreachable!("client: {e:?}")),
+            );
+            links.push(
+                ClientLink::new(i, &requests[idx], &cancels[idx], &events[idx])
+                    .unwrap_or_else(|e| unreachable!("link: {e:?}")),
+            );
+        }
+        let mut server = RpcServer::new(
+            0xBEEF,
+            Reverse,
+            links,
+            usize::try_from(clients_n).unwrap_or(0),
+        )
+        .unwrap_or_else(|e| unreachable!("server: {e:?}"));
 
-    let mut cids: Vec<CorrelationId> = Vec::new();
-    for (i, client) in clients.iter_mut().enumerate() {
-        let byte = u8::try_from(i + 1).unwrap_or(1);
-        let cid = client
-            .submit(&[byte, byte, byte], Some(1_000_000), 0)
-            .unwrap_or_else(|e| unreachable!("submit: {e:?}"));
-        cids.push(cid);
-    }
-    server
-        .serve_step(0)
-        .unwrap_or_else(|e| unreachable!("serve: {e:?}"));
-    assert_eq!(server.ready(), usize::try_from(clients_n).unwrap_or(0));
-    server.run_workers();
-    server
-        .serve_step(0)
-        .unwrap_or_else(|e| unreachable!("flush: {e:?}"));
+        let mut cids: Vec<CorrelationId> = Vec::new();
+        for (i, client) in clients.iter_mut().enumerate() {
+            let byte = u8::try_from(i + 1).unwrap_or(1);
+            let cid = client
+                .submit(&[byte, byte, byte], Some(1_000_000), 0)
+                .unwrap_or_else(|e| unreachable!("submit: {e:?}"));
+            cids.push(cid);
+        }
+        server
+            .serve_step(0)
+            .unwrap_or_else(|e| unreachable!("serve: {e:?}"));
+        assert_eq!(server.ready(), usize::try_from(clients_n).unwrap_or(0));
+        server.run_workers();
+        server
+            .serve_step(0)
+            .unwrap_or_else(|e| unreachable!("flush: {e:?}"));
 
-    for (i, client) in clients.iter_mut().enumerate() {
-        client
-            .pump(0)
-            .unwrap_or_else(|e| unreachable!("pump: {e:?}"));
-        let reply = client
-            .take(cids[i])
-            .unwrap_or_else(|| unreachable!("reply missing for client {i}"))
-            .unwrap_or_else(|e| unreachable!("reply err: {e:?}"));
-        let byte = u8::try_from(i + 1).unwrap_or(1);
-        assert_eq!(reply, vec![byte, byte, byte], "client {i} own response");
-        assert_eq!(client.stale_event_count(), 0);
+        for (i, client) in clients.iter_mut().enumerate() {
+            client
+                .pump(0)
+                .unwrap_or_else(|e| unreachable!("pump: {e:?}"));
+            let reply = client
+                .take(cids[i])
+                .unwrap_or_else(|| unreachable!("reply missing for client {i}"))
+                .unwrap_or_else(|e| unreachable!("reply err: {e:?}"));
+            let byte = u8::try_from(i + 1).unwrap_or(1);
+            assert_eq!(
+                reply,
+                vec![byte, byte, byte],
+                "client {i} of {clients_n} own response"
+            );
+            assert_eq!(client.stale_event_count(), 0);
+        }
+        assert_eq!(server.served(), u64::from(clients_n));
     }
-    assert_eq!(server.served(), u64::from(clients_n));
 }
 
 /// REQ: REQ-OPS-023 — I-RPC3: a client deadline elapses ⇒ [`RpcError::Timeout`]
@@ -435,6 +522,122 @@ fn cancel_accepted_terminal_cancelled() {
         0,
         "lifecycle events are ordered"
     );
+}
+
+/// REQ: REQ-OPS-010 — a declared action executes its phases one per worker
+/// step, emits `Started` then a `Progress` per phase, and completes with
+/// `Terminal(Succeeded)` carrying the accumulated state.
+#[test]
+fn action_runs_all_phases() {
+    let request = topic();
+    let cancel = topic();
+    let event = topic();
+    let mut client = RpcClient::new(0, 1, &request, &cancel, &event, 4)
+        .unwrap_or_else(|e| unreachable!("client: {e:?}"));
+    let mut server = RpcServer::new(
+        0x11,
+        PhaseAction,
+        vec![
+            ClientLink::new(0, &request, &cancel, &event)
+                .unwrap_or_else(|e| unreachable!("link: {e:?}")),
+        ],
+        4,
+    )
+    .unwrap_or_else(|e| unreachable!("server: {e:?}"));
+    let cfg = CallConfig {
+        timeout_ns: None,
+        now_ns: 0,
+        max_iterations: 16,
+    };
+    let mut pump = || {
+        server.serve_step(0)?;
+        server.run_workers();
+        Ok(())
+    };
+    let reply = client
+        .call(b"in", cfg, &mut pump)
+        .unwrap_or_else(|e| unreachable!("call: {e:?}"));
+    assert_eq!(reply, b"inABCD", "input bytes plus four phase markers");
+    assert_eq!(server.action_phases_run(), 4);
+    assert_eq!(server.served(), 1);
+    assert_eq!(client.invalid_order_count(), 0);
+}
+
+/// REQ: REQ-OPS-011 — I-RPC2/I-RPC8: cancelling after `k` completed phases
+/// (`k` ∈ 0..4) is observed exactly at the next phase boundary; no further
+/// phase executes and the terminal is `Terminal(Cancelled)`.
+#[test]
+fn cancel_at_each_phase_boundary() {
+    for k in 0..4_usize {
+        let request = topic();
+        let cancel = topic();
+        let event = topic();
+        let mut client = RpcClient::new(0, 1, &request, &cancel, &event, 4)
+            .unwrap_or_else(|e| unreachable!("client: {e:?}"));
+        let mut server = RpcServer::new(
+            0x22,
+            PhaseAction,
+            vec![
+                ClientLink::new(0, &request, &cancel, &event)
+                    .unwrap_or_else(|e| unreachable!("link: {e:?}")),
+            ],
+            4,
+        )
+        .unwrap_or_else(|e| unreachable!("server: {e:?}"));
+        let cid = client
+            .submit(b"x", None, 0)
+            .unwrap_or_else(|e| unreachable!("submit: {e:?}"));
+        server
+            .serve_step(0)
+            .unwrap_or_else(|e| unreachable!("admit: {e:?}"));
+        for _ in 0..k {
+            server.run_workers();
+        }
+        assert_eq!(
+            server.action_phases_run(),
+            u64::try_from(k).unwrap_or(0),
+            "k={k} phases ran before the cancel"
+        );
+
+        let frame = codec::Cancel {
+            correlation_id: cid,
+        };
+        let mut buf = [0_u8; SAMPLE_MAX];
+        let n = codec::encode_cancel(&frame, &mut buf)
+            .unwrap_or_else(|e| unreachable!("encode: {e:?}"));
+        assert!(cancel.publish(&buf[..n]).is_ok());
+        server
+            .serve_step(0)
+            .unwrap_or_else(|e| unreachable!("cancel poll: {e:?}"));
+        assert_eq!(server.unknown_cancel_count(), 0, "k={k}");
+        server.run_workers();
+        server
+            .serve_step(0)
+            .unwrap_or_else(|e| unreachable!("flush: {e:?}"));
+        assert_eq!(
+            server.action_phases_run(),
+            u64::try_from(k).unwrap_or(0),
+            "no phase starts after the token is observed (k={k})"
+        );
+
+        client
+            .pump(0)
+            .unwrap_or_else(|e| unreachable!("pump: {e:?}"));
+        let err = client
+            .take(cid)
+            .unwrap_or_else(|| unreachable!("terminal missing k={k}"))
+            .err()
+            .unwrap_or_else(|| unreachable!("expected cancelled k={k}"));
+        assert_eq!(
+            err,
+            RpcError::Remote {
+                outcome: Outcome::Cancelled,
+                status: Status::Ok
+            },
+            "k={k}"
+        );
+        assert_eq!(client.invalid_order_count(), 0, "k={k}");
+    }
 }
 
 /// REQ: REQ-OPS-012, REQ-OPS-020, REQ-OPS-023, REQ-OPS-025 — codec round-trip

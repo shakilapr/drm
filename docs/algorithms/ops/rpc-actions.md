@@ -186,6 +186,26 @@ Seeds [§Functions](#functions): `call`, `pump_events`, `serve`, `poll_requests`
 and the outbox `commit`/`flush`. Deltas: none — this section records the review; the
 implementation lands in Phase 32 (M15W1).
 
+## Implementation Status (M16W2)
+
+The action phase machine landed in `crates/drm-rpc/src/action.rs`
+(`ActionState`, `ActionContext`, `Phase`, `ActionExec`). `UnaryService::action`
+declares a `&'static [Phase]` sequence; the reactor advances exactly one phase
+per `run_workers` call and re-queues the operation, so the reactor observes the
+cancel token at every phase boundary (`I-RPC2`). Cancellation is checked before
+and after each phase: no new phase starts once the token is observed and the
+terminal is `Terminal(Cancelled)`. `ActionContext::checkpoint` provides
+intra-phase cooperation; `Phase.expected_max_duration_ns` remains SLO metadata
+(`I-RPC8`). The `dispatch` fixture runs `C ∈ 1..=16` concurrent clients.
+
+| Element | Location | Test |
+|---|---|---|
+| `ActionState`/`ActionContext`/`Phase`/`ActionExec`/`ActionStep`, `run_action` stepping | `crates/drm-rpc/src/action.rs` | `action_runs_all_phases`, `cancel_at_each_phase_boundary` |
+| `UnaryService::action`/`finish`, `run_workers` phase stepping, cancel token | `crates/drm-rpc/src/server.rs` | `cancel_at_each_phase_boundary`, `action_phases_run` counter |
+| cid dispatch `C ∈ 1..=16` | `crates/drm-rpc/src/tests.rs` | `dispatch_concurrent_no_cross_correlation` |
+
+REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-013.
+
 ## Edge Cases & Errors
 
 | Case | Result |
