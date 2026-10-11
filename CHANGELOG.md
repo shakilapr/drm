@@ -11,6 +11,22 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M17 W4 tranche: Studio inspectors + run-session supervisor, month-17
+  review. The run-session supervisor
+  (`crates/drm-cli/src/studio/supervisor.rs`) owns `RunSession`s independently
+  of any renderer connection: sessions carry id/start time/node processes
+  (pid, captured stdout/stderr, status) and a `leave_running` disconnect
+  policy; a disconnect keeps sessions running, and closing with running nodes
+  prompts Leave-running/Stop — a close never kills or orphans a node process
+  (I-ST10, `REQ-STUDIO-010`). `apps/studio` adds the read-only inspectors
+  (Workspace/Topics/Nodes/System) and the Problems panel over TanStack Query,
+  with verify diagnostics carrying the typed `Severity` classes
+  (`error`/`warning`/`runtime`/`info`) that mirror the verify model; the
+  renderer holds zero DRM logic (I-ST1). Mutation audit
+  [studio-mutation-audit.md](docs/spec/studio-mutation-audit.md) clean. Gate
+  evidence [m17w4.md](docs/gates/m17w4.md) and month review
+  [month-17.md](docs/gates/month-17.md); [metrics-m17.md](docs/metrics/metrics-m17.md)
+  records `STUDIO_MVP = 1`, `RUN_SUPERVISOR = 1`, `MONTH17_REVIEW = ON_TRACK`.
 - Week M17 W3 tranche: Studio protocol implementation (host + scaffold).
   `drm studio --stdio [--trust]` lands the long-lived host
   (`crates/drm-cli/src/studio/`): a mandatory `Hello` capability handshake, typed

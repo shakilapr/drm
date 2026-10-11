@@ -41,8 +41,10 @@ export interface HelloAck {
   capabilities: Capability[];
 }
 
+export type Severity = "error" | "warning" | "runtime" | "info";
+
 export interface Diagnostic {
-  severity: string;
+  severity: Severity;
   message: string;
 }
 

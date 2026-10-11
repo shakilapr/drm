@@ -111,6 +111,12 @@ protocol-level; the following Studio UI items stay out of 1.0 scope.
   and the `apps/studio` renderer scaffold ([m17w3.md](m17w3.md);
   `STUDIO_PROTOCOL_GREEN = 1`, `MUTATIONS_REVISIONED = 1`,
   `STUDIO_SCAFFOLD = 1`).
+- M17W4 landed the run-session supervisor (I-ST10) and the read-only MVP:
+  `crates/drm-cli/src/studio/supervisor.rs` owns sessions independently of the
+  UI; `apps/studio` read-only inspectors + Problems panel render engine
+  snapshots (severity classes mirror the verify model). Mutation audit clean
+  ([m17w4.md](m17w4.md); [month-17.md](month-17.md);
+  `STUDIO_MVP = 1`, `RUN_SUPERVISOR = 1`, `MONTH17_REVIEW = ON_TRACK`).
 
 REQ: REQ-STUDIO-001, REQ-STUDIO-002, REQ-STUDIO-003, REQ-STUDIO-004,
 REQ-STUDIO-005, REQ-STUDIO-006, REQ-STUDIO-007, REQ-STUDIO-008,

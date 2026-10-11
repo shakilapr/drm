@@ -10,14 +10,16 @@
 //! - [`host`]: [`host::StudioHost`] state machine + [`host::serve_stdio`].
 //! - [`journal`]: journaled multi-file commit + crash recovery (I-ST8/I-ST12).
 //! - [`edit`]: `toml_edit`-based format-preserving manifest mutation (I-ST6).
+//! - [`supervisor`]: run sessions owned independently of the UI (I-ST10).
 //!
 //! REQ: REQ-STUDIO-001, REQ-STUDIO-003, REQ-STUDIO-007, REQ-STUDIO-009,
-//! REQ-STUDIO-011, REQ-STUDIO-013, REQ-STUDIO-014.
+//! REQ-STUDIO-010, REQ-STUDIO-011, REQ-STUDIO-013, REQ-STUDIO-014.
 
 pub mod edit;
 pub mod host;
 pub mod journal;
 pub mod protocol;
+pub mod supervisor;
 
 use std::io;
 use std::path::Path;
@@ -28,6 +30,10 @@ pub use host::{StudioHost, serve_stdio};
 pub use protocol::{
     Capability, Hello, HelloAck, ModelCommand, NodeSpec, PackageSpec, StudioRequest,
     StudioResponse, WorkspaceSnapshot,
+};
+pub use supervisor::{
+    CloseChoice, CloseDecision, CommandRunner, NodeHandle, ProcessRunner, ProcessStatus,
+    RunSession, RunSessionView, SessionStatus, Supervisor,
 };
 
 /// Runs the `drm studio --stdio` host over stdin/stdout. REQ: REQ-STUDIO-011.
@@ -40,7 +46,11 @@ pub fn run(root: &Path, trusted: bool) -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut rx = stdin.lock();
     let mut tx = stdout.lock();
-    serve_stdio(&mut host, &mut rx, &mut tx).map_err(|e| CliError::Io(e.to_string()))
+    let result = serve_stdio(&mut host, &mut rx, &mut tx).map_err(|e| CliError::Io(e.to_string()));
+    // Renderer disconnected: run sessions persist per their `leave_running`
+    // policy — the supervisor is never killed with the UI (I-ST10).
+    host.on_disconnect();
+    result
 }
 
 #[cfg(test)]

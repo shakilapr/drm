@@ -22,8 +22,9 @@ use super::journal::{ChangeSet, JournalStore};
 use super::protocol::{
     Diagnostic, HOST_VERSION, Hello, HelloAck, MAX_CONTROL_BYTES, ModelCommand, PROTOCOL_VERSION,
     StudioError, StudioRequest, StudioResponse, VerifySummary, WorkspaceSnapshot, capabilities,
-    parse_bounded, to_json_line,
+    parse_bounded, severity_for_check, to_json_line,
 };
+use super::supervisor::{CommandRunner, ProcessRunner, RunSessionView, Supervisor};
 
 /// Long-lived `drm studio --stdio` host. REQ: REQ-STUDIO-011.
 #[derive(Debug)]
@@ -34,6 +35,7 @@ pub struct StudioHost {
     opened: bool,
     journals: JournalStore,
     changesets: BTreeMap<String, ChangeSet>,
+    supervisor: Supervisor,
 }
 
 impl StudioHost {
@@ -42,6 +44,7 @@ impl StudioHost {
     #[must_use]
     pub fn new(root: PathBuf, trusted: bool) -> Self {
         let journals = JournalStore::new(&root);
+        let supervisor = Supervisor::new(Box::new(CommandRunner::for_workspace(&root)));
         Self {
             root,
             revision: 0,
@@ -49,6 +52,23 @@ impl StudioHost {
             opened: false,
             journals,
             changesets: BTreeMap::new(),
+            supervisor,
+        }
+    }
+
+    /// Creates a host with an injected run-process launcher (tests never spawn
+    /// OS processes). REQ: REQ-STUDIO-010.
+    #[must_use]
+    pub fn with_runner(root: PathBuf, trusted: bool, runner: Box<dyn ProcessRunner>) -> Self {
+        let journals = JournalStore::new(&root);
+        Self {
+            root,
+            revision: 0,
+            trusted,
+            opened: false,
+            journals,
+            changesets: BTreeMap::new(),
+            supervisor: Supervisor::new(runner),
         }
     }
 
@@ -63,6 +83,29 @@ impl StudioHost {
     #[must_use]
     pub fn trusted(&self) -> bool {
         self.trusted
+    }
+
+    /// A snapshot of one run session by id. REQ: REQ-STUDIO-010.
+    #[must_use]
+    pub fn run_session(&self, id: &str) -> Option<RunSessionView> {
+        self.supervisor.session(id)
+    }
+
+    /// Snapshots of every known run session. REQ: REQ-STUDIO-010.
+    #[must_use]
+    pub fn run_sessions(&self) -> Vec<RunSessionView> {
+        self.supervisor
+            .session_ids()
+            .iter()
+            .filter_map(|id| self.supervisor.session(id))
+            .collect()
+    }
+
+    /// Handles a renderer disconnect: sessions persist per their
+    /// `leave_running` policy (I-ST10). Returns the ids still running.
+    /// REQ: REQ-STUDIO-010.
+    pub fn on_disconnect(&mut self) -> Vec<String> {
+        self.supervisor.detach()
     }
 
     /// Builds the handshake acknowledgement for a client `Hello`.
@@ -108,15 +151,20 @@ impl StudioHost {
                     revision: self.revision,
                 })
             }
-            StudioRequest::RunStart { .. } => {
+            StudioRequest::RunStart { config } => {
                 self.require_trusted()?;
                 self.require_open()?;
-                Ok(StudioResponse::RunAccepted {
-                    session: super::journal::fresh_id(),
-                })
+                let session = self.supervisor.start(config)?;
+                Ok(StudioResponse::RunAccepted { session })
             }
-            StudioRequest::RunStop { session } | StudioRequest::RunRestart { session } => {
+            StudioRequest::RunStop { session } => {
                 self.require_trusted()?;
+                self.supervisor.stop(&session)?;
+                Ok(StudioResponse::RunAccepted { session })
+            }
+            StudioRequest::RunRestart { session } => {
+                self.require_trusted()?;
+                self.supervisor.restart(&session)?;
                 Ok(StudioResponse::RunAccepted { session })
             }
             StudioRequest::Undo { changeset, force } => self.undo(&changeset, force),
@@ -327,10 +375,19 @@ fn map_cli_error(err: CliError) -> StudioError {
     }
 }
 
-/// Renders a verify finding as a wire diagnostic. REQ: REQ-STUDIO-014.
+/// Renders a verify finding as a wire diagnostic with its severity class.
+/// REQ: REQ-STUDIO-014.
 fn diagnostic(finding: &drm_workspace::verify::VerifyLiteFinding) -> Diagnostic {
+    let check_id = match finding {
+        drm_workspace::verify::VerifyLiteFinding::NoPublisher { .. } => {
+            drm_workspace::verify::V_SW_NO_PUBLISHER
+        }
+        drm_workspace::verify::VerifyLiteFinding::MultiplePublishers { .. } => {
+            drm_workspace::verify::V_SW_MULTI_PUBLISHER
+        }
+    };
     Diagnostic {
-        severity: "error".to_string(),
+        severity: severity_for_check(check_id),
         message: finding.to_string(),
     }
 }

@@ -15,13 +15,50 @@ use crate::args::Direction;
 use crate::studio::host::StudioHost;
 use crate::studio::journal::{ChangeSet, JournalStore, output_for};
 use crate::studio::protocol::{
-    Capability, Hello, MAX_CONTROL_BYTES, ModelCommand, NodeSpec, StudioError, StudioRequest,
-    StudioResponse, parse_bounded, to_json_line,
+    Capability, Hello, MAX_CONTROL_BYTES, ModelCommand, NodeSpec, RunConfig, Severity, StudioError,
+    StudioRequest, StudioResponse, parse_bounded, severity_for_check, to_json_line,
 };
 use crate::studio::serve_stdio;
+use crate::studio::supervisor::{NodeHandle, ProcessRunner, SessionStatus};
 use crate::{assign, ws};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Deterministic node handle for host-level supervisor tests.
+#[derive(Debug)]
+struct StubHandle {
+    pid: u32,
+}
+
+impl NodeHandle for StubHandle {
+    fn pid(&self) -> Option<u32> {
+        Some(self.pid)
+    }
+    fn stdout(&self) -> String {
+        String::new()
+    }
+    fn stderr(&self) -> String {
+        String::new()
+    }
+    fn try_wait(&mut self) -> Option<i32> {
+        None
+    }
+    fn kill(&mut self) {}
+}
+
+/// Runner that fabricates stub handles (no OS process is spawned).
+#[derive(Debug, Default)]
+struct StubRunner;
+
+impl ProcessRunner for StubRunner {
+    fn spawn(
+        &mut self,
+        _node: &str,
+        _config: &RunConfig,
+    ) -> Result<Box<dyn NodeHandle>, StudioError> {
+        Ok(Box::new(StubHandle { pid: 4242 }))
+    }
+}
 
 /// Creates a throwaway workspace with one topic and one empty node.
 /// REQ: REQ-STUDIO-003.
@@ -495,5 +532,59 @@ fn studio_snapshot_reports_problems() {
         unreachable!("expected snapshot")
     };
     assert_eq!(snap.problems.len(), 1);
+    assert_eq!(snap.problems[0].severity, Severity::Error);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// REQ: REQ-STUDIO-014 — verify check ids classify into the four Problems-panel
+/// severity classes (never collapsed into a generic red).
+#[test]
+fn studio_problem_severity_classes() {
+    assert_eq!(severity_for_check("V-SW-1"), Severity::Error);
+    assert_eq!(severity_for_check("FEAS-LAT"), Severity::Warning);
+    assert_eq!(severity_for_check("R-DEADLINE"), Severity::Runtime);
+    assert_eq!(severity_for_check("NOTE"), Severity::Info);
+}
+
+/// REQ: REQ-STUDIO-010 — run sessions outlive the renderer: a disconnect leaves
+/// them running (I-ST10) and stop terminates them.
+#[test]
+fn supervisor_outlives_ui() {
+    let root = temp_workspace("supervisor");
+    let mut host = StudioHost::with_runner(root.clone(), true, Box::new(StubRunner));
+    host.dispatch(StudioRequest::OpenWorkspace {
+        path: root.display().to_string(),
+    })
+    .unwrap_or_else(|e| unreachable!("open: {e}"));
+    let resp = host
+        .dispatch(StudioRequest::RunStart {
+            config: RunConfig {
+                nodes: vec!["controller".to_string()],
+                leave_running: true,
+            },
+        })
+        .unwrap_or_else(|e| unreachable!("run start: {e}"));
+    let StudioResponse::RunAccepted { session } = resp else {
+        unreachable!("expected run accepted, got {resp:?}")
+    };
+    // The renderer disconnects; the session persists (I-ST10).
+    let still_running = host.on_disconnect();
+    assert_eq!(still_running, vec![session.clone()]);
+    let view = host
+        .run_session(&session)
+        .unwrap_or_else(|| unreachable!("session"));
+    assert_eq!(view.status, SessionStatus::Running);
+    assert!(view.nodes[0].pid.is_some());
+
+    let stopped = host
+        .dispatch(StudioRequest::RunStop {
+            session: session.clone(),
+        })
+        .unwrap_or_else(|e| unreachable!("run stop: {e}"));
+    assert!(matches!(stopped, StudioResponse::RunAccepted { .. }));
+    let view = host
+        .run_session(&session)
+        .unwrap_or_else(|| unreachable!("session"));
+    assert_eq!(view.status, SessionStatus::Stopped);
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -247,6 +247,34 @@ I-ST9 (`studio_undo_guard`), I-ST11 (`studio_trust_gate`), I-ST13
 variants (package/node/topic/compute/link create/delete beyond `NodeUpdate`),
 the run-session supervisor process, and the extension host.
 
+## Implementation (M17W4)
+
+The run-session supervisor lands in `crates/drm-cli/src/studio/supervisor.rs`
+(`REQ-STUDIO-010`). It is owned by the host process, never by a renderer
+connection: a `RunSession` carries an id, start time, node processes (pid,
+captured stdout/stderr, status), and the `RunConfig` whose `leave_running`
+flag is the disconnect policy. `RunStart`/`RunStop`/`RunRestart` dispatch to
+`Supervisor::start`/`stop`/`restart`; the stdio loop calls
+`StudioHost::on_disconnect` when the renderer closes, and `Supervisor::detach`
+stops only sessions whose config forbids leaving them running. A window close
+with running nodes returns `CloseDecision::Prompt` so the UI can offer
+Leave-running/Stop — a close can never kill or orphan a node process.
+
+Node launching is a `ProcessRunner` seam (injectable, so tests never spawn OS
+processes); `CommandRunner` is the concrete runner and captures stdout/stderr
+on reader threads. Read-only inspectors (`Workspace`/`Topics`/`Nodes`/`System`)
+and the Problems panel render engine snapshots only — mutations stay engine
+capability only (I-ST1). The `apps/studio` renderer holds zero DRM logic.
+
+Implemented invariants and test anchors (`cargo test -p drm-cli supervisor`):
+I-ST10 (`supervisor_start_stop_lifecycle`, `supervisor_outlives_ui`,
+`supervisor_disconnect_stops_when_config_says_so`,
+`supervisor_close_prompts_leave_or_stop`,
+`supervisor_restart_replaces_processes`). Mutation-audit evidence:
+[studio-mutation-audit.md](../../spec/studio-mutation-audit.md). Carried to
+M18: extension host, remaining `ModelCommand` variants, Graph/Run panels,
+Electron packaging.
+
 ## Edge Cases & Errors
 
 | Case | Result |

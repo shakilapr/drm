@@ -81,12 +81,45 @@ pub struct HelloAck {
     pub capabilities: Vec<Capability>,
 }
 
+/// Verify severity class, mirroring the verify model: `Error` (proven),
+/// `Warning` (feasibility estimate), `Runtime` (observed), `Info`. The Problems
+/// panel styles each class distinctly — severities are never collapsed into a
+/// generic red warning (ui-arch §Problems Panel). REQ: REQ-STUDIO-014.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    /// Proven defect (deterministic check failure).
+    Error,
+    /// Feasibility estimate outside its budget.
+    Warning,
+    /// Runtime-observed condition.
+    Runtime,
+    /// Informational.
+    Info,
+}
+
+/// Maps a verify check id to its severity class (ui-arch §Problems Panel).
+/// REQ: REQ-STUDIO-014.
+#[must_use]
+pub fn severity_for_check(check_id: &str) -> Severity {
+    if check_id.starts_with("V-") {
+        // `drm verify` facts are proven; feasibility estimates carry `FEAS`.
+        Severity::Error
+    } else if check_id.starts_with("FEAS") || check_id.starts_with("EST") {
+        Severity::Warning
+    } else if check_id.starts_with("R-") || check_id.starts_with("LIVE") {
+        Severity::Runtime
+    } else {
+        Severity::Info
+    }
+}
+
 /// A single verify finding rendered for the renderer.
 /// REQ: REQ-STUDIO-014.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
-    /// Severity label (`error`/`warning`).
-    pub severity: String,
+    /// Severity class.
+    pub severity: Severity,
     /// Human-readable message.
     pub message: String,
 }

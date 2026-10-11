@@ -157,3 +157,64 @@ cargo run -p xtask -- gen-check
 cargo xtask audit-traceability
 cargo xtask check-layering
 ```
+
+## M17W4 — Studio Inspectors + Run Supervisor, Month-17 Review
+
+| Variable | Target | Measured |
+|---|---|---|
+| `STUDIO_MVP` | read-only inspectors functional over RPC (no GUI DRM logic) | 1 — `apps/studio` `WorkspaceActivity`/`TopicsActivity`/`NodesActivity`/`SystemActivity` + `ProblemsPanel` render engine snapshots via `rpc/queries.ts` (TanStack Query); `rpc/model.ts` is display-only; mutation audit [studio-mutation-audit.md](../spec/studio-mutation-audit.md) clean (I-ST1, `REQ-STUDIO-003`/`REQ-STUDIO-015`) |
+| `RUN_SUPERVISOR` | sessions outlive UI; close prompts Leave-running/Stop (I-ST10) | 1 — `cargo test -p drm-cli supervisor` 7/7: `supervisor_start_stop_lifecycle` (id/start time/node pid/stdout/status), `supervisor_outlives_ui` (disconnect leaves running; close ⇒ `Prompt`; Stop ends), `supervisor_disconnect_stops_when_config_says_so`, `supervisor_restart_replaces_processes`, `supervisor_unknown_session_is_error`, `supervisor_close_clear_when_idle`, plus host `supervisor_outlives_ui` |
+| `MONTH17_REVIEW` | ON_TRACK | ON_TRACK — [month-17.md](../gates/month-17.md) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Run-session supervisor** (`crates/drm-cli/src/studio/supervisor.rs`):
+  `Supervisor` owns `RunSession`s (id, start time, node processes with
+  pid/stdout/stderr/status, run config) independently of any renderer
+  connection. `detach` stops only sessions whose `leave_running` is false;
+  `close_decision` returns `Prompt` with running session ids so the UI offers
+  Leave-running/Stop; `apply_close` never kills on Leave-running. Node launching
+  is a `ProcessRunner` seam (`CommandRunner` captures output on reader threads)
+  so tests spawn no OS processes. `StudioHost` routes `RunStart`/`RunStop`/
+  `RunRestart` and calls `on_disconnect` when the renderer closes
+  (`REQ-STUDIO-010`).
+- **Read-only inspectors** (`apps/studio/src/activities/`): Workspace tree,
+  Topics list/table, Nodes list, System (computes/links/placements), all
+  rendering the engine snapshot through TanStack Query; zero mutation logic
+  (`REQ-STUDIO-015`).
+- **Problems panel** (`apps/studio/src/components/ProblemsPanel.tsx`): verify
+  diagnostics grouped by severity class; the wire `Diagnostic.severity` is a
+  typed `Severity` (`error`/`warning`/`runtime`/`info`) in
+  `packages/studio-protocol`, classified by `severity_for_check`
+  (`REQ-STUDIO-016`).
+- **Mutation audit** ([studio-mutation-audit.md](../spec/studio-mutation-audit.md)):
+  every GUI-visible request maps to exactly one engine operation; zero
+  renderer-side DRM logic (I-ST1).
+- **Gate evidence** ([m17w4.md](../gates/m17w4.md)) + month review
+  ([month-17.md](../gates/month-17.md)); [CHANGELOG.md](../../CHANGELOG.md)
+  M17W4 tranche.
+
+Notes:
+
+- No architecture divergence: pinned I-ST10 plus ui-arch §Activities/§Problems
+  Panel; no ADR.
+- Deferred post-1.0 unchanged: creation UI, editors, Inspector forms, command
+  palette/keyboard map, DataStore UI, remote web mode, native adapters, `.drmx`,
+  `drm-visual-schemas`.
+
+### Weekly gate checklist (chaired by E3, Friday)
+
+- [x] `STUDIO_MVP = 1`; `RUN_SUPERVISOR = 1`; `MONTH17_REVIEW = ON_TRACK`
+- [x] Variables measured; PR hygiene
+- **`GATE_STATUS(M17W4) = PASS`**
+
+### How to reproduce
+
+```text
+cargo test -p drm-cli supervisor
+cargo test -p drm-cli studio
+cargo run -p xtask -- gen-check
+cargo xtask audit-traceability
+cargo xtask check-layering
+```
