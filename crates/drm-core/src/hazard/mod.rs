@@ -5,10 +5,11 @@
 //! (retire + scan), REQ-CORE-032 (multi-reader share), REQ-CORE-004 (borrowed slot
 //! never overwritten).
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 
 use crate::channel::ccb::ChannelControlBlock;
 use crate::ring::{HistoryRing, LookupErr, RingEntry};
+use crate::shm::ProcessIdentity;
 use drm_types::Status;
 
 /// ABA long-run forcing harness.
@@ -78,17 +79,28 @@ pub struct ConsumerRec {
     pub active: AtomicBool,
     /// This endpoint's single hazard word.
     pub hazard: HazardWord,
+    /// Registered owner `pid` snapshot (diagnostic; the 4-byte `owner_pid` slot).
+    owner_pid: AtomicI32,
+    /// Registered owner start-ticks snapshot (diagnostic `owner_start`).
+    owner_start: AtomicU64,
+    /// Non-blocking registration lock; a live owner holds it for the record lifetime.
+    reg_lock: AtomicBool,
 }
 
 impl ConsumerRec {
     /// New record in the `Active` state; the hazard word starts at
-    /// `{generation, NONE}` (the acquisition CAS's empty form).
+    /// `{generation, NONE}` (the acquisition CAS's empty form). The owner
+    /// identity starts unrecorded (`{pid: 0, start_ticks: 0}`); a claimant
+    /// publishes it via [`ConsumerRec::record_identity`].
     #[must_use]
     pub fn new(generation: u32) -> Self {
         Self {
             generation: AtomicU32::new(generation),
             active: AtomicBool::new(true),
             hazard: HazardWord(AtomicU64::new(pack(generation, HAZARD_NONE))),
+            owner_pid: AtomicI32::new(0),
+            owner_start: AtomicU64::new(0),
+            reg_lock: AtomicBool::new(false),
         }
     }
 
@@ -96,6 +108,53 @@ impl ConsumerRec {
     /// REQ: REQ-CORE-002, I-HZ1.
     pub fn close(&self) {
         self.active.store(false, Ordering::Release);
+    }
+
+    /// Records the owning endpoint's [`ProcessIdentity`] snapshot at registration
+    /// (the `owner_pid`/`owner_start` diagnostic fields the reclaimer re-reads).
+    /// Diagnostic metadata only — never a liveness authority
+    /// (`exhaustion-reclamation.md`).
+    /// REQ: REQ-CORE-008, REQ-CORE-036.
+    pub fn record_identity(&self, me: ProcessIdentity) {
+        self.owner_pid.store(me.pid, Ordering::Relaxed);
+        self.owner_start.store(me.start_ticks, Ordering::Relaxed);
+    }
+
+    /// Reads back the recorded owner identity; an unclaimed record reports
+    /// `{pid: 0, start_ticks: 0}`.
+    /// REQ: REQ-CORE-008.
+    #[must_use]
+    pub fn identity(&self) -> ProcessIdentity {
+        ProcessIdentity {
+            pid: self.owner_pid.load(Ordering::Relaxed),
+            start_ticks: self.owner_start.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Non-blocking registration-lock acquisition (reclamation authority analogue:
+    /// a live owner holds it, so `None` means live authority). The returned guard
+    /// releases on drop.
+    /// REQ: REQ-CORE-056.
+    pub(crate) fn try_reg_lock(&self) -> Option<RegLockGuard<'_>> {
+        self.reg_lock
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .ok()
+            .map(|_| RegLockGuard {
+                held: &self.reg_lock,
+            })
+    }
+}
+
+/// Held non-blocking registration lock (reclamation authority analogue); `Drop`
+/// releases it.
+/// REQ: REQ-CORE-056.
+pub(crate) struct RegLockGuard<'a> {
+    held: &'a AtomicBool,
+}
+
+impl Drop for RegLockGuard<'_> {
+    fn drop(&mut self) {
+        self.held.store(false, Ordering::Release);
     }
 }
 

@@ -25,7 +25,7 @@ mod segment;
 #[cfg(unix)]
 pub use lock::FlockBackend;
 #[cfg(unix)]
-pub use process::{current_identity, is_alive};
+pub use process::{current_identity, identity_alive, is_alive};
 #[cfg(unix)]
 pub use segment::PosixShm;
 

@@ -53,9 +53,34 @@ pub fn is_alive(pid: i32) -> bool {
     rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+/// Incarnation-safe liveness proof for a recorded [`ProcessIdentity`] snapshot:
+/// true iff `pid` is alive AND its current start ticks equal the recorded
+/// `start_ticks`. A PID reused by a newer process fails the start-ticks guard,
+/// so the recorded (older) incarnation is reported dead; a genuinely live
+/// same-incarnation owner is reported alive. An unreadable `/proc/<pid>/stat`
+/// is treated as alive so a live reader is never mis-reclaimed (I-E5).
+/// REQ: REQ-CORE-008, REQ-CORE-057.
+#[must_use]
+pub fn identity_alive(pid: i32, start_ticks: u64) -> bool {
+    if !is_alive(pid) {
+        return false;
+    }
+    match read_start_ticks(pid) {
+        Some(current) => current == start_ticks,
+        None => true,
+    }
+}
+
+/// Field 22 (`starttime`) of `/proc/<pid>/stat`, or `None` when unreadable.
+/// REQ: REQ-CORE-036.
+fn read_start_ticks(pid: i32) -> Option<u64> {
+    let raw = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    parse_stat_starttime(&raw)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{current_identity, is_alive, parse_stat_starttime};
+    use super::{current_identity, identity_alive, is_alive, parse_stat_starttime};
 
     /// REQ: REQ-CORE-036 — field 22 lands on the 19th token after `comm`.
     #[test]
@@ -132,5 +157,21 @@ mod tests {
             Err(e) => unreachable!("wait failed: {e:?}"),
         }
         assert!(!is_alive(pid));
+    }
+
+    /// REQ: REQ-CORE-008, REQ-CORE-057 — the start-ticks guard makes the proof
+    /// incarnation-safe: the live self-identity is reported alive, a
+    /// same-PID/different-start snapshot (PID reuse) is reported dead, and a
+    /// non-positive/absent pid is always dead.
+    #[test]
+    fn identity_alive_incarnation() {
+        let me = current_identity();
+        assert!(identity_alive(me.pid, me.start_ticks), "live self is alive");
+        assert!(
+            !identity_alive(me.pid, me.start_ticks.wrapping_add(1)),
+            "a reused PID is a different incarnation"
+        );
+        assert!(!identity_alive(0, 0));
+        assert!(!identity_alive(-1, 0));
     }
 }

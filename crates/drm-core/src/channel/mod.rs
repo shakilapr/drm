@@ -1,14 +1,16 @@
 //! Channel runtime: publish transaction (channel-publish.md), overflow gating
 //! (overflow-policies.md), cursors/delivery (cursor-delivery.md), pool
-//! (payload-pool.md). REQ: REQ-CORE-050/051/052/053/049/100 (publish),
+//! (payload-pool.md), dead-reader reclamation (exhaustion-reclamation.md).
+//! REQ: REQ-CORE-050/051/052/053/049/100 (publish),
 //! REQ-CORE-039/040/060/059 (overflow), REQ-CORE-011/012/013/028/029/096/097/003
-//! (delivery).
+//! (delivery), REQ-CORE-058/056/057/095/023/021 (reclamation).
 
 pub mod ccb;
 pub mod lifecycle;
 pub mod overflow;
 pub mod pattern;
 pub mod pool;
+mod reclaim;
 
 pub use overflow::OverflowPolicy;
 
@@ -232,6 +234,14 @@ impl Channel {
     #[must_use]
     pub fn overrun_count(&self) -> u64 {
         self.ccb.overrun_count.load(Ordering::Relaxed)
+    }
+
+    /// Exhaustion trigger flag: set by the publish-drop path, consumed by
+    /// [`Channel::try_reclaim`]. The reclamation gate and the signal a test
+    /// asserts. REQ: REQ-CORE-058, REQ-CORE-095.
+    #[must_use]
+    pub fn reclaim_requested(&self) -> bool {
+        self.ccb.reclaim_requested.load(Ordering::Acquire)
     }
 
     /// Oldest retained sequence for a snapshot `ws`.
