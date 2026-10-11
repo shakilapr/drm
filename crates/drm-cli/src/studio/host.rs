@@ -21,8 +21,8 @@ use super::edit;
 use super::journal::{ChangeSet, JournalStore};
 use super::protocol::{
     Diagnostic, HOST_VERSION, Hello, HelloAck, MAX_CONTROL_BYTES, ModelCommand, PROTOCOL_VERSION,
-    StudioError, StudioRequest, StudioResponse, VerifySummary, WorkspaceSnapshot, capabilities,
-    parse_bounded, severity_for_check, to_json_line,
+    RuntimeStats, StudioError, StudioRequest, StudioResponse, VerifySummary, WorkspaceSnapshot,
+    capabilities, parse_bounded, severity_for_check, to_json_line,
 };
 use super::supervisor::{CommandRunner, ProcessRunner, RunSessionView, Supervisor};
 
@@ -101,6 +101,25 @@ impl StudioHost {
             .collect()
     }
 
+    /// Observed runtime statistics for every supervised node, flattened across
+    /// sessions (the `runtimeStats` surface the Run panel renders).
+    /// REQ: REQ-STUDIO-018.
+    #[must_use]
+    pub fn runtime_stats(&self) -> Vec<RuntimeStats> {
+        self.run_sessions()
+            .into_iter()
+            .flat_map(|session| {
+                let id = session.id;
+                session.nodes.into_iter().map(move |node| RuntimeStats {
+                    session: id.clone(),
+                    node: node.node,
+                    pid: node.pid,
+                    status: node.status,
+                })
+            })
+            .collect()
+    }
+
     /// Handles a renderer disconnect: sessions persist per their
     /// `leave_running` policy (I-ST10). Returns the ids still running.
     /// REQ: REQ-STUDIO-010.
@@ -166,6 +185,18 @@ impl StudioHost {
                 self.require_trusted()?;
                 self.supervisor.restart(&session)?;
                 Ok(StudioResponse::RunAccepted { session })
+            }
+            StudioRequest::RunSessions => {
+                self.require_open()?;
+                Ok(StudioResponse::RunSessions {
+                    sessions: self.run_sessions(),
+                })
+            }
+            StudioRequest::RuntimeStats => {
+                self.require_open()?;
+                Ok(StudioResponse::RuntimeStats {
+                    stats: self.runtime_stats(),
+                })
             }
             StudioRequest::Undo { changeset, force } => self.undo(&changeset, force),
             StudioRequest::SubscribeTelemetry { .. } => {

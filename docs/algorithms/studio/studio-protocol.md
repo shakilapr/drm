@@ -275,6 +275,26 @@ I-ST10 (`supervisor_start_stop_lifecycle`, `supervisor_outlives_ui`,
 M18: extension host, remaining `ModelCommand` variants, Graph/Run panels,
 Electron packaging.
 
+## Implementation (M18W2)
+
+The Run panel backend extends the studio protocol with two read-only requests:
+`RunSessions` returns the supervisor-owned `RunSessionView` snapshots (id, start
+time, status, `leave_running`, node processes with pid/stdout/stderr/status) and
+`RuntimeStats` returns per-node observed statistics (`session`, `node`, `pid`,
+`status`) — the `runtimeStats` surface (ui-arch §Protocol events). Both route
+through the existing `Supervisor` (I-ST10), so sessions still outlive the UI and
+a disconnect never kills or orphans a node process (`REQ-STUDIO-018`). Generated
+TS types carry `RunSessionView`/`RuntimeStats`/`ProcessStatus` (I-ST2).
+
+The renderer adds the Graph activity (a read-only route/link projection of the
+deployment model; viewport/zoom/collapse are UI state, never `drm.toml`,
+`REQ-STUDIO-017`) and the Run activity (start/stop/restart plus session and
+`runtimeStats` rendering, `REQ-STUDIO-018`). Electron packaging (electron-builder
+config, window lifecycle, bundled `drm` executable, sandboxed context-isolated
+renderer with a narrow preload) is recorded in `apps/studio/electron`
+(`REQ-STUDIO-019`). Test anchors: `studio_run_sessions_and_runtime_stats`
+(`cargo test -p drm-cli studio`). Carried to M18W3: extension host.
+
 ## Edge Cases & Errors
 
 | Case | Result |

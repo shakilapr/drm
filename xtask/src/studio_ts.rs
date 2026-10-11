@@ -91,6 +91,33 @@ export interface RunConfig {
   leave_running: boolean;
 }
 
+export type SessionStatus = "running" | "stopped";
+
+export type ProcessStatus = "running" | "stopped" | { exited: number };
+
+export interface NodeProcessView {
+  node: string;
+  pid: number | null;
+  status: ProcessStatus;
+  stdout: string;
+  stderr: string;
+}
+
+export interface RunSessionView {
+  id: string;
+  started_at: number;
+  status: SessionStatus;
+  leave_running: boolean;
+  nodes: NodeProcessView[];
+}
+
+export interface RuntimeStats {
+  session: string;
+  node: string;
+  pid: number | null;
+  status: ProcessStatus;
+}
+
 export type ModelCommand =
   | ({ op: "package_create" } & PackageSpec)
   | { op: "package_rename"; from: string; to: string }
@@ -118,6 +145,8 @@ export type StudioRequest =
   | { method: "run_start"; config: RunConfig }
   | { method: "run_stop"; session: string }
   | { method: "run_restart"; session: string }
+  | { method: "run_sessions" }
+  | { method: "runtime_stats" }
   | { method: "undo"; changeset: string; force: boolean }
   | { method: "subscribe_telemetry"; channels: string[] };
 
@@ -130,6 +159,8 @@ export type StudioResponse =
   | { result: "conflict_external_changed"; changeset: string }
   | { result: "build_accepted"; revision: number }
   | { result: "run_accepted"; session: string }
+  | { result: "run_sessions"; sessions: RunSessionView[] }
+  | { result: "runtime_stats"; stats: RuntimeStats[] }
   | { result: "telemetry_token"; token: string }
   | { result: "error"; code: string; message: string };
 "#;

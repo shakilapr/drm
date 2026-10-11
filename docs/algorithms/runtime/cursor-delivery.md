@@ -258,3 +258,14 @@ forces `WouldRetry` after `RETRY_BUDGET` attempts, never an open-ended spin.
 | fresh-next | oldest retained delivered |
 | `cursor_snapshot_restart` | I-C8 |
 | `copy_zero_alloc` | caller buffer only; I-C9 |
+
+## Benchmarks (M18W2)
+
+`crates/drm-core/benches/latency.rs` (publish, `copy_latest`, `copy_next`,
+write-loan borrow) and `benches/throughput.rs` (sequence ring, payload pool)
+record the latency/throughput baseline under the fixed pinned-CPU methodology
+([bench-methodology.md](../../spec/bench-methodology.md)); numbers are archived
+in [bench-baseline.md](../../spec/bench-baseline.md). The in-bench invariant
+assertions (zero-allocation steady-state read/write; bounded-time p99) fail the
+bench on violation (`REQ-QAL-011`, `REQ-QAL-012`). No cursor algorithm or
+signature changed.

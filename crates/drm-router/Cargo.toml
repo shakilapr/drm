@@ -12,7 +12,12 @@ drm-types = { path = "../drm-types" }
 toml.workspace = true
 
 [dev-dependencies]
+criterion = "0.5"
 proptest.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "router"
+harness = false

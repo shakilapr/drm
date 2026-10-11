@@ -11,6 +11,7 @@ drm-types = { path = "../drm-types" }
 thiserror.workspace = true
 
 [dev-dependencies]
+criterion = "0.5"
 proptest.workspace = true
 serde_json.workspace = true
 
@@ -37,3 +38,11 @@ workspace = true
 name = "alloc_counter"
 harness = false
 required-features = ["test-count-allocs"]
+
+[[bench]]
+name = "latency"
+harness = false
+
+[[bench]]
+name = "throughput"
+harness = false

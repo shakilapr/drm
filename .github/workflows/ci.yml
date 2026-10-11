@@ -39,6 +39,27 @@ jobs:
       - name: traceability
         run: cargo xtask audit-traceability --registry
 
+  bench:
+    # Benchmark baseline + in-bench invariant assertions (work-plan
+    # M18W2-E1/E2): a pinned-CPU run records the latency/throughput/router
+    # p50/p99 baseline and fails on any zero-allocation or bounded-time
+    # invariant violation. Noise bands and the archived baseline live in
+    # docs/spec/bench-methodology.md and docs/spec/bench-baseline.md.
+    # REQ: REQ-QAL-011, REQ-QAL-012.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: core latency + throughput (in-bench invariants)
+        run: >-
+          taskset -c 1 cargo bench -p drm-core
+          --bench latency --bench throughput
+          -- --warm-up-time 1 --measurement-time 3 --sample-size 50
+      - name: router loopback + shaping (in-bench invariants)
+        run: >-
+          taskset -c 1 cargo bench -p drm-router --bench router
+          -- --warm-up-time 1 --measurement-time 3 --sample-size 50
+
   windows-smoke:
     # Windows conformance manifest (work-plan M12W4-E4-T3, extended M13W1-E1/E3,
     # full port M13W3, crash matrix M13W4; windows-backends.md §Test Matrix):

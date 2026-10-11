@@ -183,3 +183,13 @@ fn export_admit(l: &mut ExportLimiter, now_ns: u64) -> bool {
 | `export_limit` (clock boundary matrix) | I-LS8 exact period |
 | `lane_caps` (best-effort vs reliable bulk) | I-LS5 policies exact |
 | two-host physical matrix (M11) | limits hold within tolerance on real links; shared-link latency reported |
+
+## Benchmarks (M18W2)
+
+`crates/drm-router/benches/router.rs` records the peer-lane loopback p50/p99,
+token-bucket admission, and priority enqueue/pop under the fixed pinned-CPU
+methodology ([bench-methodology.md](../../spec/bench-methodology.md)); baseline
+numbers are archived in [bench-baseline.md](../../spec/bench-baseline.md). The
+in-bench invariant assertions (zero-allocation lane send/service, bounded-time
+p99) fail the bench on violation (`REQ-QAL-011`, `REQ-QAL-012`). No invariant or
+signature changed.

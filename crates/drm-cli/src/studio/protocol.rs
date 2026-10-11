@@ -9,6 +9,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use super::supervisor::{ProcessStatus, RunSessionView};
+
 /// Maximum bytes accepted for a single control-plane JSON line (I-ST13);
 /// longer input is rejected before any allocation-heavy parse.
 /// REQ: REQ-STUDIO-013.
@@ -207,6 +209,20 @@ pub struct RunConfig {
     pub leave_running: bool,
 }
 
+/// Observed runtime statistics for one supervised node, surfaced to the Run
+/// panel (ui-arch §Protocol `runtimeStats`). REQ: REQ-STUDIO-018.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeStats {
+    /// Owning run-session id.
+    pub session: String,
+    /// Node name.
+    pub node: String,
+    /// OS pid when the node process was spawned.
+    pub pid: Option<u32>,
+    /// Current node-process status.
+    pub status: ProcessStatus,
+}
+
 /// The typed ui-arch command set. REQ: REQ-STUDIO-014.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -305,6 +321,12 @@ pub enum StudioRequest {
         /// Session id.
         session: String,
     },
+    /// List every known run session (read-only; the Run panel polls this).
+    /// REQ: REQ-STUDIO-018.
+    RunSessions,
+    /// Observed runtime statistics for supervised nodes (the `runtimeStats`
+    /// event surface). REQ: REQ-STUDIO-018.
+    RuntimeStats,
     /// Conditionally undo a journaled `ChangeSet`.
     Undo {
         /// Target `ChangeSet` id.
@@ -358,6 +380,16 @@ pub enum StudioResponse {
     RunAccepted {
         /// Session id.
         session: String,
+    },
+    /// Run-session snapshots (read-only). REQ: REQ-STUDIO-018.
+    RunSessions {
+        /// Session snapshots.
+        sessions: Vec<RunSessionView>,
+    },
+    /// Observed runtime statistics for supervised nodes. REQ: REQ-STUDIO-018.
+    RuntimeStats {
+        /// Per-node statistics.
+        stats: Vec<RuntimeStats>,
     },
     /// Binary-plane token (I-ST3).
     TelemetryToken {

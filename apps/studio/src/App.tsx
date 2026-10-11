@@ -4,7 +4,9 @@
 // REQ-STUDIO-003, REQ-STUDIO-014).
 import { useEffect, useMemo, useState } from "react";
 
+import { GraphActivity } from "./activities/GraphActivity";
 import { NodesActivity } from "./activities/NodesActivity";
+import { RunActivity } from "./activities/RunActivity";
 import { SystemActivity } from "./activities/SystemActivity";
 import { TopicsActivity } from "./activities/TopicsActivity";
 import { WorkspaceActivity } from "./activities/WorkspaceActivity";
@@ -21,6 +23,8 @@ const ACTIVITIES = [
   { id: "topics", label: "Topics" },
   { id: "nodes", label: "Nodes" },
   { id: "system", label: "System" },
+  { id: "graph", label: "Graph" },
+  { id: "run", label: "Run" },
 ] as const;
 
 type ActivityId = (typeof ACTIVITIES)[number]["id"];
@@ -73,6 +77,8 @@ export function App(): React.JSX.Element {
         {activity === "topics" && <TopicsActivity model={model} />}
         {activity === "nodes" && <NodesActivity model={model} />}
         {activity === "system" && <SystemActivity model={model} />}
+        {activity === "graph" && <GraphActivity model={model} />}
+        {activity === "run" && <RunActivity model={model} client={client} ready={ready} />}
       </section>
       <footer className="bottom-panel">
         <ProblemsPanel problems={snapshotProblems(snapshot.data)} />

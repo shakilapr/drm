@@ -63,3 +63,50 @@ cargo test -p drm-router --test link_storm -- --ignored stress_link_storm
 cargo xtask audit-traceability
 cargo xtask check-layering
 ```
+
+## M18W2 — Hardening: Benchmarks Baseline, Studio Graph/Run
+
+| Variable | Target | Measured |
+|---|---|---|
+| `BENCH_BASELINE` | publish/read latency, borrow throughput, router p50/p99 recorded | recorded — x86-64 criterion medians (quiescent host; CI re-runs pinned): `publish_copy` 150 ns, `copy_latest` 23 ns, `copy_next` 8 ns, `borrow_loan_roundtrip` 172 ns; `ring_commit` 14 ns, `ring_lookup` 4 ns, `pool_write` 9 ns; router `lane_loopback` p50 31 ns / p99 40 ns, `token_bucket_try_consume` 5 ns, `priority_enqueue_pop` 6 ns; stable ×5 ([bench-baseline.md](../spec/bench-baseline.md)) |
+| `BENCH_INVARIANTS` | zero-alloc + bounded-time assertions inside benches | green — counting allocator asserts zero allocator entries for publish+read, ring commit+lookup, and lane send+service steady-state blocks; bounded-time p99 ceilings (50 µs core, 20 µs router) asserted in-bench; violation aborts `cargo bench` (`REQ-QAL-012`) |
+| `STUDIO_PANELS` | Graph (read-only route viz) + Run (supervisor start/stop) functional | functional — `RunSessions`/`RuntimeStats` protocol surface over the `Supervisor` (`REQ-STUDIO-018`), `GraphActivity`/`RunActivity` renderer panels, Electron packaging (`REQ-STUDIO-019`) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Bench harness** (`crates/drm-core/benches/{latency,throughput}.rs`,
+  `crates/drm-router/benches/router.rs`, `benches/common/mod.rs`): criterion
+  benches with a fixed pinned-CPU/warmup/repetition methodology and a local
+  counting allocator; invariant assertions (zero-allocation + bounded-time)
+  run inside the benches and fail them on violation.
+- **Baseline archive / methodology**
+  ([bench-methodology.md](../spec/bench-methodology.md),
+  [bench-baseline.md](../spec/bench-baseline.md)): fixed policy, noise bands,
+  and the M18W2 numbers as the regression reference.
+- **CI bench job** (`.github/workflows/ci.yml` `bench`): pinned-CPU run that
+  re-runs the benches and blocks on any invariant violation.
+- **Studio Graph/Run** (`crates/drm-cli/src/studio/protocol.rs`/`host.rs`,
+  `apps/studio/src/activities/{GraphActivity,RunActivity}.tsx`,
+  `apps/studio/electron`): read-only route/link graph, supervisor-driven run
+  panel over `RunSessions`/`RuntimeStats`, and Electron packaging.
+
+### Weekly gate checklist (chaired by E1, Friday)
+
+- [x] `BENCH_BASELINE = recorded`; `BENCH_INVARIANTS = green`; `STUDIO_PANELS = functional`
+- [x] Variables measured; PR hygiene
+- **`GATE_STATUS(M18W2) = PASS`**
+
+### How to reproduce
+
+```text
+taskset -c 1 cargo bench -p drm-core --bench latency --bench throughput
+taskset -c 1 cargo bench -p drm-router --bench router
+cargo test -p drm-cli --lib studio
+cargo xtask fmt --check
+cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask test
+cargo xtask check-layering
+cargo xtask audit-traceability
+```

@@ -1,12 +1,25 @@
 // Electron main process: owns window lifecycle and the `drm studio --stdio`
 // child process. It exposes only a narrow `request(line)` bridge to the
 // sandboxed renderer (ui-arch §Desktop Shell). Node/Electron access is
-// confined to this main process; the renderer has none (REQ-STUDIO-001).
+// confined to this main process; the renderer has none (REQ-STUDIO-001,
+// REQ-STUDIO-019). The packaged app bundles the `drm` executable under
+// `resources/` (electron-builder `extraResources`).
 import { spawn } from "node:child_process";
+import { join } from "node:path";
+
 import { BrowserWindow, app, ipcMain } from "electron";
 
+/** Resolves the `drm` executable: bundled under `resources/` when packaged. */
+function drmExecutable(): string {
+  if (!app.isPackaged) {
+    return "drm";
+  }
+  const bundled = join(process.resourcesPath, "drm");
+  return process.platform === "win32" ? `${bundled}.exe` : bundled;
+}
+
 class StudioHostProcess {
-  private readonly child = spawn("drm", ["studio", "--stdio"], {
+  private readonly child = spawn(drmExecutable(), ["studio", "--stdio"], {
     stdio: ["pipe", "pipe", "inherit"],
   });
 
@@ -53,4 +66,17 @@ function createWindow(): void {
   void window.loadFile("dist/renderer/index.html");
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});

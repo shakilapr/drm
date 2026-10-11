@@ -19,7 +19,7 @@ use crate::studio::protocol::{
     StudioRequest, StudioResponse, parse_bounded, severity_for_check, to_json_line,
 };
 use crate::studio::serve_stdio;
-use crate::studio::supervisor::{NodeHandle, ProcessRunner, SessionStatus};
+use crate::studio::supervisor::{NodeHandle, ProcessRunner, ProcessStatus, SessionStatus};
 use crate::{assign, ws};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -586,5 +586,51 @@ fn supervisor_outlives_ui() {
         .run_session(&session)
         .unwrap_or_else(|| unreachable!("session"));
     assert_eq!(view.status, SessionStatus::Stopped);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// REQ: REQ-STUDIO-018 — the Run panel backend lists supervisor-owned sessions
+/// and exposes per-node `runtimeStats` over studio-protocol.
+#[test]
+fn studio_run_sessions_and_runtime_stats() {
+    let root = temp_workspace("run-panel");
+    let mut host = StudioHost::with_runner(root.clone(), true, Box::new(StubRunner));
+    host.dispatch(StudioRequest::OpenWorkspace {
+        path: root.display().to_string(),
+    })
+    .unwrap_or_else(|e| unreachable!("open: {e}"));
+    let started = host
+        .dispatch(StudioRequest::RunStart {
+            config: RunConfig {
+                nodes: vec!["controller".to_string(), "producer".to_string()],
+                leave_running: true,
+            },
+        })
+        .unwrap_or_else(|e| unreachable!("run start: {e}"));
+    let StudioResponse::RunAccepted { session } = started else {
+        unreachable!("expected run accepted, got {started:?}")
+    };
+
+    let listed = host
+        .dispatch(StudioRequest::RunSessions)
+        .unwrap_or_else(|e| unreachable!("run sessions: {e}"));
+    let StudioResponse::RunSessions { sessions } = listed else {
+        unreachable!("expected run sessions, got {listed:?}")
+    };
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, session);
+    assert_eq!(sessions[0].nodes.len(), 2);
+    assert_eq!(sessions[0].status, SessionStatus::Running);
+
+    let stats = host
+        .dispatch(StudioRequest::RuntimeStats)
+        .unwrap_or_else(|e| unreachable!("runtime stats: {e}"));
+    let StudioResponse::RuntimeStats { stats } = stats else {
+        unreachable!("expected runtime stats, got {stats:?}")
+    };
+    assert_eq!(stats.len(), 2, "one stat row per supervised node");
+    assert!(stats.iter().all(|s| s.session == session));
+    assert!(stats.iter().all(|s| s.pid.is_some()));
+    assert!(stats.iter().all(|s| s.status == ProcessStatus::Running));
     let _ = std::fs::remove_dir_all(&root);
 }

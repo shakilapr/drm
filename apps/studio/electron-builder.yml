@@ -1,0 +1,26 @@
+# Electron packaging (ui-arch §Desktop Shell; work-plan M18W2-E3-T2). Ships a
+# sandboxed, context-isolated renderer and bundles the `drm` executable as a
+# resource so the packaged app can host `drm studio --stdio` with no Python
+# backend. Code signing is deferred to release engineering.
+# REQ: REQ-STUDIO-019.
+appId: com.drm.studio
+productName: DRM Studio
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/renderer/**
+  - electron/**/*.js
+extraResources:
+  - from: ../../target/release/drm
+    to: drm
+asar: true
+linux:
+  target:
+    - AppImage
+mac:
+  target:
+    - dmg
+win:
+  target:
+    - nsis

@@ -28,7 +28,7 @@ use crate::error::CliError;
 
 pub use host::{StudioHost, serve_stdio};
 pub use protocol::{
-    Capability, Hello, HelloAck, ModelCommand, NodeSpec, PackageSpec, StudioRequest,
+    Capability, Hello, HelloAck, ModelCommand, NodeSpec, PackageSpec, RuntimeStats, StudioRequest,
     StudioResponse, WorkspaceSnapshot,
 };
 pub use supervisor::{

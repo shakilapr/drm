@@ -11,6 +11,24 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M18 W2 tranche: hardening — benchmark baseline + Studio Graph/Run
+  panels. The benchmark harness lands with a fixed pinned-CPU methodology
+  (`crates/drm-core/benches/{latency,throughput}.rs`,
+  `crates/drm-router/benches/router.rs`) and a local counting allocator: the
+  publish/read latency, borrow throughput, ring/pool algebra, and router lane
+  loopback p50/p99 are recorded as the regression reference
+  ([bench-baseline.md](docs/spec/bench-baseline.md),
+  [bench-methodology.md](docs/spec/bench-methodology.md)), and the
+  zero-allocation + bounded-time invariants are asserted inside the benches so
+  a violation fails `cargo bench` (REQ-QAL-011, REQ-QAL-012); a pinned-CPU CI
+  `bench` job re-runs them. The Studio protocol gains read-only `RunSessions`
+  and `RuntimeStats` requests over the supervisor (I-ST10, REQ-STUDIO-018); the
+  renderer adds the read-only Graph activity (REQ-STUDIO-017) and the Run
+  activity, and Electron packaging lands (`apps/studio/electron`,
+  REQ-STUDIO-019). Gate evidence [m18w2.md](docs/gates/m18w2.md);
+  [metrics-m18.md](docs/metrics/metrics-m18.md) records
+  `BENCH_BASELINE = recorded`, `BENCH_INVARIANTS = green`,
+  `STUDIO_PANELS = functional`.
 - Week M18 W1 tranche: hardening — fuzz expansion + chaos suites. The fuzz
   fleet grows to `FUZZ_TARGETS_LIVE = 5/5` core targets plus a verify-fixture
   target: `hazard` (a structured storm through the public publish/read/reclaim
