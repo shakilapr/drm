@@ -11,6 +11,7 @@ mod golden;
 mod layering;
 mod soak;
 mod studio_ts;
+mod traceability;
 mod two_host;
 mod workplan;
 
@@ -34,7 +35,7 @@ fn main() -> std::process::ExitCode {
 fn run(args: &[String]) -> Result<()> {
     let Some(cmd) = args.first() else {
         bail!(
-            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--two-host|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability | soak (--duration <h>|--iterations <n>) [--topology <t>] [--ledger <path>] [--dashboard] | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
+            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--two-host|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability [--registry|--citations|--matrix] | soak (--duration <h>|--iterations <n>) [--topology <t>] [--ledger <path>] [--dashboard] | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
         );
     };
     let flags = &args[1..];
@@ -159,19 +160,22 @@ fn test(flags: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// REQ: REQ-QAL-003 — `xtask audit-traceability --registry`: registry.csv structural
-/// lint (schema, unique ids, area enum, phase resolution form); `--citations` reports
-/// REQ citation coverage over crate sources; no flags ⇒ both.
+/// REQ: REQ-QAL-003, REQ-QAL-006 — `xtask audit-traceability --registry`:
+/// registry.csv structural lint (schema, unique ids, area enum, phase resolution
+/// form); `--citations` reports REQ citation coverage over crate sources;
+/// `--matrix` builds the `I-QAL1` requirement → implementation → test matrix;
+/// no flags ⇒ registry + citations.
 fn audit_traceability(flags: &[String]) -> Result<()> {
-    let (mut registry, mut citations) = (false, false);
+    let (mut registry, mut citations, mut matrix) = (false, false, false);
     for f in flags {
         match f.as_str() {
             "--registry" => registry = true,
             "--citations" => citations = true,
+            "--matrix" => matrix = true,
             other => bail!("unknown audit-traceability flag `{other}`"),
         }
     }
-    if !registry && !citations {
+    if !registry && !citations && !matrix {
         registry = true;
         citations = true;
     }
@@ -180,6 +184,9 @@ fn audit_traceability(flags: &[String]) -> Result<()> {
     }
     if citations {
         audit_citations()?;
+    }
+    if matrix {
+        traceability::run()?;
     }
     Ok(())
 }

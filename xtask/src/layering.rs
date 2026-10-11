@@ -188,7 +188,7 @@ pub fn audit_registry() -> Result<()> {
 
 /// REQ: REQ-QAL-003 — quote-aware single-line CSV split (RFC 4180 subset: embedded
 /// commas inside double-quoted fields, `""` escapes); never used for multiline fields.
-fn split_csv(line: &str) -> Vec<String> {
+pub(crate) fn split_csv(line: &str) -> Vec<String> {
     let mut fields = Vec::new();
     let mut field = String::new();
     let mut in_quotes = false;
