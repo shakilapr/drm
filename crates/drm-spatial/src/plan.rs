@@ -11,7 +11,13 @@
 //! and clock uncertainty are always derived per query from timestamps, so
 //! version equality never implies `VALID` (`I-Q2`).
 //!
-//! REQ: REQ-SPATIAL-034, REQ-SPATIAL-002, REQ-SPATIAL-050.
+//! A runtime overlay query resolves through a bounded overlay walk (≤
+//! `max_overlay_depth` parent steps) to a compiled-base attachment frame, then
+//! the precompiled base plan; the small prefix is cached under
+//! `topology_generation`, so a reparent or overlay mutation re-walks once
+//! ([`OverlayPlanCache`], [`compile_overlay_plan`], `I-Q16`).
+//!
+//! REQ: REQ-SPATIAL-034, REQ-SPATIAL-002, REQ-SPATIAL-050, REQ-SPATIAL-008.
 
 use crate::cache::EdgeSlot;
 use crate::clock::TimePoint;
@@ -418,6 +424,118 @@ pub fn compile_plan(
         }
     }
     CompiledPlan::new(steps)
+}
+
+/// A per-pair overlay-plan cache keyed by `topology_generation`
+/// ([spatial-queries.md] §Protocols plan lifecycle step 3; §Invariants `I-Q16`).
+/// A runtime overlay query resolves through a **bounded overlay walk** — at most
+/// `max_overlay_depth` parent steps from the overlay frame up to its
+/// compiled-base attachment frame, then the precompiled base plan. The compiled
+/// overlay plan is cached under the current `topology_generation`; a matching
+/// generation reuses it with **no re-walk**, and a generation bump (a reparent
+/// or overlay create/delete) re-walks exactly once on the next query.
+/// REQ: REQ-SPATIAL-008, REQ-SPATIAL-034.
+#[derive(Debug, Clone)]
+pub struct OverlayPlanCache {
+    topology_generation: u64,
+    depth: u16,
+    attachment: String,
+    plan: CompiledPlan,
+    walks: u64,
+    built: bool,
+}
+
+impl OverlayPlanCache {
+    /// A cache primed for `topology_generation`, not yet built (the first query
+    /// re-walks once).
+    /// REQ: REQ-SPATIAL-008.
+    #[must_use]
+    pub fn new(topology_generation: u64) -> Self {
+        Self {
+            topology_generation,
+            depth: 0,
+            attachment: String::new(),
+            plan: CompiledPlan {
+                steps: vec![PlanStep::Constant(Transform3::IDENTITY)],
+                max_stack: 1,
+            },
+            walks: 0,
+            built: false,
+        }
+    }
+
+    /// The `topology_generation` the cache currently holds (`I-Q16`).
+    /// REQ: REQ-SPATIAL-008.
+    #[must_use]
+    pub fn topology_generation(&self) -> u64 {
+        self.topology_generation
+    }
+
+    /// The overlay walk depth of the cached plan (`I-Q16`).
+    /// REQ: REQ-SPATIAL-008.
+    #[must_use]
+    pub fn depth(&self) -> u16 {
+        self.depth
+    }
+
+    /// The compiled-base attachment frame of the cached overlay walk (`I-Q16`).
+    /// REQ: REQ-SPATIAL-008.
+    #[must_use]
+    pub fn attachment(&self) -> &str {
+        &self.attachment
+    }
+
+    /// The number of overlay-walk recompilations performed (`I-Q16`): one per
+    /// first build plus one per observed `topology_generation` bump.
+    /// REQ: REQ-SPATIAL-008.
+    #[must_use]
+    pub fn walks(&self) -> u64 {
+        self.walks
+    }
+}
+
+/// Resolves the overlay plan for the `(reference → target)` pair, honoring the
+/// bounded overlay walk and the `topology_generation` cache (`I-Q16`). When
+/// `cache.topology_generation == topology_generation` the cached plan is reused
+/// with no graph walk; otherwise the plan is (re)compiled via [`compile_plan`]
+/// and stored once, so a reparent or overlay mutation costs exactly one re-walk.
+///
+/// # Errors
+/// [`SpatialError::InvalidConfig`] when either endpoint's overlay depth exceeds
+/// `max_overlay_depth` (the walk is refused, never unbounded), or
+/// [`SpatialError::PathNotFound`] for an unknown/disconnected pair (`I-S3`).
+/// REQ: REQ-SPATIAL-008, REQ-SPATIAL-034.
+pub fn compile_overlay_plan(
+    forest: &crate::forest::SpaceForest,
+    reference: &str,
+    target: &str,
+    max_overlay_depth: u16,
+    topology_generation: u64,
+    cache: &mut OverlayPlanCache,
+) -> Result<CompiledPlan, SpatialError> {
+    let depth = forest
+        .overlay_depth(reference)
+        .max(forest.overlay_depth(target));
+    if depth > max_overlay_depth {
+        return Err(SpatialError::InvalidConfig);
+    }
+    if cache.built && cache.topology_generation == topology_generation {
+        return Ok(cache.plan.clone());
+    }
+    let plan = compile_plan(forest, reference, target)?;
+    cache.plan = plan.clone();
+    cache.depth = depth;
+    // Record the compiled-base attachment of the overlay endpoint (the deeper
+    // of the two), not of an arbitrary endpoint.
+    cache.attachment = if forest.overlay_depth(reference) >= forest.overlay_depth(target) {
+        forest.overlay_attachment(reference)
+    } else {
+        forest.overlay_attachment(target)
+    };
+    cache.topology_generation = topology_generation;
+    cache.walks += 1;
+    cache.built = true;
+    Ok(plan)
 }
 
 /// The exact observed-version vector for a plan's dynamic inputs; no hash

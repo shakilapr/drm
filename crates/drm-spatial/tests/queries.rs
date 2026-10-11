@@ -266,6 +266,55 @@ fn queries_predict_screw() {
     assert_eq!(res.error, Some(drm_spatial::TransformError::OutOfHistory));
 }
 
+/// REQ: REQ-SPATIAL-025 — `spatial_query_predict`: the engine's `predict`
+/// integrates the declared body-frame twist on `SE(3)` via the exponential map,
+/// `T(t+Δ) = T(t)·Exp(ξ_b Δ)`, within the declared horizon, composing the newest
+/// coherent state with the oracle delta and flagging `EXTRAPOLATED` (`I-Q5`).
+#[test]
+fn spatial_query_predict() {
+    let doc = oracle();
+    let cases = doc["predict"]
+        .as_array()
+        .unwrap_or_else(|| unreachable!("predict"));
+    assert!(cases.len() >= 10);
+    for case in cases {
+        let base = tjson(&case["base"]);
+        let twist = Twist3 {
+            linear: Vector3::new(
+                case["twist"]["linear"][0].as_f64().unwrap_or_default(),
+                case["twist"]["linear"][1].as_f64().unwrap_or_default(),
+                case["twist"]["linear"][2].as_f64().unwrap_or_default(),
+            )
+            .unwrap_or_default(),
+            angular: Vector3::new(
+                case["twist"]["angular"][0].as_f64().unwrap_or_default(),
+                case["twist"]["angular"][1].as_f64().unwrap_or_default(),
+                case["twist"]["angular"][2].as_f64().unwrap_or_default(),
+            )
+            .unwrap_or_default(),
+        };
+        let dt = case["dt"].as_f64().unwrap_or_default();
+        let want = composed_oracle(&base, &case["delta"]);
+        let mut engine = one_edge_engine();
+        engine
+            .publish(0, &EdgeSample::new(base, host(0), host(0)))
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        engine.set_max_horizon(u64::MAX);
+        engine.set_predict_twist(twist);
+        let horizon_ns = (dt * 1e9).round() as u64;
+        let res = engine.predict("odom", "world", horizon_ns);
+        assert!(res.flags.contains(FLAG_EXTRAPOLATED));
+        let got = res.transform.unwrap_or_else(|| unreachable!("transform"));
+        close(&got, &want, "spatial_query_predict");
+    }
+}
+
+/// Composes a base transform with an oracle delta (`base ∘ delta`).
+/// REQ: REQ-SPATIAL-025.
+fn composed_oracle(base: &Transform3, delta: &Value) -> Transform3 {
+    drm_spatial::compose(base, &tjson(delta))
+}
+
 /// REQ: REQ-SPATIAL-023 — `spatial_delayed_view`: a trailing view resolves
 /// `at(now − offset)`; an offset beyond retained history ⇒ `OUT_OF_HISTORY`
 /// (`I-Q6`).

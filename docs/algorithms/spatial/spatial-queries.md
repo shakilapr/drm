@@ -80,6 +80,17 @@ pub struct TimeHistory {
     late_dropped: AtomicU64,                // LateSampleDropped counter (diagnostic)
 }
 
+// Bounded runtime-overlay plan cache — one per (target, reference) overlay pair,
+// keyed by topology_generation (I-Q16). A matching generation reuses the prefix
+// with no re-walk; a bump re-walks exactly once.
+pub struct OverlayPlanCache {
+    topology_generation: u64,
+    depth: u16,                             // overlay walk ≤ max_overlay_depth
+    attachment: FrameId,                    // compiled-base attachment frame
+    plan: CompiledPlan,
+    walks: u64,                             // overlay-walk recompilations (diagnostic)
+}
+
 // Query result — hard outcome + combinable quality flags (independent properties)
 pub enum TransformError { PathNotFound, ClockUnresolved, OutOfHistory, ConcurrentUpdate }
 pub struct QualityFlags(u32);               // STALE | EXTRAPOLATED | DISCONTINUITY_NEARBY

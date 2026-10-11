@@ -11,6 +11,23 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M20 W4 tranche: Phase 33 Gate B close and month-20 review. `drm-spatial`
+  gains bounded generation-cached overlay plans (`OverlayPlanCache`,
+  `compile_overlay_plan` in `plan.rs`; `add_overlay`/`overlay_depth`/
+  `overlay_attachment` in `forest.rs`) — a runtime overlay query walks at most
+  `max_overlay_depth` parent steps to its compiled-base attachment and re-walks
+  exactly once per `topology_generation` bump (`I-Q16`, REQ-SPATIAL-008/034).
+  Gate B test completion evidenced every `I-Q1`..`I-Q16` invariant with named
+  tests: `spatial_query_predict` (`I-Q5`), `spatial_history_sizing`/
+  `spatial_history_order` (`I-Q13`, `tests/history.rs`), `spatial_slot_coherence`/
+  `spatial_slot_model` (`I-Q14`, `tests/slot.rs`), `spatial_query_zero_alloc`
+  (`I-Q15`, counting-allocator `tests/query_zero_alloc.rs`), and
+  `spatial_overlay_plan_bound` (`I-Q16`, `tests/overlay.rs`)
+  ([spatial-queries.md](docs/algorithms/spatial/spatial-queries.md),
+  [spatial-core.md](docs/algorithms/spatial/spatial-core.md)). Gate evidence
+  ([m20w4.md](docs/gates/m20w4.md), [month-20.md](docs/gates/month-20.md),
+  [phase-33.md](docs/gates/phase-33.md)); metrics
+  [metrics-m20.md](docs/metrics/metrics-m20.md).
 - Week M20 W3 tranche: live calibration slots, generational handles, and
   single-writer edges (Phase 33). `drm-spatial` gains live calibration slots
   (`CalibrationSlot` effective timestamp + jump-threshold discontinuity marker,

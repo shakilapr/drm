@@ -177,6 +177,13 @@ impl EdgeSlot {
     /// Reads the newest stable sample, or `None` if the retry budget is
     /// exhausted by concurrent writers (never a torn read). A stable snapshot
     /// with an odd read-back version is impossible by construction (`I-Q14`).
+    ///
+    /// The field loads are `Relaxed` and followed by an `Acquire` fence before
+    /// the version re-check: the acquire load of `v1` orders the field loads
+    /// *after* it, and the fence orders them *before* the `v2` load. Without the
+    /// fence a `Relaxed` field load could be reordered past the `v2` load on a
+    /// weakly-ordered target (ARM64) and observe a newer write while `v1 == v2`,
+    /// yielding torn geometry.
     /// REQ: REQ-SPATIAL-050, REQ-SPATIAL-035.
     #[must_use]
     pub fn read(&self) -> Option<CachedSample> {
@@ -194,6 +201,9 @@ impl EdgeSlot {
             let sample_domain = self.sample_domain.load(Ordering::Relaxed);
             let receive_ns = self.receive_ns.load(Ordering::Relaxed);
             let flags = self.flags.load(Ordering::Relaxed);
+            // Complete every field load before re-reading the version so a
+            // concurrent write cannot slip between the field loads and here.
+            core::sync::atomic::fence(Ordering::Acquire);
             let v2 = self.version.load(Ordering::Acquire);
             if v1 == v2 {
                 let mut clock = Self::decode_domain(sample_domain);

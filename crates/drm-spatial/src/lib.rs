@@ -61,8 +61,9 @@ pub use history::{
 };
 pub use plan::{
     CompiledPlan, FLAG_DISCONTINUITY_NEARBY, FLAG_EXTRAPOLATED, FLAG_STALE, MAX_PLAN_DEPTH,
-    ObservedVersions, PlanCache, PlanStep, QualityFlags, TransformError, TransformPlan,
-    TransformResult, compile_plan, execute_plan, execute_steps, observe_versions,
+    ObservedVersions, OverlayPlanCache, PlanCache, PlanStep, QualityFlags, TransformError,
+    TransformPlan, TransformResult, compile_overlay_plan, compile_plan, execute_plan,
+    execute_steps, observe_versions,
 };
 pub use query::{CalibrationSlot, QueryEngine, ReparentMode, correction_jump};
 pub use transform::{

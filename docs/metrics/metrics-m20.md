@@ -187,17 +187,74 @@ cargo xtask check-layering
 cargo xtask audit-traceability
 ```
 
+## M20W4 — Phase 33 Gate B, Month-20 Review
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_B_STATUS` | PASS — `I-Q1`..`I-Q16` evidenced | PASS — [m20w4.md](../gates/m20w4.md); `cargo test -p drm-spatial` (all invariants) |
+| `MONTH20_REVIEW` | ON_TRACK | ON_TRACK — [month-20.md](../gates/month-20.md) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Gate B doc** ([m20w4.md](../gates/m20w4.md)): the `I-Q1`..`I-Q16` gate ledger
+  mapping every query invariant to a named test or oracle-checked property, plus
+  the E1..E4 task ledger, test table, and the falsifier SPIKE.
+- **Month-20 review** ([month-20.md](../gates/month-20.md)): ON_TRACK; M21
+  commitment — hash grid + compiled BVH + proximity per
+  [spatial-index.md](../algorithms/spatial/spatial-index.md) (doc written M21W1).
+- **Bounded overlay plans** (`crates/drm-spatial/src/plan.rs` `OverlayPlanCache`/
+  `compile_overlay_plan`, `crates/drm-spatial/src/forest.rs` `add_overlay`/
+  `overlay_depth`/`overlay_attachment`): a runtime overlay query resolves through
+  a bounded overlay walk (≤ `max_overlay_depth`) to its compiled-base attachment
+  and caches the plan under `topology_generation`, re-walking once per bump
+  (`I-Q16`, `REQ-SPATIAL-008`/`034`).
+- **Gate B test completion** (`crates/drm-spatial/tests/`): `history.rs`
+  (`spatial_history_sizing`, `spatial_history_order`, `I-Q13`), `slot.rs`
+  (`spatial_slot_coherence`, `spatial_slot_model`, `I-Q14`),
+  `query_zero_alloc.rs` (`spatial_query_zero_alloc`, counting-allocator harness,
+  `I-Q15`), `overlay.rs` (`spatial_overlay_plan_bound`, `I-Q16`), and the
+  engine-level `spatial_query_predict` (`I-Q5`) in `queries.rs`.
+- **Docs / registry**: [m20w4.md](../gates/m20w4.md), [month-20.md](../gates/month-20.md),
+  [phase-33.md](../gates/phase-33.md); `REQ-SPATIAL-008`/`032` promoted to
+  `tested`; registry lint 0 findings.
+
+### Weekly gate checklist (chaired by E3, Friday)
+
+- [x] **Gate B PASS** (`I-Q1`..`I-Q16` evidenced); signed by E3
+- [x] **Month-20 review**: ON_TRACK; M21 commitment recorded
+- [x] Variables measured; PR hygiene
+- **`GATE_B_STATUS = PASS`**, **`MONTH20_REVIEW = ON_TRACK`**
+
+### How to reproduce
+
+```text
+python3 tests/oracle/query_oracle.py
+cargo test -p drm-spatial
+cargo test -p drm-spatial --test history
+cargo test -p drm-spatial --test slot
+cargo test -p drm-spatial --test overlay
+cargo test -p drm-spatial --test query_zero_alloc
+cargo xtask fmt --check
+cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask test
+cargo xtask check-layering
+cargo xtask audit-traceability
+```
+
 ## Carry-over
 
+- Multi-edge compiled-plan composition order (rotation-sensitive) ⇒ falsifier #1
+  for the M21 spike plan; rotated oracle fixtures + a convention decision (ADR if
+  a change is required). See [m20w4.md](../gates/m20w4.md) Notes.
 - Estimated-twist derivation and adjoint-based twist-frame conversion for
-  `predict` ⇒ M20W4 (E1/E2).
-- Multi-edge compiled-plan composition order (fold order vs textbook `SE(3)`
-  collapse) ⇒ M20W4 review (E1/E2) for a possible ADR; see
-  [m20w2.md](../gates/m20w2.md) Notes.
-- Dynamic hash grid, compiled BVH, and exact spatial memory verification ⇒
-  M20W4/M21.
+  `predict` ⇒ M21 spike plan (E1/E2).
+- Dynamic hash grid, compiled BVH, and exact spatial memory verification ⇒ M21
+  (doc written M21W1).
 
-REQ: REQ-SPATIAL-002, REQ-SPATIAL-003, REQ-SPATIAL-011, REQ-SPATIAL-016,
-REQ-SPATIAL-022, REQ-SPATIAL-023, REQ-SPATIAL-024, REQ-SPATIAL-025,
-REQ-SPATIAL-027, REQ-SPATIAL-028, REQ-SPATIAL-029, REQ-SPATIAL-030,
-REQ-SPATIAL-033, REQ-SPATIAL-034, REQ-SPATIAL-037.
+REQ: REQ-SPATIAL-002, REQ-SPATIAL-003, REQ-SPATIAL-008, REQ-SPATIAL-011,
+REQ-SPATIAL-016, REQ-SPATIAL-022, REQ-SPATIAL-023, REQ-SPATIAL-024,
+REQ-SPATIAL-025, REQ-SPATIAL-027, REQ-SPATIAL-028, REQ-SPATIAL-029,
+REQ-SPATIAL-030, REQ-SPATIAL-032, REQ-SPATIAL-033, REQ-SPATIAL-034,
+REQ-SPATIAL-037, REQ-SPATIAL-050.

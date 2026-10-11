@@ -132,6 +132,8 @@ fn map_timestamp(t: TimePoint, to: ClockDomain) -> Result<TimePoint, Status> {
 // §Dual Hierarchy — runtime overlay
 fn space_create(name: &str, parent: FrameId) -> SpatialHandle; // generational handle
 fn space_delete(handle: SpatialHandle); // generation bump ⇒ old refs dead (I-S12)
+fn overlay_depth(frame: &FrameId) -> u16;   // consecutive overlay parents (bounded walk, I-Q16)
+fn overlay_attachment(frame: &FrameId) -> FrameId; // first compiled-base ancestor (I-Q16)
 
 // §Node Spatial Contracts (drm.toml)
 // [spatial]

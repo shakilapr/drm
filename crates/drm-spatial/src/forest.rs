@@ -97,6 +97,7 @@ pub struct SpaceForest {
     edges: BTreeMap<FrameId, FrameEdge>,
     parents: BTreeMap<FrameId, FrameId>,
     bridges: Vec<(FrameId, FrameId, Transform3)>,
+    overlays: BTreeSet<FrameId>,
 }
 
 impl SpaceForest {
@@ -168,6 +169,71 @@ impl SpaceForest {
         Ok(())
     }
 
+    /// Registers a runtime **overlay** frame (`space.create`) with a static
+    /// offset relative to `parent`. Overlay frames are dynamic world objects
+    /// that resolve through a bounded overlay walk to their compiled-base
+    /// attachment (`I-Q16`, `REQ-SPATIAL-008`). The frame is a normal static
+    /// edge for path search, but is tracked as overlay so the overlay depth and
+    /// attachment are computable without walking the base graph.
+    ///
+    /// # Errors
+    /// [`SpatialError::NonFinite`] when the transform is not finite.
+    /// REQ: REQ-SPATIAL-008.
+    pub fn add_overlay(
+        &mut self,
+        frame: FrameId,
+        parent: FrameId,
+        transform: Transform3,
+    ) -> Result<(), SpatialError> {
+        self.add_static(frame.clone(), parent, transform)?;
+        self.overlays.insert(frame);
+        Ok(())
+    }
+
+    /// Whether `frame` is a runtime overlay frame (`I-Q16`).
+    /// REQ: REQ-SPATIAL-008.
+    #[must_use]
+    pub fn is_overlay(&self, frame: &str) -> bool {
+        self.overlays.contains(frame)
+    }
+
+    /// The number of consecutive overlay parents from `frame` up to (but not
+    /// including) the first compiled-base frame — the overlay walk depth
+    /// (`I-Q16`). A base frame has depth `0`. The walk is bounded by the frame
+    /// count, so a malformed cycle cannot loop forever.
+    /// REQ: REQ-SPATIAL-008.
+    #[must_use]
+    pub fn overlay_depth(&self, frame: &str) -> u16 {
+        let mut depth: u16 = 0;
+        let mut cur = frame.to_string();
+        let mut seen = BTreeSet::new();
+        while self.overlays.contains(&cur) && seen.insert(cur.clone()) {
+            depth = depth.saturating_add(1);
+            let Some(parent) = self.parents.get(&cur) else {
+                break;
+            };
+            cur.clone_from(parent);
+        }
+        depth
+    }
+
+    /// The compiled-base attachment frame reached by walking overlay parents
+    /// from `frame` (`I-Q16`): the first non-overlay ancestor, or `frame` itself
+    /// when it is a base frame.
+    /// REQ: REQ-SPATIAL-008.
+    #[must_use]
+    pub fn overlay_attachment(&self, frame: &str) -> FrameId {
+        let mut cur = frame.to_string();
+        let mut seen = BTreeSet::new();
+        while self.overlays.contains(&cur) && seen.insert(cur.clone()) {
+            let Some(parent) = self.parents.get(&cur) else {
+                break;
+            };
+            cur.clone_from(parent);
+        }
+        cur
+    }
+
     /// Registers an explicit bridge transform connecting two frames (possibly in
     /// different trees). Bridges are undirected for connectivity; the registered
     /// transform is the `from → to` offset.
@@ -185,6 +251,7 @@ impl SpaceForest {
     pub fn remove(&mut self, frame: &str) {
         self.edges.remove(frame);
         self.parents.remove(frame);
+        self.overlays.remove(frame);
         let orphans: Vec<FrameId> = self
             .parents
             .iter()

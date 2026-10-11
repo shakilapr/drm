@@ -22,8 +22,12 @@ interpolation guard, the time-scoped plan registry, and transactional
 reparenting (Preserve World/Local/Snap) with atomic tree commit
 ([m20w2.md](m20w2.md)); M20W3 added live calibration slots with a jump-threshold
 discontinuity marker, the generational overlay-handle registry, and OS-backed
-single-writer edge authority ([m20w3.md](m20w3.md)). The dynamic hash grid,
-compiled BVH, and exact memory verification remain M21–M22.
+single-writer edge authority ([m20w3.md](m20w3.md)); M20W4 closed **Gate B**
+(`I-Q1`..`I-Q16`) with provable history sizing/order, lockless slot coherence
+(with an exhaustive interleaving model), a zero-allocation query executor, and
+bounded generation-cached overlay plans ([m20w4.md](m20w4.md),
+[month-20.md](month-20.md)). The dynamic hash grid, compiled BVH, and exact
+memory verification remain M21–M22.
 
 ## Wave A (M19) — types, spaces, collapse
 
@@ -46,6 +50,7 @@ compiled BVH, and exact memory verification remain M21–M22.
 | Independent mathematical reference implementation | `tests/oracle/spatial_oracle.py`, `tests/oracle/clock_oracle.py`, `tests/oracle/conventions_oracle.py`, `tests/oracle/query_oracle.py` (NumPy); `math`/`clocks`/`conventions`/`queries` suites | PASS (M19W1–M20W1) |
 | Incremental dynamic hash grid; compiled BVH; proximity completeness | — | pending (M20+) |
 | Historical reparenting (Preserve World/Local/Snap, atomic commit); live calibration; generational overlay | `crates/drm-spatial/src/query.rs` (`ReparentMode`, `reparent`, time-scoped `PlanVersion`, `CalibrationSlot`/`update_calibration_at`) + `src/forest.rs` (`TreeTxn`, `add_calibration`) + `src/handle.rs` (`HandleRegistry`) + `src/writer.rs` (`EdgeAuthority`); `reparent`/`calibration` suites + `query_oracle.py` (I-Q7..I-Q12, I-S11/I-S12, REQ-SPATIAL-003/011/016/027/028/029/030) | PASS (M20W2–M20W3) |
+| Gate B — transform status object; provable history; slot coherence; zero-alloc query; bounded overlay plans | `crates/drm-spatial/src/plan.rs` (`TransformResult`, `QualityFlags`, `OverlayPlanCache`, `compile_overlay_plan`) + `src/forest.rs` (`add_overlay`/`overlay_depth`/`overlay_attachment`) + `src/history.rs` (`TimeHistory` sizing/order) + `src/cache.rs` (`EdgeSlot` seqlock); `history`/`slot`/`overlay`/`query_zero_alloc` suites (I-Q13..I-Q16, REQ-SPATIAL-008/032/033/034/037/050) | PASS (M20W4) |
 | Exact spatial memory verification | — | pending (M21+) |
 
 ## Notes
@@ -55,14 +60,17 @@ compiled BVH, and exact memory verification remain M21–M22.
   (codebase.md 2.1); `drm-workspace` stays toolchain-only. The runtime
   `SpaceForest`/`HistoricalForest` are the flattened runtime counterpart of the
   build-time `drm-workspace` spatial model.
-- Regression permanence (AGENTS #14): M19W1–M19W3 suites are blocking gates.
+- Regression permanence (AGENTS #14): the M19W1–M20W4 spatial suites
+  (`math`/`clocks`/`conventions`/`forest`/`cache`/`queries`/`reparent`/
+  `calibration`/`history`/`slot`/`overlay`/`query_zero_alloc`) are blocking
+  gates.
 
 REQ: REQ-SPATIAL-002, REQ-SPATIAL-003, REQ-SPATIAL-004, REQ-SPATIAL-005,
-REQ-SPATIAL-007, REQ-SPATIAL-009, REQ-SPATIAL-010, REQ-SPATIAL-012,
-REQ-SPATIAL-016, REQ-SPATIAL-017, REQ-SPATIAL-022, REQ-SPATIAL-023,
-REQ-SPATIAL-024, REQ-SPATIAL-025, REQ-SPATIAL-027, REQ-SPATIAL-028,
-REQ-SPATIAL-029, REQ-SPATIAL-030,
-REQ-SPATIAL-031, REQ-SPATIAL-033, REQ-SPATIAL-034, REQ-SPATIAL-035,
+REQ-SPATIAL-007, REQ-SPATIAL-008, REQ-SPATIAL-009, REQ-SPATIAL-010,
+REQ-SPATIAL-012, REQ-SPATIAL-016, REQ-SPATIAL-017, REQ-SPATIAL-022,
+REQ-SPATIAL-023, REQ-SPATIAL-024, REQ-SPATIAL-025, REQ-SPATIAL-027,
+REQ-SPATIAL-028, REQ-SPATIAL-029, REQ-SPATIAL-030, REQ-SPATIAL-031,
+REQ-SPATIAL-032, REQ-SPATIAL-033, REQ-SPATIAL-034, REQ-SPATIAL-035,
 REQ-SPATIAL-036, REQ-SPATIAL-037, REQ-SPATIAL-038, REQ-SPATIAL-039,
 REQ-SPATIAL-040, REQ-SPATIAL-041, REQ-SPATIAL-047, REQ-SPATIAL-048,
 REQ-SPATIAL-049, REQ-SPATIAL-050, REQ-SPATIAL-051.
