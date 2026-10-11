@@ -402,6 +402,8 @@ mod tests {
         FLAG_E2E_CRC, FRAME_DELIMITER, SERIAL_CRC_LEN, SerialFrame, SerialLinkConfig, cobs_decode,
         cobs_encode, cobs_max_encoded_len, crc32c, frame_decode, frame_encode,
     };
+    use crate::transport::Reliability;
+    use crate::transport::registry::{TransportKind, TransportRegistry};
     use crate::wire::{HEADER_LEN, WireHeader};
     use drm_types::Status;
 
@@ -470,6 +472,23 @@ mod tests {
             cobs_decode(&enc[..n], &mut dec).unwrap_or_else(|e| unreachable!("cobs dec: {e:?}"));
         assert_eq!(m, input.len());
         assert_eq!(&dec[..m], input);
+    }
+
+    /// COBS-encodes `decoded` and appends the resync delimiter: one wire frame
+    /// body for a decoder under test.
+    fn wire_from_decoded(decoded: &[u8]) -> Vec<u8> {
+        let mut body = vec![0u8; cobs_max_encoded_len(decoded.len())];
+        let n = cobs_encode(decoded, &mut body).unwrap_or_else(|e| unreachable!("cobs: {e:?}"));
+        body.truncate(n);
+        body.push(FRAME_DELIMITER);
+        body
+    }
+
+    /// Decodes `wire` under `cfg`, discarding the frame so only the status
+    /// remains (the borrowed payload is tied to a local buffer).
+    fn decode_status(cfg: &SerialLinkConfig, wire: &[u8]) -> Result<(), Status> {
+        let mut out = out_buf(cfg);
+        frame_decode(cfg, wire, &mut out).map(|_| ())
     }
 
     /// REQ: REQ-ROUTE-025, REQ-ROUTE-026 — one sample per bounded frame: a
@@ -824,5 +843,174 @@ mod tests {
         assert_eq!(link_config(0, 64).worst_case_blocking_ns(), None);
         assert_eq!(SERIAL_CRC_LEN, 4);
         assert_eq!(HEADER_LEN, 28);
+    }
+
+    /// REQ: REQ-ROUTE-025 — I-SR2: a truncated frame (no trailing delimiter)
+    /// and a decoded sequence shorter than the header plus serial CRC are
+    /// rejected with an explicit error, never a panic.
+    #[test]
+    fn serial_partial_frame_rejected() {
+        let cfg = link_config(115_200, 64);
+        let header = hdr(4);
+        let payload = [1u8, 2, 3, 4];
+        let frame = SerialFrame {
+            header,
+            e2e_crc: None,
+            payload: &payload,
+        };
+        let mut wire = vec![0u8; cfg.max_wire_bytes()];
+        let n =
+            frame_encode(&cfg, &frame, &mut wire).unwrap_or_else(|e| unreachable!("encode: {e:?}"));
+        assert!(n > 0, "frame encoded");
+
+        // Missing trailing delimiter: the last body byte is not `0x00`.
+        assert_eq!(
+            decode_status(&cfg, &wire[..n - 1]),
+            Err(Status::InvalidData)
+        );
+        // Empty wire carries no delimiter at all.
+        assert_eq!(decode_status(&cfg, &[]), Err(Status::InvalidArg));
+
+        // Short declared length: one byte under header + serial CRC.
+        let short = [0xAAu8; HEADER_LEN + SERIAL_CRC_LEN - 1];
+        assert_eq!(
+            decode_status(&cfg, &wire_from_decoded(&short)),
+            Err(Status::InvalidData)
+        );
+    }
+
+    /// REQ: REQ-ROUTE-026 — I-SR3: an otherwise well-formed frame whose serial
+    /// CRC does not match the covered bytes is rejected with the explicit CRC
+    /// error status — both a corrupted stored trailer and a corrupted covered
+    /// byte against a stale trailer.
+    #[test]
+    fn serial_crc_mismatch_rejected() {
+        let cfg = link_config(115_200, 64);
+        let header = hdr(4);
+        let payload = [0x11u8, 0x22, 0x33, 0x44];
+        let good = canonical_decoded(&header, &payload, None);
+        let mut out = out_buf(&cfg);
+        assert!(
+            frame_decode(&cfg, &wire_from_decoded(&good), &mut out).is_ok(),
+            "baseline frame decodes clean"
+        );
+
+        // Stored CRC byte corrupted: covered bytes unchanged, trailer wrong.
+        let mut bad_crc = good.clone();
+        let last = bad_crc.len() - 1;
+        bad_crc[last] ^= 0x01;
+        assert_eq!(
+            decode_status(&cfg, &wire_from_decoded(&bad_crc)),
+            Err(Status::InvalidData)
+        );
+
+        // Covered payload byte corrupted with a stale CRC: length still exact.
+        let mut bad_payload = good.clone();
+        bad_payload[HEADER_LEN] ^= 0x01;
+        assert_eq!(
+            decode_status(&cfg, &wire_from_decoded(&bad_payload)),
+            Err(Status::InvalidData)
+        );
+    }
+
+    /// REQ: REQ-ROUTE-025 — I-SR4: malformed COBS — a zero code byte outside
+    /// the delimiter and a block claiming more bytes than are present — is
+    /// rejected by `cobs_decode` and by the frame decoder.
+    #[test]
+    fn serial_malformed_cobs_rejected() {
+        // A zero code byte is structurally impossible (delimiter-only).
+        assert_eq!(
+            cobs_decode(&[0x00], &mut [0u8; 8]),
+            Err(Status::InvalidData)
+        );
+        // Block code `0x05` promises four data bytes but only two follow.
+        assert_eq!(
+            cobs_decode(&[0x05, 0x01, 0x02], &mut [0u8; 8]),
+            Err(Status::InvalidData)
+        );
+
+        let cfg = link_config(115_200, 64);
+        let header = hdr(4);
+        let payload = [1u8, 2, 3, 4];
+        let frame = SerialFrame {
+            header,
+            e2e_crc: None,
+            payload: &payload,
+        };
+        let mut wire = vec![0u8; cfg.max_wire_bytes()];
+        let n =
+            frame_encode(&cfg, &frame, &mut wire).unwrap_or_else(|e| unreachable!("encode: {e:?}"));
+
+        // Embedded `0x00` inside the body, before the trailing delimiter.
+        let mut embedded = wire[..n].to_vec();
+        embedded.insert(2, 0x00);
+        assert_eq!(decode_status(&cfg, &embedded), Err(Status::InvalidData));
+
+        // Over-long block at the frame level: the code overruns the body.
+        let over_long = [0x05u8, 0x01, 0x02, FRAME_DELIMITER];
+        assert_eq!(decode_status(&cfg, &over_long), Err(Status::InvalidData));
+    }
+
+    /// REQ: REQ-ROUTE-025 — I-SR2: a declared decoded length beyond
+    /// `max_frame_bytes` is refused at encode (before any write) and at decode
+    /// (before the payload is addressed), so no bound-sized allocation occurs.
+    #[test]
+    fn serial_oversize_declared_rejected() {
+        let cfg = link_config(115_200, 64); // decoded bound 64 ⇒ payload ≤ 36
+        let payload = [0x5Au8; 37]; // one byte over the payload bound
+        let header = WireHeader {
+            flags: 0,
+            wire_channel_id: 7,
+            stream_epoch: 1,
+            source_seq: 2,
+            payload_len: 37,
+        };
+        let frame = SerialFrame {
+            header,
+            e2e_crc: None,
+            payload: &payload,
+        };
+        let mut wire = vec![0u8; cfg.max_wire_bytes()];
+        assert_eq!(
+            frame_encode(&cfg, &frame, &mut wire),
+            Err(Status::InvalidArg)
+        );
+
+        // Decode side: a header declaring a length far beyond the bound is
+        // refused with the fixed `max_coded_input_len` output buffer.
+        let foreign = hdr(65_535); // header (28) + 65535 payload >> 64
+        let mut decoded = foreign.to_bytes().to_vec();
+        decoded.extend_from_slice(&[0u8; SERIAL_CRC_LEN]);
+        let mut out = out_buf(&cfg);
+        assert_eq!(
+            frame_decode(&cfg, &wire_from_decoded(&decoded), &mut out),
+            Err(Status::InvalidData)
+        );
+    }
+
+    /// REQ: REQ-ROUTE-024, REQ-ROUTE-034 — serial links are best-effort: the
+    /// per-link config reports `Reliability::BestEffort` regardless of baud or
+    /// decoded bound, and the authoritative registry row for
+    /// `TransportKind::Serial` maps to the same best-effort class.
+    #[test]
+    fn serial_reliability_best_effort() {
+        assert_eq!(
+            link_config(115_200, 256).reliability(),
+            Reliability::BestEffort
+        );
+        assert_eq!(
+            link_config(9_600, 64).reliability(),
+            Reliability::BestEffort
+        );
+
+        let registry = TransportRegistry::from_defaults();
+        let row = registry
+            .lookup(TransportKind::Serial)
+            .unwrap_or_else(|e| unreachable!("registry: {e:?}"));
+        assert_eq!(row.reliability(), Reliability::BestEffort);
+        let selection = registry
+            .select(TransportKind::Serial)
+            .unwrap_or_else(|e| unreachable!("select: {e:?}"));
+        assert_eq!(selection.reliability(), Reliability::BestEffort);
     }
 }
