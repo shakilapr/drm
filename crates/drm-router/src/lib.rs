@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod crc32c;
+pub mod data_path;
 pub mod deployment;
 pub mod egress;
 pub mod framing;

@@ -1,11 +1,12 @@
-//! Verify-engine integration suite (work-plan M09W2-E2-T1;
-//! verify-engine.md §Test Matrix): the deterministic catalogue — `V-SCH`,
-//! `V-SW`, `V-PLC`, `V-RT`, `V-REL`, `V-MEM`, `V-CMP`, `V-ID` — with one
-//! negative fixture per check, positive full-workspace fixture, determinism,
-//! message citations, estimate labeling, no-short-circuit collection, and
-//! independent-deadline semantics. REQ: REQ-TOOL-057, REQ-TOOL-058,
-//! REQ-TOOL-059, REQ-TOOL-060, REQ-TOOL-061, REQ-TOOL-062, REQ-TOOL-063,
-//! REQ-TOOL-064.
+//! Verify-engine integration suite (work-plan M09W2-E2-T1, M09W4-E2-T1;
+//! verify-engine.md §Test Matrix): the complete deterministic catalogue —
+//! `V-SCH`, `V-SW`, `V-PLC`, `V-RT`, `V-REL`, `V-MEM`, `V-CMP`, `V-ID`,
+//! `V-SPAT`, `V-RPC`, `V-REC` — with one negative fixture per check, positive
+//! full-workspace fixture, determinism, message citations, estimate labeling,
+//! no-short-circuit collection, and independent-deadline semantics.
+//! REQ: REQ-TOOL-057, REQ-TOOL-058, REQ-TOOL-059, REQ-TOOL-060,
+//! REQ-TOOL-061, REQ-TOOL-062, REQ-TOOL-063, REQ-TOOL-064, REQ-SPATIAL-030,
+//! REQ-SPATIAL-018, REQ-SPATIAL-037, REQ-OPS-024, REQ-OPS-008.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,9 +16,10 @@ use drm_workspace::model::{
     ComputeEntry, NodeEntry, PackageInput, TreeInput, WorkspaceModel, build,
 };
 use drm_workspace::verify::engine::{
-    ALL_CHECKS, CheckId, ConsumerDecl, DeploymentConfig, FactResult, LinkCapability, ReadMode,
-    Reliability, TopicDecl, Transport, V_CMP, V_ID, V_MEM, V_PLC, V_REL, V_RT, V_SCH, V_SW,
-    VerifyReport, verify,
+    ALL_CHECKS, CheckId, ConsumerDecl, DeploymentConfig, FactResult, HistoryDecl, LinkCapability,
+    ReadMode, RecorderDecl, RecorderFull, Reliability, RpcDecl, SpatialEdgeDecl, SpatialIndexDecl,
+    TopicDecl, Transport, V_CMP, V_ID, V_MEM, V_PLC, V_REC, V_REL, V_RPC, V_RT, V_SCH, V_SPAT,
+    V_SW, VerifyReport, verify,
 };
 
 /// Fixture helper that fails loudly on an unexpected build error.
@@ -249,6 +251,43 @@ fn neg_identity() -> VerifyReport {
     verify(&m, &config())
 }
 
+/// `V-SPAT` negative: `index.drm` capacity exceeds the memory budget (I-MB9).
+/// REQ: REQ-SPATIAL-018.
+fn neg_spatial() -> VerifyReport {
+    let mut deploy = config();
+    deploy.spatial.index = Some(SpatialIndexDecl {
+        index_bytes: 1 << 20,
+        budget_bytes: 1 << 10,
+    });
+    verify(&workspace(), &deploy)
+}
+
+/// `V-RPC` negative: declared concurrency exceeds the capacity model.
+/// REQ: REQ-OPS-021.
+fn neg_rpc() -> VerifyReport {
+    let mut deploy = config();
+    deploy.rpc.push(RpcDecl {
+        service: "svc".to_string(),
+        request_topic: "pkg/front".to_string(),
+        event_topic: "pkg/front".to_string(),
+        concurrency: 8,
+        capacity: 2,
+    });
+    verify(&workspace(), &deploy)
+}
+
+/// `V-REC` negative: `on_full = backpressure` on a `reject` topic without a
+/// declared required sequential recorder. REQ: REQ-OPS-008.
+fn neg_recorder() -> VerifyReport {
+    let mut deploy = config();
+    deploy.recorders.push(RecorderDecl {
+        topic: "pkg/reject_topic".to_string(),
+        on_full: RecorderFull::Backpressure,
+        required_sequential: false,
+    });
+    verify(&workspace(), &deploy)
+}
+
 /// Every check with its negative fixture (I-V1). REQ: REQ-TOOL-057.
 fn all_negatives() -> Vec<(CheckId, VerifyReport)> {
     vec![
@@ -260,6 +299,9 @@ fn all_negatives() -> Vec<(CheckId, VerifyReport)> {
         (V_MEM, neg_memory()),
         (V_CMP, neg_compatibility()),
         (V_ID, neg_identity()),
+        (V_SPAT, neg_spatial()),
+        (V_RPC, neg_rpc()),
+        (V_REC, neg_recorder()),
     ]
 }
 
@@ -422,4 +464,117 @@ fn verify_handle_conflict() {
     let report = verify(&workspace(), &deploy);
     assert!(has_fail(&report, V_ID));
     assert_failures_cited(&report);
+}
+
+/// REQ: REQ-SPATIAL-030 — sub-fixtures: two writers, a write+transform
+/// conflict, and an undeclared `[spatial] read` each fail `V-SPAT`.
+#[test]
+fn verify_spatial_edges() {
+    for edges in [
+        vec![SpatialEdgeDecl {
+            edge: "arm".to_string(),
+            writers: 2,
+            ..SpatialEdgeDecl::default()
+        }],
+        vec![SpatialEdgeDecl {
+            edge: "arm".to_string(),
+            writers: 1,
+            transform: true,
+            ..SpatialEdgeDecl::default()
+        }],
+        vec![SpatialEdgeDecl {
+            edge: "arm".to_string(),
+            reads: 1,
+            declared_read: false,
+            ..SpatialEdgeDecl::default()
+        }],
+    ] {
+        let mut deploy = config();
+        deploy.spatial.edges = edges;
+        let report = verify(&workspace(), &deploy);
+        assert!(has_fail(&report, V_SPAT), "V-SPAT must reject: {report:?}");
+        assert_failures_cited(&report);
+    }
+}
+
+/// REQ: REQ-SPATIAL-037 — an unsatisfiable history bound fails; a satisfiable
+/// one passes.
+#[test]
+fn verify_spatial_history_bound() {
+    let mut bad = config();
+    bad.spatial.histories = vec![HistoryDecl {
+        edge: "arm".to_string(),
+        history_ns: 1_000,
+        min_sample_period_ns: 10,
+        max_samples: 5,
+    }];
+    let report = verify(&workspace(), &bad);
+    assert!(has_fail(&report, V_SPAT), "{report:?}");
+    assert_failures_cited(&report);
+
+    let mut ok = config();
+    ok.spatial.histories = vec![HistoryDecl {
+        edge: "arm".to_string(),
+        history_ns: 1_000,
+        min_sample_period_ns: 10,
+        max_samples: 102,
+    }];
+    let report = verify(&workspace(), &ok);
+    assert!(!has_fail(&report, V_SPAT), "bound met: {report:?}");
+}
+
+/// REQ: REQ-OPS-024 — an RPC topic declared best-effort-only fails `V-RPC`; a
+/// reliably-declared one passes.
+#[test]
+fn verify_rpc_reliability() {
+    let mut bad = config();
+    bad.topics.insert(
+        "pkg/front".to_string(),
+        TopicDecl {
+            reliability: Reliability::BestEffort,
+            ..TopicDecl::default()
+        },
+    );
+    bad.rpc.push(RpcDecl {
+        service: "svc".to_string(),
+        request_topic: "pkg/front".to_string(),
+        event_topic: "pkg/front".to_string(),
+        concurrency: 1,
+        capacity: 1,
+    });
+    let report = verify(&workspace(), &bad);
+    assert!(has_fail(&report, V_RPC), "{report:?}");
+    assert_failures_cited(&report);
+
+    let mut ok = config();
+    ok.topics.insert(
+        "pkg/front".to_string(),
+        TopicDecl {
+            reliability: Reliability::Reliable,
+            ..TopicDecl::default()
+        },
+    );
+    ok.rpc.push(RpcDecl {
+        service: "svc".to_string(),
+        request_topic: "pkg/front".to_string(),
+        event_topic: "pkg/front".to_string(),
+        concurrency: 1,
+        capacity: 1,
+    });
+    let report = verify(&workspace(), &ok);
+    assert!(!has_fail(&report, V_RPC), "reliable: {report:?}");
+}
+
+/// REQ: REQ-OPS-008 — a required sequential recorder satisfies the
+/// backpressure-on-reject rule.
+#[test]
+fn verify_recorder_required_consumer() {
+    let mut ok = config();
+    ok.recorders.push(RecorderDecl {
+        topic: "pkg/reject_topic".to_string(),
+        on_full: RecorderFull::Backpressure,
+        required_sequential: true,
+    });
+    let report = verify(&workspace(), &ok);
+    assert!(!has_fail(&report, V_REC), "declared: {report:?}");
 }

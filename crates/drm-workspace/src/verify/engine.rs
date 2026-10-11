@@ -2,10 +2,13 @@
 //! §Functions `verify`): the deterministic fact catalogue — `V-SCH` schemas,
 //! `V-SW` single writer, `V-PLC` placement, `V-RT` route existence + framing
 //! fit, `V-REL` reliability capability, `V-MEM` budgets, `V-CMP` consumer
-//! compatibility, `V-ID` identity. No short-circuit: every check contributes
-//! all its failures (I-V5); the report never labels an estimate a fact (I-V4).
+//! compatibility, `V-ID` identity, `V-SPAT` spatial contracts, `V-RPC` RPC
+//! route reliability + shape, `V-REC` recorder backpressure declaration. No
+//! short-circuit: every check contributes all its failures (I-V5); the report
+//! never labels an estimate a fact (I-V4).
 //! REQ: REQ-TOOL-057, REQ-TOOL-058, REQ-TOOL-059, REQ-TOOL-060,
-//! REQ-TOOL-061, REQ-TOOL-062, REQ-TOOL-063, REQ-TOOL-064.
+//! REQ-TOOL-061, REQ-TOOL-062, REQ-TOOL-063, REQ-TOOL-064, REQ-SPATIAL-030,
+//! REQ-SPATIAL-018, REQ-SPATIAL-037, REQ-OPS-024, REQ-OPS-008.
 
 #![allow(clippy::module_name_repetitions)]
 
@@ -52,10 +55,22 @@ pub const V_CMP: CheckId = CheckId("V-CMP");
 /// `V-ID` — duplicate topic/node/compute names; handle table conflicts.
 /// REQ: REQ-TOOL-060.
 pub const V_ID: CheckId = CheckId("V-ID");
+/// `V-SPAT` — spatial contracts: single writer per dynamic edge, declared
+/// reads, index capacity within budget, satisfiable history bounds.
+/// REQ: REQ-SPATIAL-030.
+pub const V_SPAT: CheckId = CheckId("V-SPAT");
+/// `V-RPC` — generated RPC topics route reliably, event topic single-writer
+/// server-owned, concurrency within capacity. REQ: REQ-OPS-024.
+pub const V_RPC: CheckId = CheckId("V-RPC");
+/// `V-REC` — recorder `on_full = backpressure` on a `reject` topic declares a
+/// required sequential consumer. REQ: REQ-OPS-008.
+pub const V_REC: CheckId = CheckId("V-REC");
 
 /// Every catalogue check id, in report order (I-V1 catalogue completeness).
 /// REQ: REQ-TOOL-057.
-pub const ALL_CHECKS: [CheckId; 8] = [V_SCH, V_SW, V_PLC, V_RT, V_REL, V_MEM, V_CMP, V_ID];
+pub const ALL_CHECKS: [CheckId; 11] = [
+    V_SCH, V_SW, V_PLC, V_RT, V_REL, V_MEM, V_CMP, V_ID, V_SPAT, V_RPC, V_REC,
+];
 
 /// One deterministic fact failure: check id + preformatted message carrying a
 /// REQ citation (I-V3). REQ: REQ-TOOL-059.
@@ -271,9 +286,100 @@ pub struct TopicDecl {
     pub consumers: Vec<ConsumerDecl>,
 }
 
+/// Declared dynamic spatial edge (V-SPAT): writers, transform, and reads.
+/// REQ: REQ-SPATIAL-030.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SpatialEdgeDecl {
+    /// Edge identity.
+    pub edge: String,
+    /// Writers on this dynamic edge (single-writer requires 0 or 1).
+    pub writers: u32,
+    /// Whether a transform is declared directly on the same edge.
+    pub transform: bool,
+    /// Referenced `[spatial] read`s of this edge.
+    pub reads: u32,
+    /// Whether the reading nodes declare the read.
+    pub declared_read: bool,
+}
+
+/// Declared spatial index capacity vs deployment budget (V-SPAT, I-MB9).
+/// REQ: REQ-SPATIAL-018.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpatialIndexDecl {
+    /// `index.drm` capacity in bytes.
+    pub index_bytes: u64,
+    /// Memory budget available to the index in bytes.
+    pub budget_bytes: u64,
+}
+
+/// Declared transform-history requirement (V-SPAT structural bound).
+/// REQ: REQ-SPATIAL-037.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HistoryDecl {
+    /// Edge identity.
+    pub edge: String,
+    /// Declared history window `H` in nanoseconds.
+    pub history_ns: u64,
+    /// Declared minimum sample period `P` in nanoseconds (`0` treated as `1`).
+    pub min_sample_period_ns: u64,
+    /// Declared fixed memory capacity `N`.
+    pub max_samples: u64,
+}
+
+/// Declared spatial contract surface (V-SPAT). REQ: REQ-SPATIAL-030.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SpatialDecl {
+    /// Dynamic edges.
+    pub edges: Vec<SpatialEdgeDecl>,
+    /// Index capacity vs budget, when an index is declared.
+    pub index: Option<SpatialIndexDecl>,
+    /// History requirements.
+    pub histories: Vec<HistoryDecl>,
+    /// Spatial-typed schema fields carrying naked coordinates.
+    pub naked_coordinate_fields: Vec<String>,
+}
+
+/// Declared RPC service surface (V-RPC). REQ: REQ-OPS-024.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RpcDecl {
+    /// Service identity.
+    pub service: String,
+    /// Generated request topic.
+    pub request_topic: String,
+    /// Generated event topic (single-writer server-owned).
+    pub event_topic: String,
+    /// Declared concurrency.
+    pub concurrency: u32,
+    /// Capacity-model bound.
+    pub capacity: u32,
+}
+
+/// Recorder `on_full` policy (V-REC). REQ: REQ-OPS-008.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RecorderFull {
+    /// Drop samples (loss ledger).
+    #[default]
+    Drop,
+    /// Stop recording.
+    Stop,
+    /// Publisher-gating backpressure.
+    Backpressure,
+}
+
+/// Declared recorder (V-REC). REQ: REQ-OPS-008.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RecorderDecl {
+    /// Recorded topic.
+    pub topic: String,
+    /// `on_full` policy.
+    pub on_full: RecorderFull,
+    /// Whether the recorder is declared as a required sequential consumer.
+    pub required_sequential: bool,
+}
+
 /// Deployment configuration consumed by `drm verify`: memory budgets, link
-/// capabilities, per-topic requirements, and the optional committed handle
-/// table. REQ: REQ-TOOL-057.
+/// capabilities, per-topic requirements, spatial/RPC/recorder declarations, and
+/// the optional committed handle table. REQ: REQ-TOOL-057.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeploymentConfig {
     /// Per-compute memory budgets and channel costs (V-MEM).
@@ -285,6 +391,12 @@ pub struct DeploymentConfig {
     /// Committed handle table, when verifying a build with prior assignments
     /// (V-ID handle conflicts). REQ: REQ-TOOL-060.
     pub handles: Option<HandleTable>,
+    /// Spatial contract declarations (V-SPAT). REQ: REQ-SPATIAL-030.
+    pub spatial: SpatialDecl,
+    /// RPC service declarations (V-RPC). REQ: REQ-OPS-024.
+    pub rpc: Vec<RpcDecl>,
+    /// Recorder declarations (V-REC). REQ: REQ-OPS-008.
+    pub recorders: Vec<RecorderDecl>,
 }
 
 /// Builds the route-derivation graph from the model: computes, links (both
@@ -321,7 +433,8 @@ pub fn route_graph(model: &WorkspaceModel) -> RouteGraph {
 /// Runs the full deterministic catalogue over `model` (verify-engine.md
 /// §Functions `verify`): every check contributes all failures, in catalogue
 /// order, with no short-circuit (I-V5). REQ: REQ-TOOL-057, REQ-TOOL-063,
-/// REQ-TOOL-064, REQ-TOOL-060, REQ-TOOL-062, REQ-TOOL-061, REQ-TOOL-058.
+/// REQ-TOOL-064, REQ-TOOL-060, REQ-TOOL-062, REQ-TOOL-061, REQ-TOOL-058,
+/// REQ-SPATIAL-030, REQ-OPS-024, REQ-OPS-008.
 #[must_use]
 pub fn verify(model: &WorkspaceModel, deploy: &DeploymentConfig) -> VerifyReport {
     let mut report = VerifyReport::default();
@@ -334,6 +447,9 @@ pub fn verify(model: &WorkspaceModel, deploy: &DeploymentConfig) -> VerifyReport
     check_memory(deploy, &mut report);
     check_compatibility(model, deploy, &mut report);
     check_identity(model, deploy, &mut report);
+    check_spatial(deploy, &mut report);
+    check_rpc(model, deploy, &mut report);
+    check_recorder(model, deploy, &mut report);
     report
 }
 
@@ -600,6 +716,175 @@ fn check_identity(model: &WorkspaceModel, deploy: &DeploymentConfig, report: &mu
     }
     if !failed {
         report.pass(V_ID);
+    }
+}
+
+/// `V-SPAT`: dynamic-edge single writer, write/transform conflict, declared
+/// `[spatial]` reads, `index.drm` capacity within the memory budget, history
+/// requirements satisfiable by the structural bound, and no naked-coordinate
+/// fields in spatial-typed topics. REQ: REQ-SPATIAL-030, REQ-SPATIAL-018,
+/// REQ-SPATIAL-037, REQ-SPATIAL-036.
+fn check_spatial(deploy: &DeploymentConfig, report: &mut VerifyReport) {
+    let mut failed = false;
+    for edge in &deploy.spatial.edges {
+        if edge.writers > 1 {
+            report.fail(
+                V_SPAT,
+                format!(
+                    "dynamic edge `{}` has {} writers (single-writer required)",
+                    edge.edge, edge.writers
+                ),
+                &["REQ-SPATIAL-030"],
+            );
+            failed = true;
+        }
+        if edge.writers > 0 && edge.transform {
+            report.fail(
+                V_SPAT,
+                format!(
+                    "dynamic edge `{}` declares both a writer and a transform (write+transform conflict)",
+                    edge.edge
+                ),
+                &["REQ-SPATIAL-030"],
+            );
+            failed = true;
+        }
+        if edge.reads > 0 && !edge.declared_read {
+            report.fail(
+                V_SPAT,
+                format!(
+                    "edge `{}` is read but no `[spatial] read` is declared",
+                    edge.edge
+                ),
+                &["REQ-SPATIAL-030"],
+            );
+            failed = true;
+        }
+    }
+    if let Some(index) = &deploy.spatial.index
+        && index.index_bytes > index.budget_bytes
+    {
+        report.fail(
+            V_SPAT,
+            format!(
+                "spatial index capacity {} B exceeds the memory budget {} B (I-MB9)",
+                index.index_bytes, index.budget_bytes
+            ),
+            &["REQ-SPATIAL-018"],
+        );
+        failed = true;
+    }
+    for history in &deploy.spatial.histories {
+        let period = history.min_sample_period_ns.max(1);
+        let required = history.history_ns / period + 2;
+        if history.max_samples < required {
+            report.fail(
+                V_SPAT,
+                format!(
+                    "edge `{}` history unsatisfiable: max_samples {} < floor(H/P)+2 = {required}",
+                    history.edge, history.max_samples
+                ),
+                &["REQ-SPATIAL-037"],
+            );
+            failed = true;
+        }
+    }
+    for field in &deploy.spatial.naked_coordinate_fields {
+        report.fail(
+            V_SPAT,
+            format!(
+                "spatial topic field `{field}` carries a naked coordinate (typed frame required)"
+            ),
+            &["REQ-SPATIAL-036"],
+        );
+        failed = true;
+    }
+    if !failed {
+        report.pass(V_SPAT);
+    }
+}
+
+/// `V-RPC`: generated request/event topics must be declared `reliable`, the
+/// event topic must be single-writer server-owned, and declared concurrency
+/// must fit the capacity model. REQ: REQ-OPS-024, REQ-OPS-012, REQ-OPS-021.
+fn check_rpc(model: &WorkspaceModel, deploy: &DeploymentConfig, report: &mut VerifyReport) {
+    let mut failed = false;
+    for rpc in &deploy.rpc {
+        for topic in [&rpc.request_topic, &rpc.event_topic] {
+            if let Some(decl) = deploy.topics.get(topic)
+                && decl.reliability != Reliability::Reliable
+            {
+                report.fail(
+                    V_RPC,
+                    format!(
+                        "RPC service `{}` topic `{topic}` is routed best-effort-only (reliable required)",
+                        rpc.service
+                    ),
+                    &["REQ-OPS-024"],
+                );
+                failed = true;
+            }
+        }
+        if model.topics.contains_key(&rpc.event_topic) {
+            let publishers = model
+                .nodes
+                .values()
+                .filter(|n| n.publishes.contains(&rpc.event_topic))
+                .count();
+            if publishers != 1 {
+                report.fail(
+                    V_RPC,
+                    format!(
+                        "RPC event topic `{}` has {publishers} publishers (single-writer server-owned required)",
+                        rpc.event_topic
+                    ),
+                    &["REQ-OPS-012"],
+                );
+                failed = true;
+            }
+        }
+        if rpc.concurrency > rpc.capacity {
+            report.fail(
+                V_RPC,
+                format!(
+                    "RPC service `{}` declares concurrency {} above the capacity model {}",
+                    rpc.service, rpc.concurrency, rpc.capacity
+                ),
+                &["REQ-OPS-021"],
+            );
+            failed = true;
+        }
+    }
+    if !failed {
+        report.pass(V_RPC);
+    }
+}
+
+/// `V-REC`: a recorder declaring `on_full = backpressure` on a `reject` topic
+/// gates the publisher and must be declared as a required sequential consumer
+/// (record-replay.md). REQ: REQ-OPS-008.
+fn check_recorder(model: &WorkspaceModel, deploy: &DeploymentConfig, report: &mut VerifyReport) {
+    let mut failed = false;
+    for recorder in &deploy.recorders {
+        let reject = model
+            .topics
+            .get(&recorder.topic)
+            .is_some_and(|entry| entry.attrs.overflow_reject);
+        if recorder.on_full == RecorderFull::Backpressure && reject && !recorder.required_sequential
+        {
+            report.fail(
+                V_REC,
+                format!(
+                    "recorder on `{}` uses `on_full = backpressure` on a `reject` topic without a declared required sequential consumer",
+                    recorder.topic
+                ),
+                &["REQ-OPS-008"],
+            );
+            failed = true;
+        }
+    }
+    if !failed {
+        report.pass(V_REC);
     }
 }
 

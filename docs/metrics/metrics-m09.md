@@ -123,3 +123,49 @@ Notes:
 - The dev smoke is deterministic by design (build cycles, not a live watcher):
   the poller and debounce core is covered independently by `watch_dispatch.rs`.
 
+## M09W4 — Verify Catalogue Completion, Router Core Data Path
+
+| Variable | Target | Measured |
+|---|---|---|
+| `VERIFY_FULL` | complete check catalogue green | `cargo test -p drm-workspace verify`: `verify_engine` 12/12 — `verify_catalogue` (I-V1) now spans 11 checks (`V-SCH`/`V-SW`/`V-PLC`/`V-RT`/`V-REL`/`V-MEM`/`V-CMP`/`V-ID`/`V-SPAT`/`V-RPC`/`V-REC`), each with ≥ 1 positive + ≥ 1 negative fixture; `verify_negatives_v2` 7/7; `verify_lite` 1/1 |
+| `ROUTER_UDP_GREEN` | UDP egress/ingress over loopback pair | `cargo test -p drm-router --test router_core`: 4/4 green — `egress_udp` (route filter + framed loopback send), `import_native_equivalence`, `ingress_ordering`, `ingress_rejects_before_state`; `cargo run -p drm-router --example udp_pair` loopback green |
+| `IMPORT_PROBE` | imported data indistinguishable from local (I-RT4) | `import_native_equivalence` — the imported payload deposits in the same native bytes as the local sample (only the wire header is stripped), so a consumer cannot distinguish them |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Verify catalogue completion `crates/drm-workspace/src/verify/engine.rs`
+  ([verify-engine.md](../algorithms/toolchain/verify-engine.md) §Check catalogue):
+  `V-SPAT` (dynamic-edge single writer, write+transform conflict, declared
+  `[spatial]` reads, `index.drm` capacity within budget (I-MB9), satisfiable
+  history bound, no naked-coordinate fields), `V-RPC` (request/cancel/event
+  route reliability, single-writer server-owned event topic, concurrency within
+  the capacity model), and `V-REC` (`on_full = backpressure` on a `reject` topic
+  requires a declared required sequential consumer). `ALL_CHECKS` now enumerates
+  11 ids in report order (I-V1).
+- Negative fixtures for the three new checks (`neg_spatial`, `neg_rpc`,
+  `neg_recorder`) plus positive cases (`verify_spatial_edges`,
+  `verify_spatial_history_bound`, `verify_rpc_reliability`,
+  `verify_recorder_required_consumer`) in
+  `crates/drm-workspace/tests/verify_engine.rs`.
+- Router core data path `crates/drm-router/src/data_path.rs` (router-core.md
+  §Functions `egress`/`ingress`): `EgressRoute` (link/wire-channel binding,
+  I-RT1 remote-consumer filter, I-RT3 `max_datagram_payload`, I-RT18
+  `max_record_bytes`), `Router::egress`/`ingress_frame`, the `ImportSink`
+  synthetic-publisher deposit with per-`(link, wire_channel_id)` epoch/sequence
+  ordering (I-RT9), and `IngressOutcome` (`Imported`/`Duplicate`/`StaleEpoch`/
+  `UnknownChannel`).
+- Router core suite `crates/drm-router/tests/router_core.rs`: UDP egress
+  (oversize rejected before any send; loopback send green), header-stripped
+  ingress ordering, reject-before-state (unknown channel, length mismatch,
+  receive-bound), and imported-vs-local native equivalence (I-RT4).
+
+Notes:
+
+- The verify catalogue now matches verify-engine.md §Check catalogue exactly;
+  the Phase 26 gate doc itself lands at M12W2, so this week completes the
+  implementation + negative matrix, not the gate.
+- `Router::ingress_frame` strips the wire header and deposits through the
+  synthetic-publisher `ImportSink` in native format; ordering state is per
+  `(link, wire_channel_id)` and a protocol error never mutates it (I-RT14).
+
