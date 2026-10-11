@@ -13,6 +13,7 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 | `xtask gen-check` | regenerate against fixtures; fail on diff (codebase §3.1 R6) |
 | `xtask audit-zero-alloc` | data-path allocation audit (codebase §3.2) |
 | `xtask audit-traceability` | REQ citation coverage; flags `--registry`, `--citations`, `--matrix` |
+| `xtask workplan` | 24-month work-plan progress: `status` (what's done / in progress), `next`, `watch [--interval <s>]`, `mark-done <week>` |
 | `xtask docs` | build docs + execute examples headless |
 
 ## Extension commands (ADR 0003)
