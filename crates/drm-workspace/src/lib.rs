@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod budget;
 pub mod canon;
 pub mod model;
 pub mod parser;
