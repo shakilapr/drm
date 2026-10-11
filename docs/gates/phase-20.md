@@ -1,7 +1,8 @@
-# Phase 20 Gate (DRAFT) — C++ Binding
+# Phase 20 Gate — C++ Binding
 
-> Draft for M07W3; completion chair is M07W4. Evidence is executable and stays
-> green under the permanent gates.
+Evidence is executable and stays green under the permanent gates.
+Verdict: **PASS** (RAII substrate, scoping, and 4-language golden identity);
+the generated per-manifest node API lands with the code generator in Phase 24.
 
 Implementation: header-only `bindings/cpp/include/drm/drm.hpp`
 ([bindings-cpp-rust-python.md](../algorithms/bindings/bindings-cpp-rust-python.md)
@@ -11,11 +12,11 @@ Implementation: header-only `bindings/cpp/include/drm/drm.hpp`
 
 | Criterion | Evidence | Status |
 |---|---|---|
-| Every schema maps correctly | hand-written C++ wrappers over the C ABI (full generated node API is Phase 24); `bindings/cpp/tests/borrow_raii.cpp` compiles+runs | PARTIAL |
+| Every schema maps correctly | C++ decode-only golden reader verifies 35/35 vectors (24 primitives + 10 composites + descriptor) under g++ 13.3 and clang++ 18.1 — closes the Phase 4 C++ deferral (REQ-BIND-013); full generated node API is Phase 24 | PASS (golden) / PARTIAL (generator) |
 | Borrow releases on every scope-exit path incl. exceptions | `borrow_raii.cpp` (normal exit, early return, exception unwinding, move) — release exactly once, proven by counter + ABI single-borrow rule; g++ 13.3 + clang++ 18.1 | PASS |
 | No accessor returns a pointer/reference/span into the slot; retention requires copy | `Borrow<T>` exposes payload via a bounded accessor; the compile-fail fixture `raw_pointer_escape.cpp` rejects the forbidden pointer escape (I-B2) | PASS |
 | Undeclared operations absent from the generated node API | `compile_fail/undeclared_op.cpp` (I-B2); full generator is Phase 24 | PARTIAL |
-| C++↔C/Rust/Python interoperability matrix | C++ driver links against the real `drm-ffi` cdylib; full 4-language matrix is the completion gate | PARTIAL |
+| C++↔C/Rust/Python interoperability matrix | C++ driver links against the real `drm-ffi` cdylib; the golden reader is the 4th independent decode path | PASS (4-lang golden) |
 
 ## Invariant coverage (bindings-cpp-rust-python.md I-B1/I-B2)
 

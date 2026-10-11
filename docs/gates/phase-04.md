@@ -13,7 +13,7 @@ Verdict: **PASS** (triple green locally; evidence CI-replayed below).
 | Golden set final | `xtask golden-gen` idempotent (`git diff --exit-code tests/fixtures/golden`); fixtures frozen: primitives 24 positive + 1 malformed-negative, composites 10, descriptor 1 ⇒ 35 golden vectors | PASS |
 | Canonical layout identical across languages | Python `pytest bindings/python/tests` (3 passed: primitives, composites, UTF-8-malformed rejection); C `golden_composites` (10/10 vectors, gcc `-Wall -Wextra -Werror`); Rust `golden_primitives` + `golden_composites` suites | PASS |
 | Descriptor byte-exactness | `descriptor_golden.rs` (field-for-field byte table + compile-time offset asserts; REQ-CORE-014/015/016) | PASS |
-| C++ closure documented | C++ runner deferred to the Phase 20 gate (C++17/20 RAII bindings work package); recorded here and in registry `REQ-BIND-013` test field | CLOSED → Phase 20 |
+| C++ closure documented | C++ decode-only golden reader (`bindings/cpp/tests/golden/golden_decode.cpp`; g++ 13.3 + clang++ 18.1) verifies 35/35 vectors — closes REQ-BIND-013 | PASS (M07W4) |
 
 ## Golden totals (M02W4 `GOLDEN_TOTAL ≥ 30 ×3 langs`)
 
@@ -22,7 +22,7 @@ Verdict: **PASS** (triple green locally; evidence CI-replayed below).
 | Rust | `cargo test --workspace` (`golden_primitives`, `golden_composites`, `descriptor_golden`) | 24 + 10 + 1 | PASS |
 | C | `gcc bindings/c/tests/golden/golden_composites.c` runner | 10 composites (+ `golden_read.c` reader semantics) | PASS |
 | Python | `pytest bindings/python/tests/test_golden_bytes.py` | 24 + 10 (+ 1 negative) | PASS |
-| C++ | — | deferred | Phase 20 |
+| C++ | `bindings/cpp/tests/golden/run.sh` (g++ + clang++) | 24 + 10 + 1 | PASS |
 
 ## Requirements covered
 

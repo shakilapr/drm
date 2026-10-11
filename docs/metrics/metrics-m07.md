@@ -54,3 +54,16 @@ skipped); Phase 20 gate draft.
 `spawn_child` now serializes against the flock assertions via a process-wide
 guard; 0/30 failures after (was intermittent), and stale `/dev/shm` segments
 cleared.
+
+## M07W4 — Phase 20 Gate (C++ Binding), Phase 4 Closure
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 20)` | PASS | PASS — `docs/gates/phase-20.md` |
+| `GOLDEN_4LANG` | C/C++/Rust/Python golden identity complete (Phase 4 C++ closure) | C++ decode-only reader (`bindings/cpp/tests/golden/`) verifies **35/35** vectors (24 primitives + 10 composites + descriptor) under g++ 13.3 and clang++ 18.1; negative proofs (corrupt byte/gap/descriptor) fail as expected; [phase-04.md](../gates/phase-04.md) C++ row updated to PASS |
+| `CPP_GATE_EVIDENCE` | work-plan #20 criteria fully evidenced | RAII (I-B1) + scoping (I-B2) + 4-language golden; generated node API carries to Phase 24 |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `bindings/cpp/tests/golden/{golden_decode.cpp,run.sh}` (self-contained
+decode-only reader); Phase 4 C++ deferral closed; Phase 20 gate finalized.
+Phase 21 evidence pack carries to M08W1.
