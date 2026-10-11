@@ -20,9 +20,11 @@ assertions). Phase 18 hardening.
 
 | Crate | Bench | What it measures |
 |---|---|---|
-| `drm-core` | `benches/latency.rs` | `publish`, `copy_latest`, `copy_next`, write-loan borrow round trip |
+| `drm-core` | `benches/latency.rs` | `publish`, `copy_latest`, `copy_next`, write-loan borrow round trip, exhaustion/backpressure (`QueueFull`) publish |
 | `drm-core` | `benches/throughput.rs` | sequence-ring commit + lookup, payload-pool slot write + offset |
+| `drm-core` | `benches/codec.rs` | canon-codec primitive read/write, two-region `body_range`, `validate_sample` |
 | `drm-router` | `benches/router.rs` | peer-lane loopback p50/p99, token-bucket admission, priority enqueue/pop |
+| `drm-router` | `benches/transport.rs` | UDP datagram loopback, serial COBS/CRC32C frame encode + decode |
 
 The harness is `criterion` (`harness = false`). The runner pins the CPU
 (`taskset -c 1 cargo bench`) so numbers are comparable across runs; the CI
@@ -47,13 +49,20 @@ The benches assert architecture invariants under load, not only in unit scope
 
 - **Zero allocation** (`assert_zero_alloc`): a counting `GlobalAlloc` local to
   each bench binary totals allocator entries; a steady-state publish + read /
-  ring commit + lookup / lane send + service block must report zero allocator
-  entries and zero deallocations (I-P/I-4 style; architecture §Zero Data-Path
-  Allocation).
+  ring commit + lookup / lane send + service / codec round trip / serial
+  encode + decode block must report zero allocator entries and zero
+  deallocations (I-P/I-4 style; architecture §Zero Data-Path Allocation). The
+  UDP loopback is syscall-bound and carries only the bounded-time invariant.
 - **Bounded time** (the in-bench `measure`/`percentile` helpers): the p99
-  latency of the steady-state round trip must stay under a declared budget —
-  `50 µs` for the core publish + read / ring paths and `20 µs` for the router
-  lane loopback. A violation aborts the bench with a non-zero exit.
+  latency of the steady-state round trip must stay under a declared budget — `50
+  µs` for the core publish + read / ring paths, `50 µs` for the exhaustion
+  (`QueueFull`) publish path, `5 µs` for a canon-codec round trip, `20 µs` for
+  the router lane loopback and the serial frame codec, and `500 µs` for the UDP
+  loopback. A violation aborts the bench with a non-zero exit.
+- **Budget fit** (`publish_queue_full`): the exhaustion-path channel's
+  worst-case footprint (`pool_slots × slot_bytes + control_block`,
+  [memory-budget.md](../algorithms/memory-budget.md) I-MB1) is checked against
+  the declared bench budget at compile time.
 
 ## Noise bands
 
@@ -80,7 +89,9 @@ marked p50/p99 (nearest-rank, in-bench).
 ```text
 taskset -c 1 cargo bench -p drm-core --bench latency
 taskset -c 1 cargo bench -p drm-core --bench throughput
+taskset -c 1 cargo bench -p drm-core --bench codec
 taskset -c 1 cargo bench -p drm-router --bench router
+taskset -c 1 cargo bench -p drm-router --bench transport
 ```
 
 REQ: REQ-QAL-011, REQ-QAL-012, REQ-CORE-003, REQ-CORE-012, REQ-CORE-013,

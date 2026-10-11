@@ -46,3 +46,7 @@ harness = false
 [[bench]]
 name = "throughput"
 harness = false
+
+[[bench]]
+name = "codec"
+harness = false

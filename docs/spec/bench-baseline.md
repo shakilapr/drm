@@ -46,3 +46,21 @@ REQ: REQ-QAL-011, REQ-QAL-012.
 Five consecutive pinned runs (`--warm-up-time 0.1 --measurement-time 0.2
 --sample-size 10`) held within the bands: core publish+latest p50 180–190 ns,
 ring commit+lookup p99 50–51 ns, router lane loopback p50 30–31 ns / p99 40 ns.
+
+## M23W4
+
+Recorded on the pinned x86-64 host (`--warm-up-time 0.1 --measurement-time 0.2
+--sample-size 10`) during the M23W4 perf-invariant week (I-QAL5). Values are
+in-bench nearest-rank p99 unless marked median.
+
+| Bench | Metric | Baseline |
+|---|---|---|
+| `invariant_publish_latest` | p50 / p99 | 190 ns / 200 ns |
+| `publish_queue_full` | p99 | 40 ns |
+| `invariant_ring` | p99 | 50 ns |
+| `invariant_codec_roundtrip` | p99 | 40 ns |
+| `invariant_lane_loopback` | p99 | 40 ns |
+| `serial_frame_roundtrip` | p99 | 1.19 µs |
+| `udp_loopback` | p99 | 3.04 µs |
+
+REQ: REQ-QAL-011, REQ-QAL-012, REQ-QAL-019.

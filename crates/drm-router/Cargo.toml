@@ -21,3 +21,7 @@ workspace = true
 [[bench]]
 name = "router"
 harness = false
+
+[[bench]]
+name = "transport"
+harness = false

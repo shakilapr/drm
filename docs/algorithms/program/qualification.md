@@ -140,6 +140,31 @@ pub struct Replay { published: u64, dropped: u64, reclaimed: u64, digest: u64 }
   auto-report; the ledger threshold band picks the zero-false-positive anomaly
   band (`REQ-QAL-017`).
 
+## Perf Invariant Harness + Gate Packet (M23W4)
+
+`REQ-QAL-011`, `REQ-QAL-012`, `REQ-QAL-018`, `REQ-QAL-019`; implements `I-QAL5`
+and the `qualify()` packet assembly. Benches are the harness (`xtask` orchestrates
+nothing new at runtime); the packet is `cargo xtask qualify`
+(`xtask/src/qualify.rs`).
+
+- **Bench invariants** (`I-QAL5`): the runtime, router, codec, and transport
+  benches assert zero allocation and a bounded-time p99 ceiling *inside* the
+  bench (the counting `GlobalAlloc` and the nearest-rank percentile helper live in
+  `benches/common/mod.rs`); a violation aborts the bench with a non-zero exit.
+  Budgets are fixed in [bench-methodology.md](../../spec/bench-methodology.md)
+  and recorded in [bench-baseline.md](../../spec/bench-baseline.md). The
+  exhaustion path (`publish_queue_full`) additionally checks its worst-case
+  footprint against the declared budget ([memory-budget.md](../memory-budget.md)
+  `I-MB1`). CI runs every bench as a required job.
+- **Gate packet** (`qualify()`): assembles the whole-system packet — `I-QAL1`
+  traceability matrix, `I-QAL2` fault/soak evidence, `I-QAL3` repro evidence,
+  `I-QAL4` conformance closure, docs CI, and `I-QAL5` perf invariants — and
+  fails (`--check`) while any leg is unmet. The conformance leg closes the
+  declared OS×language×transport matrix: every declared cell is supported on the
+  host or scheduled behind a named dependency, the gate-blocking same-language
+  core is exactly 24 cells, and undeclared cells cannot appear (the manifest is
+  the sole source). `cargo xtask qualify --json <path>` writes the packet.
+
 ## Edge Cases & Errors
 
 | Case | Result |

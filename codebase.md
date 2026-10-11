@@ -217,6 +217,8 @@ Artifact rules:
 | Stress/chaos | `tests/stress` | harness | kill -9 at every borrow stage, PID reuse, pool exhaustion | nightly |
 | Soak | `tests/soak` | harness (`xtask soak`) | long-duration zero corruption/deadlock; daily 24 h rotating topologies, parallel runs, memory-boundedness, three-consecutive-clean gate | daily + W8 gate |
 | Fault injection | `xtask fault` | campaign harness (`xtask/src/fault.rs`) | publisher-crash, exhaustion-burst, subscriber-kill, serial-bomb, link-storm green; deterministic replay digest | W8 gate |
+| Perf invariants | crate `benches/` | criterion + in-bench assertions (`REQ-QAL-012`) | zero-allocation + bounded-time p99 ceilings for runtime/router/codec/transport paths; a violation fails the bench | every PR (bench job) |
+| Qualification | `xtask qualify` | gate packet harness (`xtask/src/qualify.rs`) | traceability (I-QAL1) + fault/soak (I-QAL2) + repro (I-QAL3) + conformance closure (I-QAL4) + docs CI + perf invariants (I-QAL5) | W8 gate |
 | Golden vectors | `tests/fixtures/golden/` | all bindings | byte-identical layouts C/C++/Rust/Python | every PR |
 | Examples | `examples/` | CI jobs | sample workspace builds and runs headless | every PR |
 
@@ -243,14 +245,14 @@ Artifact rules:
 | `xtask audit-traceability` | REQ citation coverage (§3.1 R2) |
 | `xtask docs` | build docs + execute examples headless |
 
-Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak` (`--duration <h>` | `--iterations <n>`, `--topology`, `--parallel <n>`, `--memory-bound <mb>`, `--report <path>`, `--ledger`, `--dashboard`), `fault` (`--campaign`, `--seed`, `--steps`, `--list`, `--dry-run`, `--json`), `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
+Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak` (`--duration <h>` | `--iterations <n>`, `--topology`, `--parallel <n>`, `--memory-bound <mb>`, `--report <path>`, `--ledger`, `--dashboard`), `fault` (`--campaign`, `--seed`, `--steps`, `--list`, `--dry-run`, `--json`), `qualify` (`--check`, `--json <path>`), `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
 
 `xtask` is the single automation entry point — cross-platform by construction (Windows is a first-class platform, Phase 31), no external runner binaries required.
 
 ### 5.2 Workflows
 | Workflow | Trigger | Contents |
 |---|---|---|
-| `ci.yml` | every PR / push | Matrix: Linux x86_64 + aarch64, Windows x86_64. `xtask lint`, `xtask test`, conformance, `check-layering`, semver-checks, frontend lint/build |
+| `ci.yml` | every PR / push | Matrix: Linux x86_64 + aarch64, Windows x86_64. `xtask lint`, `xtask test`, conformance, `check-layering`, memory-budget verifier (`budget` job), perf-invariant benches (`bench` job), qualification gate packet (`qualify` job), semver-checks, frontend lint/build |
 | `sanitizers.yml` | PR (core paths) + nightly | ASan/TSan full matrix; Miri where applicable; scheduled Windows MSVC ASan |
 | `windows-nightly.yml` | nightly | Windows conformance manifest (`cargo xtask test --cross-os`, green ×3; `--full` run ×2, run 2 green): SHM/identity/`LockFileEx` locks, publisher/consumer lifecycle parity (in-place `Init` reinit, restart epochs), publisher crash matrix (kill/restart ×50), reader-kill reclamation, link-cut isolation, bounded serial codec, socket transports, router framing/lanes/shaping, serial route integration, toolchain verify/budget/determinism, bindings golden/FFI rows (scheduled on `PORT_BOARD`), full cross-OS interop matrix (`--transport udp`/`tcp`/`serial`; 24 gate-blocking same-language core cells, mixed-language remainder tracked) |
 | `soak-nightly.yml` | daily | 24 h soak over rotating topologies (`cargo xtask soak --duration 24`); records the run in the I-QAL2 ledger and uploads the dashboard artifact; a non-clean run opens a triage issue |

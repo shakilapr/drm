@@ -59,6 +59,14 @@ jobs:
         run: >-
           taskset -c 1 cargo bench -p drm-router --bench router
           -- --warm-up-time 1 --measurement-time 3 --sample-size 50
+      - name: core codec throughput (in-bench invariants)
+        run: >-
+          taskset -c 1 cargo bench -p drm-core --bench codec
+          -- --warm-up-time 1 --measurement-time 3 --sample-size 50
+      - name: router transport UDP + serial (in-bench invariants)
+        run: >-
+          taskset -c 1 cargo bench -p drm-router --bench transport
+          -- --warm-up-time 1 --measurement-time 3 --sample-size 50
 
   windows-smoke:
     # Windows conformance manifest (work-plan M12W4-E4-T3, extended M13W1-E1/E3,
@@ -134,6 +142,39 @@ jobs:
         run: cargo test -p drm-workspace --test watch_dispatch
       - name: dev-mode smoke
         run: cargo test -p drm-cli --test dev_smoke
+
+  budget:
+    # Memory-budget verifier gate (work-plan M23W4-E2-T1): the I-MB1..I-MB11
+    # terms — including the I-MB9 spatial-index memory — are blocking; any hard
+    # error (budget, lockable, pool invariant, capacity overflow) fails the
+    # build. Wired as a required gate so the verifier math stays green.
+    # REQ: REQ-TOOL-003, REQ-TOOL-004, REQ-TOOL-005, REQ-TOOL-009, REQ-TOOL-010,
+    # REQ-SPATIAL-018, REQ-CORE-042.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: memory-budget verifier (I-MB1..I-MB11)
+        run: cargo test -p drm-workspace --test budget --test spatial_memory
+
+  qualify:
+    # Qualification gate packet (work-plan M23W4-E4-T1): assembles the I-QAL1
+    # traceability matrix, I-QAL2 fault/soak evidence, I-QAL4 conformance matrix
+    # closure, and the perf-invariant/repro/docs evidence; `--check` fails while
+    # any leg is unmet.
+    # REQ: REQ-QAL-001, REQ-QAL-002, REQ-QAL-003, REQ-QAL-004, REQ-QAL-005,
+    # REQ-QAL-006, REQ-QAL-008, REQ-QAL-018.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: assemble qualification packet
+        run: cargo xtask qualify --check --json target/qualification-packet.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qualification-packet
+          path: target/qualification-packet.json
 
   spatial:
     # Regression permanence (AGENTS #14; work-plan M22W4-E1-T1/E2-T1): every
