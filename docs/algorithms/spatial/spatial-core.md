@@ -29,6 +29,7 @@ Scope: `drm-spatial` foundations — distinct semantic types, compile-time fixed
 | `REQ-SPATIAL-static-relationship` | static relationship declares nominal offset (translation + rotation) relative to its parent; dynamic space declares only its parent frame | `REQ-SPATIAL-048` |
 | `REQ-SPATIAL-static-collapse` | contiguous static transform chains collapse to one constant at build time; runtime resolves with a single multiplication | `REQ-SPATIAL-049` |
 | `REQ-SPATIAL-clock-reset-epoch` | every clock has identity (kind, source, epoch); device reset/re-time bumps the epoch so an old mapping never applies to a new incarnation | `REQ-SPATIAL-051` |
+| `REQ-SPATIAL-float-determinism` | every reference-suite comparison uses one documented absolute+relative band absorbing FMA vs separate mul+add across host toolchains + MCU; never bit equality | `REQ-SPATIAL-053` |
 
 ## Data Structures
 
@@ -207,6 +208,48 @@ fn emit_mcu_constants(plan: &CollapsePlan, target: McuTarget) -> CodeArtifact
 | `spatial_single_writer` | I-S11 |
 | `spatial_overlay_generation` | I-S12 |
 | `spatial_mcu_constant` | I-S13 |
+| `spatial_float_determinism` (FMA vs separate mul+add, host↔MCU) | `REQ-SPATIAL-053` |
+
+## Reference-Suite Float Determinism
+
+Final-gate evidence rule (work-plan M21W4-E1-T3, `REQ-SPATIAL-053`). A host
+toolchain and an MCU toolchain may contract (`fma`) or split (`mul`+`add`) the
+same source expression; each fused term rounds once versus twice, so the two
+paths differ by a bounded number of ULPs. The spatial reference suite therefore
+never compares with bit equality. Every comparison uses one combined
+absolute + relative band: reals `actual` and `reference` are equal when
+`|actual − reference| ≤ abs + rel·|reference|`. The absolute floor `abs`
+governs near zero (where a relative test is meaningless); the relative term
+`rel` scales with magnitude (where ULPs grow with the value).
+
+Chosen band (`ToleranceBand::SPATIAL_REFERENCE`): `abs = 1e-12`,
+`rel = 1e-9`. The band is a gate, not a rubber stamp — it is at least three
+orders of magnitude below any physically meaningful geometry error, so a real
+regression is still rejected. The measured FMA-vs-separate spread over the
+suite's operation mix consumes well under half the band
+(`spatial_float_determinism`). MCU/host parity (`spatial_mcu_constant`) uses the
+same rule.
+
+## Implementation Status (M21W4)
+
+Reference suite complete. The combined absolute + relative band
+(`crates/drm-spatial/src/tolerance.rs`, `ToleranceBand::SPATIAL_REFERENCE`) is
+the single comparison rule for every spatial suite; `spatial_float_determinism`
+(`crates/drm-spatial/tests/float_determinism.rs`) cross-checks FMA versus
+separate `mul`+`add` point rotation and quaternion composition across magnitudes
+and asserts the measured spread stays inside the band while a perturbed result
+is rejected. The runtime and MCU reference suites run together
+(`crates/drm-spatial/tests/host_suite.rs`), and the spatial-under-router soak
+regression (`crates/drm-spatial/tests/soak_regression.rs`) exercises the index
+and boundary router under sustained load.
+
+| Element | Location | Test |
+|---|---|---|
+| combined absolute+relative band | `crates/drm-spatial/src/tolerance.rs` | `band_admits_roundoff_and_scales` |
+| FMA vs separate mul+add (host↔MCU) | `crates/drm-spatial/tests/float_determinism.rs` | `spatial_float_determinism` |
+| spatial under router soak | `crates/drm-spatial/tests/soak_regression.rs` | `spatial_under_router_soak` |
+
+REQ: REQ-SPATIAL-053, REQ-SPATIAL-020, REQ-SPATIAL-042, REQ-SPATIAL-043.
 
 ## Implementation Status (M21W3)
 

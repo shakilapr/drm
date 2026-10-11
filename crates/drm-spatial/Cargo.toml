@@ -10,6 +10,7 @@ license.workspace = true
 drm-types = { path = "../drm-types" }
 
 [dev-dependencies]
+drm-router = { path = "../drm-router" }
 serde_json.workspace = true
 
 [lints]

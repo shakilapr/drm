@@ -26,8 +26,12 @@ single-writer edge authority ([m20w3.md](m20w3.md)); M20W4 closed **Gate B**
 (`I-Q1`..`I-Q16`) with provable history sizing/order, lockless slot coherence
 (with an exhaustive interleaving model), a zero-allocation query executor, and
 bounded generation-cached overlay plans ([m20w4.md](m20w4.md),
-[month-20.md](month-20.md)). The dynamic hash grid, compiled BVH, and exact
-memory verification remain M21–M22.
+[month-20.md](month-20.md)). M21 added the runtime spatial index — the dynamic
+hash grid, the compiled static BVH, and the two-source proximity union with
+exact memory verification ([metrics-m21.md](../metrics/metrics-m21.md)) — and
+the freestanding MCU/host reference suites; M21W4 completed the spatial
+reference suite with the float-determinism banding evidence rule and drafted the
+final gate ([m21w4.md](m21w4.md)). The Phase 33 final gate lands at M22W2.
 
 ## Wave A (M19) — types, spaces, collapse
 
@@ -48,10 +52,11 @@ memory verification remain M21–M22.
 | Compiled plan execution + per-process `PlanCache` geometry shortcircuit | `crates/drm-spatial/src/plan.rs`; `spatial_cache_shortcircuit`/`spatial_cache_aging` (I-Q1/I-Q2, REQ-SPATIAL-034/002) | PASS (M19W2) |
 | Coherent `latest`, `at`, `predict` (exp-map), `delayed_view` | `crates/drm-spatial/src/query.rs` + `src/history.rs` + `src/transform.rs` (`exp_twist`); `queries` suite + `query_oracle.py` (I-Q1..I-Q6, REQ-SPATIAL-022/023/024/025) | PASS (M20W1) |
 | Independent mathematical reference implementation | `tests/oracle/spatial_oracle.py`, `tests/oracle/clock_oracle.py`, `tests/oracle/conventions_oracle.py`, `tests/oracle/query_oracle.py` (NumPy); `math`/`clocks`/`conventions`/`queries` suites | PASS (M19W1–M20W1) |
-| Incremental dynamic hash grid; compiled BVH; proximity completeness | — | pending (M20+) |
+| Incremental dynamic hash grid; compiled BVH; proximity completeness | `crates/drm-spatial/src/grid.rs`, `src/proximity.rs`; `crates/drm-workspace/src/spatial/bvh.rs`; `grid`/`proximity` suites (I-X1..I-X14, REQ-SPATIAL-001/006/013/014/019/020/042/043/044/045/046) | PASS (M21W1–M21W2) |
 | Historical reparenting (Preserve World/Local/Snap, atomic commit); live calibration; generational overlay | `crates/drm-spatial/src/query.rs` (`ReparentMode`, `reparent`, time-scoped `PlanVersion`, `CalibrationSlot`/`update_calibration_at`) + `src/forest.rs` (`TreeTxn`, `add_calibration`) + `src/handle.rs` (`HandleRegistry`) + `src/writer.rs` (`EdgeAuthority`); `reparent`/`calibration` suites + `query_oracle.py` (I-Q7..I-Q12, I-S11/I-S12, REQ-SPATIAL-003/011/016/027/028/029/030) | PASS (M20W2–M20W3) |
 | Gate B — transform status object; provable history; slot coherence; zero-alloc query; bounded overlay plans | `crates/drm-spatial/src/plan.rs` (`TransformResult`, `QualityFlags`, `OverlayPlanCache`, `compile_overlay_plan`) + `src/forest.rs` (`add_overlay`/`overlay_depth`/`overlay_attachment`) + `src/history.rs` (`TimeHistory` sizing/order) + `src/cache.rs` (`EdgeSlot` seqlock); `history`/`slot`/`overlay`/`query_zero_alloc` suites (I-Q13..I-Q16, REQ-SPATIAL-008/032/033/034/037/050) | PASS (M20W4) |
-| Exact spatial memory verification | — | pending (M21+) |
+| Exact spatial memory verification | `crates/drm-workspace/src/budget.rs` (`spatial_index_cost`); `crates/drm-workspace/tests/spatial_memory.rs` (I-X9/I-MB9, REQ-SPATIAL-018/052) | PASS (M21W2) |
+| MCU/host reference suite; float-determinism banding | `bindings/c/mcu/drm_spatial.{h,c}`; `crates/drm-workspace/tests/mcu.rs`; `crates/drm-spatial/src/tolerance.rs`; `tests/float_determinism.rs` (I-S13, REQ-SPATIAL-017/049/053) | PASS (M21W3–M21W4) |
 
 ## Notes
 

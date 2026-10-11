@@ -40,6 +40,7 @@ pub mod history;
 pub mod plan;
 pub mod proximity;
 pub mod query;
+pub mod tolerance;
 pub mod transform;
 pub mod types;
 pub mod writer;
@@ -77,6 +78,7 @@ pub use proximity::{
     StaticObject, compile_static_bvh,
 };
 pub use query::{CalibrationSlot, QueryEngine, ReparentMode, correction_jump};
+pub use tolerance::{ToleranceBand, within_reference_band};
 pub use transform::{
     compose, exp_twist, invert, transform_direction, transform_point, transform_vector,
 };

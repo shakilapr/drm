@@ -390,6 +390,7 @@ dependencies = [
 name = "drm-spatial"
 version = "0.1.0"
 dependencies = [
+ "drm-router",
  "drm-types",
  "serde_json",
 ]
