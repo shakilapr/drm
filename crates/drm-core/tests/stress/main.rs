@@ -3,3 +3,4 @@
 //! REQ: REQ-QAL-006.
 
 mod hazard_storm;
+mod reclaim_e2e;

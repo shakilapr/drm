@@ -95,6 +95,7 @@ fn try_reclaim_record(rec: &ConsumerRec) -> bool {
 mod tests {
     use super::Channel;
     use crate::channel::OverflowPolicy as Pol;
+    use crate::channel::ReadOutcome;
     use crate::hazard::{HAZARD_NONE, pack};
     use crate::shm::{ProcessIdentity, current_identity};
     use drm_types::Status;
@@ -306,5 +307,91 @@ mod tests {
             "a reused PID is a different incarnation"
         );
         assert!(freed(&c2, 0, gb));
+    }
+
+    /// REQ: REQ-CORE-058, REQ-CORE-021, REQ-CORE-057, REQ-CORE-023 — a dead
+    /// reader's abandoned word left in place while reclamation is delayed (no
+    /// exhaustion trigger, no speculative polling) never disturbs the current
+    /// latest sample (I-E2); once the drop path arms the trigger the delayed pass
+    /// frees the slot and publishing resumes (I-E4, I-E5).
+    #[test]
+    fn reclaim_delayed_not_corrupt() {
+        let c = ch(2, 3);
+        assert_eq!(c.publish(&pat(0xA1)), Ok(0));
+        assert_eq!(c.publish(&pat(0xB2)), Ok(1));
+        // rec 0 abandons the sole free slot with its default (dead) identity.
+        let g = hold(&c, 0, 2);
+
+        // Delay: untriggered, the abandoned word is preserved and nothing runs.
+        assert!(!c.reclaim_requested(), "no exhaustion yet");
+        assert_eq!(
+            c.try_reclaim(),
+            0,
+            "delayed pass reclaims nothing untriggered"
+        );
+        assert_eq!(word(&c, 0), (g, 2), "abandoned word preserved");
+
+        // While reclamation is delayed, repeated dropped publishes leave the
+        // latest sample valid and uncorrupted.
+        for _ in 0..64 {
+            assert_eq!(c.publish(&pat(0xC3)), Err(Status::PoolExhausted));
+            let mut st = c.reader();
+            let mut buf = [0_u8; 16];
+            assert_eq!(c.latest(&mut st, 1, &mut buf), Ok(ReadOutcome::Sample));
+            assert_eq!(buf, pat(0xB2), "latest uncorrupted while reclaim delayed");
+        }
+        assert!(c.reclaim_requested(), "drop path armed the trigger");
+        assert_eq!(c.pool_exhausted(), 64, "exact drop accounting");
+
+        // The delayed pass now frees the abandoned slot; publishing resumes.
+        assert_eq!(c.try_reclaim(), 1, "delayed reclaim frees the slot");
+        assert!(freed(&c, 0, g));
+        assert!(!c.reclaim_requested(), "trigger consumed exactly once");
+        assert_eq!(c.publish(&pat(0xD4)), Ok(2), "publish resumes");
+    }
+
+    /// REQ: REQ-CORE-008, REQ-CORE-057, REQ-CORE-019, REQ-CORE-026 — registered
+    /// identity snapshots survive a publisher restart (epoch bump), and the
+    /// reclaimer still proves by incarnation after the restart: a live owner's
+    /// held slot is retained while a dead owner's abandoned slot is reclaimed
+    /// (I-E5).
+    #[test]
+    fn reclaim_identity_snapshot_across_restart() {
+        let me = current_identity();
+        assert!(me.pid > 0);
+        let c = ch(2, 3);
+        assert_eq!(c.publish(&pat(1)), Ok(0));
+        assert_eq!(c.publish(&pat(2)), Ok(1));
+        // rec 0 records a LIVE identity; rec 1 keeps the default (dead) {0,0}.
+        c.rec(0)
+            .unwrap_or_else(|| unreachable!("rec0"))
+            .record_identity(me);
+        let g0 = hold(&c, 0, 2); // live borrow on the sole free slot
+        let g1 = hold(&c, 1, 0); // dead borrow naming a history-referenced slot
+
+        // Publisher restart: epoch advances; the recorded snapshots persist.
+        assert_eq!(c.epoch(), 0);
+        assert_eq!(c.restart_run(), 1, "epoch bumps exactly once");
+        assert_eq!(c.epoch(), 1);
+        assert_eq!(
+            c.rec(0).unwrap_or_else(|| unreachable!("rec0")).identity(),
+            me,
+            "live identity snapshot survives restart"
+        );
+        assert_eq!(
+            c.rec(1).unwrap_or_else(|| unreachable!("rec1")).identity(),
+            ProcessIdentity {
+                pid: 0,
+                start_ticks: 0,
+            },
+            "unclaimed record stays dead across restart"
+        );
+
+        // Reclamation after the restart still proves by incarnation.
+        c.ccb().reclaim_requested.store(true, Ordering::Release);
+        assert_eq!(c.try_reclaim(), 1, "only the dead owner is reclaimed");
+        assert_eq!(word(&c, 0), (g0, 2), "live owner retained across restart");
+        assert!(freed(&c, 1, g1), "dead owner reclaimed across restart");
+        assert_eq!(c.publish(&pat(3)), Ok(2), "publishing resumes post-restart");
     }
 }
