@@ -12,7 +12,8 @@ Usage:
 
 Default output: tests/fixtures/spatial/query_vectors.json
 
-REQ: REQ-SPATIAL-022, REQ-SPATIAL-024, REQ-SPATIAL-025, REQ-SPATIAL-023.
+REQ: REQ-SPATIAL-022, REQ-SPATIAL-024, REQ-SPATIAL-025, REQ-SPATIAL-023,
+REQ-SPATIAL-016, REQ-SPATIAL-028, REQ-SPATIAL-029.
 """
 
 from __future__ import annotations
@@ -24,7 +25,20 @@ from pathlib import Path
 
 import numpy as np
 
-from spatial_oracle import q_normalize, q_slerp, axis_angle  # clean-room math reuse within the oracle
+from spatial_oracle import (  # clean-room math reuse within the oracle
+    axis_angle,
+    q_normalize,
+    q_rotate,
+    q_slerp,
+    t_compose,
+)
+
+
+def t_invert(a: dict) -> dict:
+    q = np.array(a["q"])
+    q_inv = q_normalize(np.array([-q[0], -q[1], -q[2], q[3]]))
+    t = np.array(a["t"])
+    return {"t": (-q_rotate(q_inv, t)).tolist(), "q": q_inv.tolist()}
 
 
 def interpolate(a: dict, b: dict, frac: float) -> dict:
@@ -114,6 +128,91 @@ def build_bracket() -> list[dict]:
     return {"samples": samples, "cases": cases}
 
 
+def build_reparent() -> list[dict]:
+    """Transactional reparenting ground truth (I-Q8/I-Q9).
+
+    Composes in the compiled-plan fold order: `compile_plan` folds the path
+    segments from the reference side toward the target side as
+    `e0 ∘ e1 ∘ … ∘ en` ([spatial-queries.md] §Functions `compile_plan`). With
+    `world` as the anchor, `e_old`/`e_new` are the parents' stored offsets and
+    `e_obj` the object's local offset. The object's pre-reparent pose in the
+    anchor is `e_obj ∘ e_old`; the object's pose relative to the new parent is
+    `e_new ∘ e_old⁻¹ ∘ e_obj⁻¹`. Preserve World recomputes the local offset as
+    the inverse of that pose, so the anchor pose stays continuous; Preserve Local
+    keeps `e_obj`; Snap pins to identity.
+    """
+    rng = np.random.default_rng(20260513)
+    out = []
+    for _ in range(12):
+        q_old = q_normalize(rng.uniform(-1.0, 1.0, 4))
+        q_new = q_normalize(rng.uniform(-1.0, 1.0, 4))
+        q_local = q_normalize(rng.uniform(-1.0, 1.0, 4))
+        e_old = {"t": rng.uniform(-5.0, 5.0, 3).tolist(), "q": q_old.tolist()}
+        e_new = {"t": rng.uniform(-5.0, 5.0, 3).tolist(), "q": q_new.tolist()}
+        e_obj = {"t": rng.uniform(-3.0, 3.0, 3).tolist(), "q": q_local.tolist()}
+        anchor_pose_before = t_compose(e_obj, e_old)
+        obj_in_new = t_compose(t_compose(e_new, t_invert(e_old)), t_invert(e_obj))
+        identity = {"t": [0.0, 0.0, 0.0], "q": [0.0, 0.0, 0.0, 1.0]}
+        modes = {
+            "preserve_world": t_invert(obj_in_new),
+            "preserve_local": e_obj,
+            "snap": identity,
+        }
+        cases = {}
+        for name, local in modes.items():
+            cases[name] = {
+                "local": local,
+                "anchor_pose": t_compose(local, e_new),
+            }
+        out.append(
+            {
+                "e_old": e_old,
+                "e_new": e_new,
+                "e_obj": e_obj,
+                "anchor_pose_before": anchor_pose_before,
+                "modes": cases,
+            }
+        )
+    return out
+
+
+def build_discontinuity() -> list[dict]:
+    """Discontinuity fixtures (I-Q7): relocalize, reparent, and calibration jumps.
+
+    Each fixture is a sample-time-ordered edge with the newer sample flagged
+    discontinuous. Interpolation strictly between the brackets must be refused;
+    the exact endpoints stay valid.
+    """
+    return {
+        "cases": [
+            {
+                "kind": "relocalize",
+                "samples": [{"t": 0, "x": 0.0}, {"t": 100, "x": 100.0}],
+                "jump_at": 100,
+                "query_t": 50,
+                "expect": "refused",
+                "endpoints_valid": [0, 100],
+            },
+            {
+                "kind": "reparent",
+                "samples": [{"t": 200, "x": 1.0}, {"t": 300, "x": -3.0}],
+                "jump_at": 300,
+                "query_t": 250,
+                "expect": "refused",
+                "endpoints_valid": [200, 300],
+            },
+            {
+                "kind": "calibration_jump",
+                "samples": [{"t": 400, "x": 2.0}, {"t": 500, "x": 7.5}],
+                "jump_at": 500,
+                "query_t": 450,
+                "expect": "refused",
+                "endpoints_valid": [400, 500],
+            },
+        ]
+    }
+
+
 def main() -> int:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else (
         Path(__file__).resolve().parents[1] / "fixtures" / "spatial" / "query_vectors.json"
@@ -124,13 +223,17 @@ def main() -> int:
         "interp": build_interp(),
         "predict": build_predict(),
         "bracket": build_bracket(),
+        "reparent": build_reparent(),
+        "discontinuity": build_discontinuity(),
     }
     out.write_text(json.dumps(payload, indent=2) + "\n")
     print(
         f"wrote {out} ({len(payload['interp'])} interp, "
-        f"{len(payload['predict'])} predict)"
+        f"{len(payload['predict'])} predict, "
+        f"{len(payload['reparent'])} reparent)"
     )
     return 0
+
 
 
 if __name__ == "__main__":

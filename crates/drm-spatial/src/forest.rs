@@ -290,6 +290,18 @@ impl SpaceForest {
         Some(chain[..pos].iter().map(|(_, e)| *e).collect())
     }
 
+    /// Begins an atomic mutation transaction over a staged clone of this forest
+    /// (`I-Q10`). Relinks are applied to the stage and become visible only when
+    /// [`TreeTxn::commit`] swaps the whole forest in one step, so a concurrent
+    /// reader never observes a partially updated tree.
+    /// REQ: REQ-SPATIAL-027.
+    #[must_use]
+    pub fn begin(&self) -> TreeTxn {
+        TreeTxn {
+            staged: self.clone(),
+        }
+    }
+
     /// Attempts a path that crosses exactly one explicit bridge. The bridge
     /// transform is `T_from_to`; when the reference side attaches to `to` the
     /// inverse is used so the folded path stays directional.
@@ -332,6 +344,73 @@ fn invert_edge(edge: PathEdge) -> PathEdge {
     match edge {
         PathEdge::Constant(t) | PathEdge::Bridge(t) => PathEdge::Constant(invert(&t)),
         PathEdge::Dynamic(e) => PathEdge::Dynamic(e),
+    }
+}
+
+/// An atomic tree-mutation transaction ([spatial-queries.md](../../docs/algorithms/spatial/spatial-queries.md)
+/// §Protocols transactional reparenting, §Invariants `I-Q10`). Mutations are
+/// staged on a clone of the base forest and applied together on [`Self::commit`],
+/// so readers never observe a partially updated tree. Dropping an uncommitted
+/// transaction leaves the base forest untouched.
+/// REQ: REQ-SPATIAL-027.
+#[derive(Debug)]
+pub struct TreeTxn {
+    staged: SpaceForest,
+}
+
+impl TreeTxn {
+    /// Relinks `frame` to static `parent` with nominal `transform` in the stage
+    /// (`I-Q10`).
+    ///
+    /// # Errors
+    /// [`SpatialError::PathNotFound`] for an unknown parent frame (the forest
+    /// has no universal world; the parent must exist), or
+    /// [`SpatialError::NonFinite`] for a non-finite transform.
+    /// REQ: REQ-SPATIAL-027, REQ-SPATIAL-048.
+    pub fn relink_static(
+        &mut self,
+        frame: FrameId,
+        parent: FrameId,
+        transform: Transform3,
+    ) -> Result<(), SpatialError> {
+        if !self.staged.contains(&parent) {
+            return Err(SpatialError::PathNotFound);
+        }
+        self.staged.add_static(frame, parent, transform)
+    }
+
+    /// Relinks `frame` to `parent`, keeping a dynamic edge handle (`I-Q10`).
+    ///
+    /// # Errors
+    /// [`SpatialError::PathNotFound`] for an unknown parent frame.
+    /// REQ: REQ-SPATIAL-027, REQ-SPATIAL-048.
+    pub fn relink_dynamic(
+        &mut self,
+        frame: FrameId,
+        parent: FrameId,
+        edge: u32,
+    ) -> Result<(), SpatialError> {
+        if !self.staged.contains(&parent) {
+            return Err(SpatialError::PathNotFound);
+        }
+        self.staged.add_dynamic(frame, parent, edge);
+        Ok(())
+    }
+
+    /// The staged forest, for computing new local offsets before commit
+    /// (`I-Q9`).
+    /// REQ: REQ-SPATIAL-027.
+    #[must_use]
+    pub fn staged(&self) -> &SpaceForest {
+        &self.staged
+    }
+
+    /// Commits the transaction, replacing `forest` with the staged tree in one
+    /// step (`I-Q10`).
+    ///
+    /// REQ: REQ-SPATIAL-027.
+    pub fn commit(self, forest: &mut SpaceForest) {
+        *forest = self.staged;
     }
 }
 

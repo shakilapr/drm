@@ -11,6 +11,21 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M20 W2 tranche: interpolation guard and transactional reparenting
+  (Phase 33). `drm-spatial` gains per-edge discontinuity markers
+  (`TimeHistory::mark_discontinuous_at`, `QueryEngine::mark_discontinuity`
+  propagating to the history ring and live slot) so interpolation never spans a
+  flagged boundary (`I-Q7`); a time-scoped plan registry (`PlanVersion`) so
+  `at(t < t₁)` traverses the original hierarchy (`I-Q8`); and an atomic
+  reparenting engine (`QueryEngine::reparent` + `SpaceForest::begin`/`TreeTxn`)
+  with Preserve World/Local/Snap modes (`I-Q9`/`I-Q10`)
+  ([spatial-queries.md](docs/algorithms/spatial/spatial-queries.md);
+  REQ-SPATIAL-016, REQ-SPATIAL-027, REQ-SPATIAL-028, REQ-SPATIAL-029). The E4
+  oracle (`tests/oracle/query_oracle.py`) gains reparent-mode math and
+  discontinuity fixtures; `cargo test -p drm-spatial interp_guard` and
+  `... reparent` cover I-Q7..I-Q10. Gate evidence
+  ([m20w2.md](docs/gates/m20w2.md), [phase-33.md](docs/gates/phase-33.md));
+  metrics [metrics-m20.md](docs/metrics/metrics-m20.md).
 - Week M20 W1 tranche: spatial query API (Phase 33). `drm-spatial` gains a
   runtime plan compiler (`compile_plan`/`CompiledPlan`/`execute_steps`), a
   sample-time-ordered `TimeHistory` with linear-translation + SLERP-rotation

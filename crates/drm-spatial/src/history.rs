@@ -275,6 +275,27 @@ impl TimeHistory {
         self.entries.iter().find(|s| s.sample.value_ns == t_ns)
     }
 
+    /// Flags the retained sample at `t_ns` as discontinuous, marking the local
+    /// edge jump (`I-Q7`). Returns whether a sample at `t_ns` was retained.
+    /// Discontinuities are marked per jumped local edge, and a query spanning the
+    /// marked boundary refuses interpolation (`REQ-SPATIAL-016`).
+    /// REQ: REQ-SPATIAL-016.
+    pub fn mark_discontinuous_at(&mut self, t_ns: u64) -> bool {
+        if let Some(entry) = self.entries.iter_mut().find(|s| s.sample.value_ns == t_ns) {
+            entry.flags |= FLAG_DISCONTINUOUS;
+            return true;
+        }
+        false
+    }
+
+    /// Whether the sample at `t_ns` is flagged discontinuous (`I-Q7`).
+    /// REQ: REQ-SPATIAL-016.
+    #[must_use]
+    pub fn is_discontinuous_at(&self, t_ns: u64) -> bool {
+        self.exact_at(t_ns)
+            .is_some_and(|s| s.flags & FLAG_DISCONTINUOUS != 0)
+    }
+
     /// Interpolates the transform at `t_ns` (linear translation + SLERP rotation)
     /// between the bracketing samples of the sample-time-ordered ring (`I-Q4`).
     ///

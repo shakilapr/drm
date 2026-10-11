@@ -17,8 +17,11 @@ geodetic local-precision bounds, and historical (sample-timestamp) evaluation
 ([m19w3.md](m19w3.md)); M20W1 added the compiled-plan query surface
 `latest`/`at`/`predict`/`delayed_view`, sample-time-ordered history with the
 interpolation + discontinuity guard, and live calibration
-([m20w1.md](m20w1.md)). The dynamic hash grid, compiled BVH, and full
-transactional reparenting remain M20W2–M22.
+([m20w1.md](m20w1.md)); M20W2 added per-edge discontinuity markers with the
+interpolation guard, the time-scoped plan registry, and transactional
+reparenting (Preserve World/Local/Snap) with atomic tree commit
+([m20w2.md](m20w2.md)). The dynamic hash grid, compiled BVH, and live
+calibration/overlay handles remain M20W3–M22.
 
 ## Wave A (M19) — types, spaces, collapse
 
@@ -40,7 +43,7 @@ transactional reparenting remain M20W2–M22.
 | Coherent `latest`, `at`, `predict` (exp-map), `delayed_view` | `crates/drm-spatial/src/query.rs` + `src/history.rs` + `src/transform.rs` (`exp_twist`); `queries` suite + `query_oracle.py` (I-Q1..I-Q6, REQ-SPATIAL-022/023/024/025) | PASS (M20W1) |
 | Independent mathematical reference implementation | `tests/oracle/spatial_oracle.py`, `tests/oracle/clock_oracle.py`, `tests/oracle/conventions_oracle.py`, `tests/oracle/query_oracle.py` (NumPy); `math`/`clocks`/`conventions`/`queries` suites | PASS (M19W1–M20W1) |
 | Incremental dynamic hash grid; compiled BVH; proximity completeness | — | pending (M20+) |
-| Historical reparenting (Preserve World/Local/Snap, atomic commit); live calibration; generational overlay | historical topology-event evaluation + `I-Q7` interpolation guard + live calibration landed M20W1; full reparenting modes | pending (M20–M21) |
+| Historical reparenting (Preserve World/Local/Snap, atomic commit); live calibration; generational overlay | `crates/drm-spatial/src/query.rs` (`ReparentMode`, `reparent`, time-scoped `PlanVersion`) + `src/forest.rs` (`TreeTxn`); `reparent` suite + `query_oracle.py` (I-Q7..I-Q10, REQ-SPATIAL-016/027/028/029) — landed M20W2; live calibration + generational overlay | partial (M20W2); pending M20W3 |
 | Exact spatial memory verification | — | pending (M21+) |
 
 ## Notes
@@ -55,7 +58,8 @@ transactional reparenting remain M20W2–M22.
 REQ: REQ-SPATIAL-002, REQ-SPATIAL-003, REQ-SPATIAL-004, REQ-SPATIAL-005,
 REQ-SPATIAL-007, REQ-SPATIAL-009, REQ-SPATIAL-010, REQ-SPATIAL-012,
 REQ-SPATIAL-016, REQ-SPATIAL-017, REQ-SPATIAL-022, REQ-SPATIAL-023,
-REQ-SPATIAL-024, REQ-SPATIAL-025, REQ-SPATIAL-029, REQ-SPATIAL-030,
+REQ-SPATIAL-024, REQ-SPATIAL-025, REQ-SPATIAL-027, REQ-SPATIAL-028,
+REQ-SPATIAL-029, REQ-SPATIAL-030,
 REQ-SPATIAL-031, REQ-SPATIAL-033, REQ-SPATIAL-034, REQ-SPATIAL-035,
 REQ-SPATIAL-036, REQ-SPATIAL-037, REQ-SPATIAL-038, REQ-SPATIAL-039,
 REQ-SPATIAL-040, REQ-SPATIAL-041, REQ-SPATIAL-047, REQ-SPATIAL-048,

@@ -44,7 +44,7 @@ pub use clock::{
     map_timestamp_with_uncertainty,
 };
 pub use conventions::BoundaryConvention;
-pub use forest::{FrameEdge, FrameId, PathEdge, SpaceForest};
+pub use forest::{FrameEdge, FrameId, PathEdge, SpaceForest, TreeTxn};
 pub use geodetic::{
     Ecef, Enu, GEODETIC_LOCAL_BOUND_M, Lla, geodetic_to_enu, tangent_plane_enu, wgs84_to_ecef,
 };
@@ -57,7 +57,7 @@ pub use plan::{
     ObservedVersions, PlanCache, PlanStep, QualityFlags, TransformError, TransformPlan,
     TransformResult, compile_plan, execute_plan, execute_steps, observe_versions,
 };
-pub use query::{CalibrationSlot, QueryEngine};
+pub use query::{CalibrationSlot, QueryEngine, ReparentMode};
 pub use transform::{
     compose, exp_twist, invert, transform_direction, transform_point, transform_vector,
 };

@@ -20,9 +20,10 @@ code with the Rust implementation.
   (work-plan M19W3-E4-T1). `spatial_oracle.py` additionally carries a
   `geodetic_precision` section (small local offsets from an anchor, I-S5).
 - `query_oracle.py` — query-surface ground truth: linear translation + SLERP
-  rotation interpolation between bracketing history samples, and the SE(3)
-  exponential map (`T(t+Δ) = T(t)·Exp(ξ_b Δ)`) used by `predict`
-  (work-plan M20W1-E4-T1).
+  rotation interpolation between bracketing history samples, the SE(3)
+  exponential map (`T(t+Δ) = T(t)·Exp(ξ_b Δ)`) used by `predict`, transactional
+  reparent-mode math (Preserve World/Local/Snap), and relocalize/reparent/
+  calibration discontinuity fixtures (work-plan M20W1-E4-T1, M20W2-E4-T1).
 - `../fixtures/spatial/oracle_vectors.json`,
   `../fixtures/spatial/clock_vectors.json`,
   `../fixtures/spatial/convention_vectors.json`,
@@ -39,9 +40,10 @@ python3 tests/oracle/query_oracle.py
 The Rust consumers are `crates/drm-spatial/tests/math.rs` (`cargo test -p
 drm-spatial math`), `crates/drm-spatial/tests/clocks.rs` (`cargo test -p
 drm-spatial clocks`), `crates/drm-spatial/tests/conventions.rs` (`cargo test
--p drm-spatial conventions`), and `crates/drm-spatial/tests/queries.rs`
-(`cargo test -p drm-spatial queries`), which read the committed JSON — CI does
-not need Python.
+-p drm-spatial conventions`), `crates/drm-spatial/tests/queries.rs`
+(`cargo test -p drm-spatial queries`), and
+`crates/drm-spatial/tests/reparent.rs` (`cargo test -p drm-spatial interp_guard`
+/ `reparent`), which read the committed JSON — CI does not need Python.
 
 ## Quaternion convention
 
@@ -53,4 +55,5 @@ up to sign (`q` and `-q` are the same rotation).
 
 REQ: REQ-SPATIAL-036, REQ-SPATIAL-038, REQ-SPATIAL-012, REQ-SPATIAL-007,
 REQ-SPATIAL-040, REQ-SPATIAL-004, REQ-SPATIAL-041, REQ-SPATIAL-051,
-REQ-SPATIAL-022, REQ-SPATIAL-025.
+REQ-SPATIAL-022, REQ-SPATIAL-025, REQ-SPATIAL-016, REQ-SPATIAL-028,
+REQ-SPATIAL-029.

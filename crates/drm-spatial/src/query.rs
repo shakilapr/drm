@@ -16,11 +16,16 @@
 //! twist on `SE(3)` via the exponential map (`I-Q5`); `delayed_view`
 //! resolves `now − offset` through `at` (`I-Q6`). Cached geometry is reused only
 //! under an exact input-version match; freshness/staleness/uncertainty are always
-//! derived per query (`I-Q2`).
+//! derived per query (`I-Q2`). Discontinuities are marked per jumped local edge
+//! and never interpolated across (`I-Q7`); transactional reparenting installs a
+//! new time-scoped plan version while retaining the original hierarchy for
+//! pre-`t₁` queries (`I-Q8`), supports Preserve World/Local/Snap (`I-Q9`), and
+//! commits atomically so concurrent readers never see a partial tree (`I-Q10`).
 //!
 //! REQ: REQ-SPATIAL-022, REQ-SPATIAL-023, REQ-SPATIAL-024, REQ-SPATIAL-025,
 //! REQ-SPATIAL-033, REQ-SPATIAL-037, REQ-SPATIAL-003, REQ-SPATIAL-016,
-//! REQ-SPATIAL-032, REQ-SPATIAL-002.
+//! REQ-SPATIAL-032, REQ-SPATIAL-002, REQ-SPATIAL-027, REQ-SPATIAL-028,
+//! REQ-SPATIAL-029.
 
 use std::collections::BTreeMap;
 
@@ -32,7 +37,7 @@ use crate::plan::{
     CompiledPlan, FLAG_DISCONTINUITY_NEARBY, FLAG_EXTRAPOLATED, FLAG_STALE, PlanStep, QualityFlags,
     TransformError, TransformResult, compile_plan, execute_steps,
 };
-use crate::transform::{compose, exp_twist};
+use crate::transform::{compose, exp_twist, invert};
 use crate::types::{SpatialError, Transform3, Twist3};
 
 /// A live calibration slot ([spatial-queries.md] §Data Structures
@@ -73,18 +78,42 @@ struct CachedGeom {
     versions: Vec<u64>,
 }
 
+/// The reparenting mode ([spatial-queries.md] §Data Structures `ReparentMode`,
+/// §Invariants `I-Q9`; [`spatial_architecture.md`] §Transactional Reparenting).
+/// REQ: REQ-SPATIAL-028.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReparentMode {
+    /// Keeps the object's global pose continuous by recomputing its local offset
+    /// (`T_newParent,obj = T_anchor,newParent⁻¹ · T_anchor,obj` at `t₁`).
+    PreserveWorld,
+    /// Keeps the object's local offset and updates its global pose.
+    PreserveLocal,
+    /// Pins the object to the new parent's origin (identity local offset).
+    Snap,
+}
+
+/// One versioned plan in a time-scoped plan registry entry (`I-Q8`): the plan is
+/// valid for query instants `t >= valid_from_ns` until the next entry.
+/// REQ: REQ-SPATIAL-029.
+#[derive(Debug, Clone)]
+struct PlanVersion {
+    valid_from_ns: u64,
+    plan: CompiledPlan,
+}
+
 /// A runtime query engine over a [`SpaceForest`] ([spatial-queries.md]
 /// §Protocols plan lifecycle). Plans are compiled once per `(target, reference)`
 /// pair and cached; queries execute them without touching the base graph
-/// (`I-Q1`).
-/// REQ: REQ-SPATIAL-034, REQ-SPATIAL-024.
+/// (`I-Q1`). Reparenting installs a new plan version while retaining the prior
+/// version for pre-`t₁` queries (`I-Q8`).
+/// REQ: REQ-SPATIAL-034, REQ-SPATIAL-024, REQ-SPATIAL-029.
 #[derive(Debug)]
 pub struct QueryEngine {
     forest: SpaceForest,
     edges: SpatialEdgeCache,
     histories: BTreeMap<u32, TimeHistory>,
     calibration: BTreeMap<u32, CalibrationSlot>,
-    plans: BTreeMap<(String, String), CompiledPlan>,
+    plans: BTreeMap<(String, String), Vec<PlanVersion>>,
     cached: BTreeMap<(String, String), CachedGeom>,
     claims: BTreeMap<u32, crate::cache::WriterClaim>,
     compile_count: u64,
@@ -208,6 +237,124 @@ impl QueryEngine {
         self.freshness_ns = freshness_ns;
     }
 
+    /// Marks the local edge `edge`'s retained sample at `at_ns` as discontinuous
+    /// (a relocalization, calibration jump, or reparent jump). Interpolation
+    /// never spans the marked boundary (`I-Q7`). Also sets the discontinuous flag
+    /// on the edge's newest slot snapshot when the slot sample time matches.
+    ///
+    /// Returns whether a retained history sample at `at_ns` was marked.
+    /// REQ: REQ-SPATIAL-016.
+    pub fn mark_discontinuity(&mut self, edge: u32, at_ns: u64) -> bool {
+        let marked = self
+            .histories
+            .get_mut(&edge)
+            .is_some_and(|h| h.mark_discontinuous_at(at_ns));
+        // Propagate to the live slot when it holds the same sample instant.
+        if let Some(sample) = self.edges.read(edge as usize)
+            && sample.sample.value_ns == at_ns
+            && let Some(claim) = self.claims.get(&edge).copied()
+        {
+            let flagged = EdgeSample::new(sample.transform, sample.sample, sample.receive)
+                .with_discontinuous();
+            let _ = self.edges.publish_sample(&claim, &flagged);
+        }
+        marked
+    }
+
+    /// Whether the local edge `edge`'s sample at `at_ns` is flagged
+    /// discontinuous (`I-Q7`).
+    /// REQ: REQ-SPATIAL-016.
+    #[must_use]
+    pub fn is_discontinuity(&self, edge: u32, at_ns: u64) -> bool {
+        self.histories
+            .get(&edge)
+            .is_some_and(|h| h.is_discontinuous_at(at_ns))
+    }
+
+    /// Transactionally reparents `obj` under `new_parent` at `at_ns` per `mode`
+    /// ([spatial-queries.md] §Functions `reparent`, §Invariants `I-Q9`/`I-Q10`):
+    /// resolves the object's pose at the reparent instant, stages the relink in
+    /// an atomic tree transaction, installs a new time-scoped plan version, marks
+    /// the jumped local edge discontinuous, and commits — history before `at_ns`
+    /// still traverses the original hierarchy (`I-Q8`). Preserve World recomputes
+    /// the local offset `T_newParent,obj = T_anchor,newParent⁻¹ · T_anchor,obj` at
+    /// `at_ns` so the world pose stays continuous; Preserve Local keeps the local
+    /// offset; Snap pins the object to the new parent's origin.
+    ///
+    /// # Errors
+    /// [`SpatialError::PathNotFound`] for an unknown frame or disconnected pair
+    /// with no explicit bridge, and [`SpatialError::OutOfHistory`] when the pose
+    /// at `at_ns` cannot be resolved.
+    /// REQ: REQ-SPATIAL-027, REQ-SPATIAL-028, REQ-SPATIAL-029, REQ-SPATIAL-016.
+    pub fn reparent(
+        &mut self,
+        obj: &str,
+        new_parent: &str,
+        mode: ReparentMode,
+        at_ns: u64,
+    ) -> Result<(), SpatialError> {
+        if !self.forest.contains(obj) || !self.forest.contains(new_parent) {
+            return Err(SpatialError::PathNotFound);
+        }
+        // Capture the object's current local edge before the relink: if it was a
+        // dynamic edge, that jumped local edge is flagged discontinuous (I-Q7).
+        let obj_edge = self.forest.edge(obj);
+        // Pose of the object relative to the new parent measured at t₁, using the
+        // current hierarchy before the relink (I-Q9); this is the anchor pose.
+        let anchor_pose = self.at(obj, new_parent, at_ns);
+        let anchor = anchor_pose.transform.ok_or(SpatialError::OutOfHistory)?;
+
+        let mut txn = self.forest.begin();
+        let new_local = match mode {
+            // T_newParent,obj = T_anchor,newParent⁻¹ · T_anchor,obj = inverse of
+            // the object's pose relative to the new parent (world continuous).
+            ReparentMode::PreserveWorld => invert(&anchor),
+            // Keep the object's existing local offset as the new local offset.
+            ReparentMode::PreserveLocal => Self::local_offset(&self.forest, obj).unwrap_or(anchor),
+            // Pin the object to the new parent's origin.
+            ReparentMode::Snap => Transform3::IDENTITY,
+        };
+        txn.relink_static(obj.to_string(), new_parent.to_string(), new_local)?;
+
+        // Compile the new-hierarchy plan versions against the staged forest before
+        // the commit, so the plan registry and the forest advance together (I-Q8).
+        let staged = txn.staged().clone();
+        let mut recompiled = Vec::new();
+        for (target, reference) in self.plans.keys().cloned().collect::<Vec<_>>() {
+            if let Ok(plan) = compile_plan(&staged, &reference, &target) {
+                self.compile_count += 1;
+                recompiled.push(((target, reference), plan));
+            }
+        }
+        // Atomic commit: replace the whole forest in one step (I-Q10).
+        txn.commit(&mut self.forest);
+        for ((target, reference), plan) in recompiled {
+            if let Some(entry) = self.plans.get_mut(&(target, reference)) {
+                entry.push(PlanVersion {
+                    valid_from_ns: at_ns,
+                    plan,
+                });
+            }
+        }
+        // The reparented local edge jumps at t₁; mark it discontinuous (I-Q7).
+        if let Some(crate::forest::FrameEdge::Dynamic(e)) = obj_edge {
+            let _ = self.mark_discontinuity(e, at_ns);
+        }
+        // Cached geometry for plans touching `obj` is stale after the relink.
+        self.cached.clear();
+        Ok(())
+    }
+
+    /// The local offset edge geometry of `frame` toward its parent, if it is a
+    /// static edge (`I-Q9`).
+    /// REQ: REQ-SPATIAL-028.
+    fn local_offset(forest: &SpaceForest, frame: &str) -> Option<Transform3> {
+        match forest.edge(frame) {
+            Some(crate::forest::FrameEdge::Static(t)) => Some(t),
+            _ => None,
+        }
+    }
+
     /// Declares the explicit `predict` horizon bound (`I-Q5`).
     /// REQ: REQ-SPATIAL-025.
     pub fn set_max_horizon(&mut self, max_horizon_ns: u64) {
@@ -238,9 +385,52 @@ impl QueryEngine {
         if !self.plans.contains_key(&key) {
             let plan = compile_plan(&self.forest, reference, target)?;
             self.compile_count += 1;
-            self.plans.insert(key, plan);
+            self.plans.insert(
+                key,
+                vec![PlanVersion {
+                    valid_from_ns: 0,
+                    plan,
+                }],
+            );
         }
         Ok(())
+    }
+
+    /// The plan in effect for `(target, reference)` at `t_ns`: the newest plan
+    /// version whose validity interval starts at or before `t_ns` (`I-Q8`).
+    /// History before a reparent instant therefore traverses the original
+    /// hierarchy. Falls back to the first version when `t_ns` predates it.
+    /// REQ: REQ-SPATIAL-029.
+    fn plan_at<'p>(
+        plans: &'p BTreeMap<(String, String), Vec<PlanVersion>>,
+        target: &str,
+        reference: &str,
+        t_ns: u64,
+    ) -> Option<&'p CompiledPlan> {
+        let versions = plans.get(&(target.to_string(), reference.to_string()))?;
+        let mut selected = versions.first()?;
+        for version in versions {
+            if version.valid_from_ns <= t_ns {
+                selected = version;
+            } else {
+                break; // versions are validity-ordered
+            }
+        }
+        Some(&selected.plan)
+    }
+
+    /// The current (newest) plan version for `(target, reference)`, used by
+    /// `latest`/`predict`/`delayed_view` (`I-Q8`).
+    /// REQ: REQ-SPATIAL-029.
+    fn current_plan<'p>(
+        plans: &'p BTreeMap<(String, String), Vec<PlanVersion>>,
+        target: &str,
+        reference: &str,
+    ) -> Option<&'p CompiledPlan> {
+        plans
+            .get(&(target.to_string(), reference.to_string()))?
+            .last()
+            .map(|v| &v.plan)
     }
 
     /// The dynamic edges referenced by `plan`, de-duplicated in first-use order.
@@ -407,17 +597,17 @@ impl QueryEngine {
             return TransformResult::err(map_error(e));
         }
         let key = (target.to_string(), reference.to_string());
-        let Some(plan) = self.plans.get(&key) else {
+        let Some(plan) = Self::current_plan(&self.plans, target, reference).cloned() else {
             return TransformResult::err(TransformError::PathNotFound);
         };
-        let Some(t_star) = self.newest_common_time(plan) else {
+        let Some(t_star) = self.newest_common_time(&plan) else {
             return TransformResult::err(TransformError::OutOfHistory);
         };
-        let versions = Self::versions(&self.edges, plan);
+        let versions = Self::versions(&self.edges, &plan);
         if let Some(cached) = self.cached.get(&key)
             && cached.versions == versions
         {
-            let receive = self.newest_receive_ns(plan);
+            let receive = self.newest_receive_ns(&plan);
             let mut result = self.classify(
                 cached.transform,
                 cached.sample_ns,
@@ -439,7 +629,7 @@ impl QueryEngine {
             |edge| Self::edge_at(histories, edges, t_star, &mut flags, edge),
             |slot| Self::calibration_at(calibration, slot),
         );
-        let receive = self.newest_receive_ns(plan);
+        let receive = self.newest_receive_ns(&plan);
         match resolved {
             Ok(transform) => {
                 self.cached.insert(
@@ -468,9 +658,11 @@ impl QueryEngine {
     /// `at(target, reference, t_ns)`: the transform at a historical instant,
     /// interpolating linearly in translation and via SLERP in rotation between
     /// the bracketing samples; never silently extrapolates beyond the newest
-    /// sample (`I-Q4`). A discontinuity crossing surfaces `DISCONTINUITY_NEARBY`
-    /// with no cross-jump value (`I-Q7`).
-    /// REQ: REQ-SPATIAL-022, REQ-SPATIAL-016.
+    /// sample (`I-Q4`). The plan is time-scoped: a query before a reparent
+    /// instant executes the original-hierarchy plan (`I-Q8`). A discontinuity
+    /// crossing surfaces `DISCONTINUITY_NEARBY` with no cross-jump value
+    /// (`I-Q7`).
+    /// REQ: REQ-SPATIAL-022, REQ-SPATIAL-016, REQ-SPATIAL-029.
     ///
     /// # Errors
     /// This never returns `Err`; all outcomes are encoded in the
@@ -479,8 +671,7 @@ impl QueryEngine {
         if let Err(e) = self.ensure_plan(target, reference) {
             return TransformResult::err(map_error(e));
         }
-        let key = (target.to_string(), reference.to_string());
-        let Some(plan) = self.plans.get(&key) else {
+        let Some(plan) = Self::plan_at(&self.plans, target, reference, t_ns).cloned() else {
             return TransformResult::err(TransformError::PathNotFound);
         };
         let mut flags = QualityFlags::NONE;
