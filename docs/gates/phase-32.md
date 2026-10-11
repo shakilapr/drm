@@ -104,6 +104,13 @@ protocol-level; the following Studio UI items stay out of 1.0 scope.
   the protocol-level Studio doc merged
   ([studio-protocol.md](../algorithms/studio/studio-protocol.md), I-ST1..I-ST13;
   [m17w2.md](m17w2.md)). Studio implementation starts M17W3.
+- M17W3 landed the Studio protocol implementation slice
+  (`crates/drm-cli/src/studio/`: handshake, typed dispatch, revisioning,
+  journaled `ChangeSet` recovery, conditional undo, format-preserving edits),
+  generated TS types (`packages/studio-protocol`, `xtask gen-check` extended),
+  and the `apps/studio` renderer scaffold ([m17w3.md](m17w3.md);
+  `STUDIO_PROTOCOL_GREEN = 1`, `MUTATIONS_REVISIONED = 1`,
+  `STUDIO_SCAFFOLD = 1`).
 
 REQ: REQ-STUDIO-001, REQ-STUDIO-002, REQ-STUDIO-003, REQ-STUDIO-004,
 REQ-STUDIO-005, REQ-STUDIO-006, REQ-STUDIO-007, REQ-STUDIO-008,

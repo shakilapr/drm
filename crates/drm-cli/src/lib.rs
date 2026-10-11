@@ -26,6 +26,7 @@ pub mod hz;
 pub mod ids;
 pub mod info;
 pub mod log;
+pub mod studio;
 pub mod ws;
 
 pub use args::{Args, Command, Direction, IdsAction};
@@ -63,6 +64,7 @@ pub fn run(raw: &[String]) -> Result<(), CliError> {
         Command::Echo { topic, raw } => echo::run(&args.workspace, &topic, raw),
         Command::Hz { topic } => hz::run(&args.workspace, &topic),
         Command::Log { topic, level } => log::run(&args.workspace, topic.as_deref(), &level),
+        Command::Studio { trusted } => studio::run(&args.workspace, trusted),
     }
 }
 

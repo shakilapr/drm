@@ -19,6 +19,8 @@ use drm_workspace::model::{PackageInput, TreeInput, build};
 /// any offending generated file.
 pub fn run(flags: &[String]) -> Result<()> {
     let root = parse_workspace(flags)?;
+    // TS protocol codegen (R6) is checked independently of the `.drm/gen` tree.
+    crate::studio_ts::check(&root)?;
     if !root.join("packages").is_dir() {
         eprintln!(
             "gen-check: no `packages/` under `{}`; nothing to check",
@@ -83,6 +85,12 @@ fn model_at(root: &Path) -> Result<drm_workspace::model::WorkspaceModel> {
 fn discover(root: &Path) -> Result<TreeInput> {
     let mut packages = Vec::new();
     for pkg in sorted_dirs(&root.join("packages"))? {
+        // `packages/` also holds non-DRM frontend packages (e.g.
+        // `packages/studio-protocol`); only directories declaring `topics/` or
+        // `nodes/` are DRM workspace packages. REQ: REQ-TOOL-045.
+        if !pkg.join("topics").is_dir() && !pkg.join("nodes").is_dir() {
+            continue;
+        }
         let name = file_name(&pkg)?;
         let mut topics = Vec::new();
         for file in files_with_ext(&pkg.join("topics"), "drm")? {

@@ -91,6 +91,12 @@ pub enum Command {
         /// Minimum severity to display.
         level: String,
     },
+    /// `drm studio --stdio [--trust]` — long-lived JSON-RPC studio host.
+    /// REQ: REQ-STUDIO-011.
+    Studio {
+        /// Whether the workspace is trusted (unlocks Build/Run/mutations).
+        trusted: bool,
+    },
     /// `drm help` / `-h` / `--help` / no arguments.
     Help,
 }
@@ -120,6 +126,7 @@ Usage:
   drm [--workspace <dir>] echo <topic> [--raw]
   drm [--workspace <dir>] hz <topic>
   drm [--workspace <dir>] log [<topic>] [--level <level>]
+  drm [--workspace <dir>] studio --stdio [--trust]
   drm [--workspace <dir>] help
 
 Options:
@@ -129,6 +136,8 @@ Options:
   --once                  `dev`: run the initial build only
   --raw                   `echo`: print raw hex bytes
   --level <level>         `log`: error|warn|info|debug|trace (default info)
+  --stdio                 `studio`: speak JSON-RPC over stdin/stdout
+  --trust                 `studio`: mark the workspace trusted (unlocks writes)
   -h, --help              Print this help
 ";
 
@@ -147,6 +156,8 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
     let mut consume: Option<String> = None;
     let mut publish: Option<String> = None;
     let mut raw_hex = false;
+    let mut stdio = false;
+    let mut trust = false;
     let mut level = String::from("info");
 
     let mut i = 0;
@@ -193,6 +204,14 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
                 raw_hex = true;
                 i += 1;
             }
+            "--stdio" => {
+                stdio = true;
+                i += 1;
+            }
+            "--trust" => {
+                trust = true;
+                i += 1;
+            }
             "--level" => {
                 let v = raw
                     .get(i + 1)
@@ -220,6 +239,8 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
             yes,
             once,
             raw_hex,
+            stdio,
+            trust,
             level,
             targets,
             consume,
@@ -231,10 +252,14 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
 
 /// Collected flag values for [`build_command`] (keeps the arity bounded).
 /// REQ: REQ-TOOL-012.
+// CLI flag bag: each boolean is an independent toggle.
+#[allow(clippy::struct_excessive_bools)]
 struct Flags {
     yes: bool,
     once: bool,
     raw_hex: bool,
+    stdio: bool,
+    trust: bool,
     level: String,
     targets: Vec<String>,
     consume: Option<String>,
@@ -248,6 +273,8 @@ fn build_command(positionals: &[String], flags: Flags) -> Result<Command, String
         yes,
         once,
         raw_hex,
+        stdio,
+        trust,
         level,
         targets,
         consume,
@@ -313,6 +340,13 @@ fn build_command(positionals: &[String], flags: Flags) -> Result<Command, String
                 direction,
                 node,
             })
+        }
+        Some("studio") => {
+            if stdio {
+                Ok(Command::Studio { trusted: trust })
+            } else {
+                Err("`studio` requires `--stdio` (no HTTP server, no ports)".to_string())
+            }
         }
         Some("help") | None => Ok(Command::Help),
         Some(other) => Err(format!("unknown command `{other}`")),

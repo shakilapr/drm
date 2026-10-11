@@ -30,6 +30,7 @@ serde_json = "1.0.145"
 anyhow = "1.0.100"
 proptest = "1.9.0"
 toml = "0.9.8"
+toml_edit = "0.25"
 
 # Universal gates (codebase.md 3.1 R4/R9); unsafe confined to drm-core and drm-ffi.
 [workspace.lints.rust]

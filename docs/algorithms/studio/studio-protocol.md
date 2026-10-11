@@ -228,6 +228,25 @@ UI/editors/Inspector/remote-web are deferred — see the explicit list below.
 | `.drmx` packaging | deferred post-1.0 |
 | `drm-visual-schemas` | deferred post-1.0 |
 
+## Implementation (M17W3)
+
+The host slice lands in `crates/drm-cli/src/studio/`: `protocol` (wire types +
+bounded parse), `host` (`StudioHost` + `serve_stdio`), `journal` (six-step
+journaled commit + crash recovery), `edit` (`toml_edit` format-preserving
+manifest mutation). `drm studio --stdio [--trust]` is the CLI entry
+(`REQ-STUDIO-011`). Generated TS types live in `packages/studio-protocol`
+(`REQ-STUDIO-006`); the renderer scaffold is `apps/studio`.
+
+Implemented invariants and test anchors (`cargo test -p drm-cli studio`):
+I-ST1 (`studio_host_parity_cli_vs_studio`), I-ST2 (`xtask gen-check`),
+I-ST4 (`studio_host_capability_model`), I-ST6
+(`studio_host_format_preservation`), I-ST7 (`studio_revision_conflict`),
+I-ST8 (`journal_recovery_prepared_rolls_back`/`journal_recovery_partial_finishes`),
+I-ST9 (`studio_undo_guard`), I-ST11 (`studio_trust_gate`), I-ST13
+(`studio_host_frame_bounds`). Carried to M17W4: the remaining `ModelCommand`
+variants (package/node/topic/compute/link create/delete beyond `NodeUpdate`),
+the run-session supervisor process, and the extension host.
+
 ## Edge Cases & Errors
 
 | Case | Result |

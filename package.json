@@ -1,0 +1,15 @@
+{
+  "name": "drm-monorepo",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "fmt": "prettier --write .",
+    "fmt:check": "prettier --check .",
+    "lint": "eslint .",
+    "build": "pnpm --filter @drm/studio build",
+    "test-all": "cargo xtask test"
+  }
+}

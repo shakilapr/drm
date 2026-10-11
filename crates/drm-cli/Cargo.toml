@@ -15,8 +15,10 @@ drm-types = { path = "../drm-types" }
 drm-workspace = { path = "../drm-workspace" }
 drm-core = { path = "../drm-core" }
 drm-diag = { path = "../drm-diag" }
+serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
 
 [lints]
 workspace = true

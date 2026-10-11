@@ -9,6 +9,7 @@ mod cross_os;
 mod gencheck;
 mod golden;
 mod layering;
+mod studio_ts;
 mod workplan;
 
 use std::process::Command;
