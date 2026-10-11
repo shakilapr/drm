@@ -10,6 +10,7 @@ pub mod lifecycle;
 pub mod overflow;
 pub mod pattern;
 pub mod pool;
+pub mod precommit;
 mod reclaim;
 
 pub use overflow::OverflowPolicy;
