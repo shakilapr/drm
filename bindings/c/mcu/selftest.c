@@ -145,6 +145,81 @@ static void test_corruption_resync(void) {
     CHECK(dec.dropped == 1u);
 }
 
+/*
+ * Host<->MCU serial interop matrix (serial-mcu.md §Test Matrix
+ * `mcu_host_interop`; work-plan M16W3-E3-T1): every cell's MCU-encoded wire
+ * decodes back byte-for-byte for both e2e variants, and a stale-CRC covered
+ * byte is dropped + resynced (I-SR1/I-SR3/I-SR4/I-SR6).
+ */
+static void test_interop_matrix(void) {
+    drm_serial_config cfg = {115200u, 260u};
+    const size_t lens[] = {0u, 1u, 3u, 127u, 200u, 224u};
+    for (size_t li = 0; li < sizeof lens / sizeof lens[0]; ++li) {
+        size_t plen = lens[li];
+        for (int e2e_on = 0; e2e_on <= 1; ++e2e_on) {
+            uint8_t payload[224];
+            for (size_t i = 0; i < plen; ++i) {
+                payload[i] = (i % 3u == 0u) ? 0x00u : (uint8_t)((i * 7u + 1u) & 0xFFu);
+            }
+            drm_wire_header header = {e2e_on ? DRM_WIRE_FLAG_E2E_CRC : 0u, 0x0BADF00Du,
+                                      0x1122334455667788ull, (uint64_t)plen, (uint32_t)plen};
+            uint32_t e2e = 0x0A5A5A5Au;
+            uint8_t wire[DRM_SERIAL_MAX_WIRE];
+            size_t wire_len = 0;
+            CHECK(drm_serial_encode(&cfg, &header, payload, plen, e2e_on ? &e2e : NULL, wire,
+                                    sizeof wire, &wire_len) == DRM_OK);
+
+            drm_serial_decoder dec;
+            drm_serial_decoder_init(&dec);
+            uint8_t out_payload[DRM_SERIAL_MAX_DECODED];
+            drm_serial_frame frame;
+            int produced = 0;
+            for (size_t i = 0; i < wire_len; ++i) {
+                CHECK(drm_serial_decoder_feed(&dec, &cfg, wire[i], out_payload, sizeof out_payload,
+                                              &frame) == DRM_OK);
+                if (frame.valid) {
+                    produced = 1;
+                    CHECK(frame.header.payload_len == (uint32_t)plen);
+                    CHECK(frame.payload_len == plen);
+                    CHECK(frame.has_e2e == e2e_on);
+                    if (e2e_on) {
+                        CHECK(frame.e2e_crc == e2e);
+                    }
+                    for (size_t k = 0; k < plen; ++k) {
+                        CHECK(out_payload[k] == payload[k]);
+                    }
+                }
+            }
+            CHECK(produced == 1);
+            CHECK(dec.dropped == 0u);
+
+            /* Error path: flip a covered byte, keep the stale serial CRC. */
+            uint8_t covered[DRM_SERIAL_MAX_DECODED];
+            size_t covered_len = 0;
+            CHECK(drm_cobs_decode(wire, wire_len - 1u, covered, sizeof covered, &covered_len) ==
+                  DRM_OK);
+            covered[0] ^= 0x01u;
+            uint8_t corrupt[DRM_SERIAL_MAX_WIRE];
+            size_t corrupt_len = 0;
+            CHECK(drm_cobs_encode(covered, covered_len, corrupt, sizeof corrupt, &corrupt_len) ==
+                  DRM_OK);
+            corrupt[corrupt_len] = DRM_SERIAL_DELIMITER;
+            corrupt_len += 1u;
+            drm_serial_decoder_init(&dec);
+            produced = 0;
+            for (size_t i = 0; i < corrupt_len; ++i) {
+                CHECK(drm_serial_decoder_feed(&dec, &cfg, corrupt[i], out_payload,
+                                              sizeof out_payload, &frame) == DRM_OK);
+                if (frame.valid) {
+                    produced = 1;
+                }
+            }
+            CHECK(produced == 0);
+            CHECK(dec.dropped == 1u);
+        }
+    }
+}
+
 static void test_static_node(void) {
     drm_node node;
     drm_node_init(&node);
@@ -172,6 +247,7 @@ int main(void) {
     test_cobs_golden();
     test_frame_roundtrip();
     test_corruption_resync();
+    test_interop_matrix();
     test_static_node();
     if (failures == 0) {
         printf("mcu selftest: OK (host parity)\n");

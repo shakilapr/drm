@@ -46,7 +46,9 @@ pub fn run(root: &Path, action: IdsAction) -> Result<(), CliError> {
         ))),
         IdsAction::Compact { yes: true } => {
             let table = load(&path)?;
-            let packed = table.compact_repack();
+            let packed = table
+                .compact(true)
+                .map_err(|e| CliError::Lockfile(format!("compact: {e:?}")))?;
             write(&path, &packed)?;
             print!("{}", compact_guidance(&packed));
             Ok(())
@@ -259,7 +261,7 @@ pub fn write(path: &Path, table: &HandleTable) -> Result<(), CliError> {
 
 /// Post-compaction operator guidance (I-H4): a handle change is a new
 /// deployment identity requiring a coordinated rebuild/restart; schema bindings
-/// are never regenerated (I-H7).
+/// are never regenerated (I-H7). Deterministic checklist output.
 /// REQ: REQ-TOOL-038.
 #[must_use]
 pub fn compact_guidance(table: &HandleTable) -> String {
@@ -270,11 +272,14 @@ pub fn compact_guidance(table: &HandleTable) -> String {
         table.assignments.len(),
         table.assignments.len().saturating_sub(1),
     );
+    out.push_str("new deployment identity — coordinated redeploy required:\n");
     out.push_str(
-        "new deployment identity: regenerate all handle-dependent deployment artifacts\n\
-         (routing/runtime tables; MCU topic tables where compiled in) and coordinate a\n\
-         restart of every affected node. Schema bindings are never regenerated (I-H7).\n",
+        "  [ ] regenerate all handle-dependent deployment artifacts \
+         (routing/runtime tables; MCU topic tables where compiled in)\n",
     );
+    out.push_str("  [ ] rebuild + restart every node compiling a deployment handle table\n");
+    out.push_str("  [ ] confirm every affected node restarted before traffic resumes\n");
+    out.push_str("schema bindings are never regenerated (I-H7).\n");
     out
 }
 

@@ -2,7 +2,9 @@
 //! §Invariants I-RPC1/I-RPC2/I-RPC3/I-RPC7/I-RPC8/I-RPC9/I-RPC10). M16W1 covers
 //! unary request/response, cid dispatch, deadlines, and session identity;
 //! M16W2 adds the action phase machine with phase-boundary cancellation and the
-//! C ∈ 1..=16 dispatch fixture.
+//! C ∈ 1..=16 dispatch fixture; M16W3 observes the per-phase state-transition
+//! sequence (`Accepted`→`Started`→`Progress`*→`Terminal`) and the `CancelAccepted`
+//! ack at the next phase boundary.
 //! REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-012, REQ-OPS-013, REQ-OPS-020,
 //! REQ-OPS-021, REQ-OPS-022, REQ-OPS-023, REQ-OPS-025.
 
@@ -561,6 +563,15 @@ fn action_runs_all_phases() {
     assert_eq!(server.action_phases_run(), 4);
     assert_eq!(server.served(), 1);
     assert_eq!(client.invalid_order_count(), 0);
+    assert_eq!(client.accepted_count(), 1, "Accepted observed");
+    assert_eq!(client.started_count(), 1, "Started observed");
+    assert_eq!(
+        client.progress_count(),
+        3,
+        "one Progress per non-final phase"
+    );
+    assert_eq!(client.cancel_accepted_count(), 0);
+    assert_eq!(client.terminal_count(), 1, "Terminal observed");
 }
 
 /// REQ: REQ-OPS-011 — I-RPC2/I-RPC8: cancelling after `k` completed phases
@@ -637,6 +648,23 @@ fn cancel_at_each_phase_boundary() {
             "k={k}"
         );
         assert_eq!(client.invalid_order_count(), 0, "k={k}");
+        assert_eq!(client.accepted_count(), 1, "k={k}");
+        assert_eq!(
+            client.started_count(),
+            u64::from(k > 0),
+            "Started only once a phase actually runs (k={k})"
+        );
+        assert_eq!(
+            client.progress_count(),
+            u64::from(k > 0),
+            "advisory Progress is coalesced to one pending event per flush (k={k})"
+        );
+        assert_eq!(
+            client.cancel_accepted_count(),
+            1,
+            "cancel ack observed exactly once (k={k})"
+        );
+        assert_eq!(client.terminal_count(), 1, "k={k}");
     }
 }
 

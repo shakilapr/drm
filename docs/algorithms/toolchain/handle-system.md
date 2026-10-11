@@ -129,6 +129,26 @@ fn compact(t: &HandleTable, ack: bool) -> Result<HandleTable, Status> {
 
 *Compaction (maintenance):* operator runs `drm ids compact --yes` → re-packed table → new deployment identity → deployment artifacts regenerate → only binaries compiling deployment tables rebuild → coordinated redeployment (deployment-identity.md).
 
+## Implementation Status (M16W3)
+
+The compaction gate and guidance landed. `HandleTable::compact(ack)` refuses
+without acknowledgement (`Status::InvalidArg`, I-H4) and otherwise densely
+re-packs live assignments and drops reservations (`compact_repack`).
+`rebuild_guidance(model, packed)` returns a deterministic `RebuildGuidance`
+naming every node binary that must rebuild/restart, plus the artifact
+regeneration, restart, and "bindings never regenerated" checklist steps
+(I-H4/I-H7). The `drm ids compact --yes` CLI calls `compact(true)` and prints
+`compact_guidance`, which is byte-identical across runs.
+
+| Element | Location | Test |
+|---|---|---|
+| `HandleTable::compact` (explicit ack gate) | `crates/drm-workspace/src/model/handles.rs` | `handle_compact_gate` |
+| `compact_repack` dense re-pack, tombstone drop | `crates/drm-workspace/src/model/handles.rs` | `handle_compact_scope`, `handle_compact_repack` |
+| `RebuildGuidance`/`rebuild_guidance` checklist | `crates/drm-workspace/src/model/handles.rs` | `handle_compact_guidance` |
+| `drm ids` report determinism, `compact --yes` guidance | `crates/drm-cli/src/ids.rs` | `ids_report_is_deterministic`, `compact_guidance_checklist` |
+
+REQ: REQ-TOOL-036, REQ-TOOL-037, REQ-TOOL-038.
+
 ## Edge Cases & Errors
 
 | Case | Result |

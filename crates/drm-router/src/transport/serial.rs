@@ -969,6 +969,117 @@ mod tests {
         assert_eq!(got.payload, &payload);
     }
 
+    /// REQ: REQ-OPS-004, REQ-ROUTE-025 — I-SR4/I-SR6: the shared golden COBS
+    /// vectors pinned by the MCU host self-test (`bindings/c/mcu/selftest.c`) —
+    /// byte-for-byte cross-language parity of the escape stage.
+    #[test]
+    fn serial_cobs_golden() {
+        let mut out = vec![0u8; 8];
+
+        let n = cobs_encode(&[], &mut out).unwrap_or_else(|e| unreachable!("empty: {e:?}"));
+        assert_eq!(&out[..n], &[0x01], "empty ⇒ one code byte");
+
+        let n = cobs_encode(&[0x00], &mut out).unwrap_or_else(|e| unreachable!("zero: {e:?}"));
+        assert_eq!(&out[..n], &[0x01, 0x01]);
+
+        let n = cobs_encode(&[1, 2, 3], &mut out).unwrap_or_else(|e| unreachable!("seq: {e:?}"));
+        assert_eq!(&out[..n], &[0x04, 1, 2, 3]);
+
+        let n = cobs_encode(&[0x11, 0x00, 0x22], &mut out)
+            .unwrap_or_else(|e| unreachable!("mix: {e:?}"));
+        assert_eq!(&out[..n], &[0x02, 0x11, 0x02, 0x22]);
+    }
+
+    /// REQ: REQ-OPS-004, REQ-ROUTE-025, REQ-ROUTE-026 — I-SR1/I-SR3/I-SR4/I-SR6:
+    /// the host↔MCU serial interop matrix. Every cell's host-encoded wire is
+    /// byte-for-byte equal to the independently assembled canonical frame the
+    /// MCU subset produces; the host decoder recovers each cell (MCU-encoded →
+    /// host decode); CRC and escape parity hold; and each corruption/truncation
+    /// error path is refused.
+    #[test]
+    fn mcu_host_interop_matrix() {
+        let cfg = link_config(115_200, 1_400);
+        let cells: [(usize, bool); 9] = [
+            (0, false),
+            (1, true),
+            (3, false),
+            (127, true),
+            (253, false),
+            (254, true),
+            (255, false),
+            (280, true),
+            (600, false),
+        ];
+        for &(len, e2e) in &cells {
+            let payload: Vec<u8> = (0..len)
+                .map(|i| {
+                    if i % 3 == 0 {
+                        0x00
+                    } else {
+                        u8::try_from((i * 7 + 1) % 256).unwrap_or(0)
+                    }
+                })
+                .collect();
+            let header = WireHeader {
+                flags: if e2e { FLAG_E2E_CRC } else { 0 },
+                wire_channel_id: 0x0BAD_F00D,
+                stream_epoch: 0x1122_3344_5566_7788,
+                source_seq: u64::try_from(len).unwrap_or(0),
+                payload_len: u32::try_from(len).unwrap_or(0),
+            };
+            let e2e_val = e2e.then_some(0x0A5A_5A5A);
+            let frame = SerialFrame {
+                header,
+                e2e_crc: e2e_val,
+                payload: &payload,
+            };
+
+            // Cell (host encode): host wire == canonical MCU assembly bytes.
+            let mut host_wire = vec![0u8; cfg.max_wire_bytes()];
+            let hn = frame_encode(&cfg, &frame, &mut host_wire)
+                .unwrap_or_else(|e| unreachable!("host enc len={len}: {e:?}"));
+            let decoded = canonical_decoded(&header, &payload, e2e_val);
+            let mcu_wire = wire_from_decoded(&decoded);
+            assert_eq!(
+                &host_wire[..hn],
+                mcu_wire.as_slice(),
+                "host == MCU bytes (len={len}, e2e={e2e})"
+            );
+
+            // CRC parity: the trailer covers exactly header+payload[+e2e].
+            let crc = crc32c(&decoded[..decoded.len() - SERIAL_CRC_LEN]);
+            assert_eq!(
+                &decoded[decoded.len() - SERIAL_CRC_LEN..],
+                &crc.to_le_bytes(),
+                "CRC32C parity (len={len}, e2e={e2e})"
+            );
+
+            // Cell (MCU encode → host decode): recover header/payload/e2e.
+            let mut out = out_buf(&cfg);
+            let got = frame_decode(&cfg, &mcu_wire, &mut out)
+                .unwrap_or_else(|e| unreachable!("host dec len={len}: {e:?}"));
+            assert_eq!(got.header, header);
+            assert_eq!(got.payload, payload.as_slice());
+            assert_eq!(got.e2e_crc, e2e_val);
+
+            // Error paths: every covered byte flip (stale CRC) is refused.
+            for i in 0..decoded.len() {
+                let mut corrupt = decoded.clone();
+                corrupt[i] ^= 0x01;
+                assert_eq!(
+                    decode_status(&cfg, &wire_from_decoded(&corrupt)),
+                    Err(Status::InvalidData),
+                    "corrupt covered byte {i} accepted (len={len}, e2e={e2e})"
+                );
+            }
+            // Missing trailing delimiter ⇒ refused.
+            assert!(
+                decode_status(&cfg, &mcu_wire[..mcu_wire.len() - 1]).is_err(),
+                "unterminated frame accepted (len={len}, e2e={e2e})"
+            );
+        }
+    }
+
     /// REQ: REQ-ROUTE-040 — I-SR7: worst-case blocking is `10 * wire / baud`
     /// nanoseconds, scales inversely with baud, and is undefined at baud 0.
     #[test]

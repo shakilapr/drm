@@ -11,6 +11,21 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M16 W3 tranche: RPC per-phase state transitions, handle compaction,
+  serial host↔MCU interop. `RpcClient` counts each lifecycle event kind as it
+  dispatches (one `Accepted`, one `Started`, one `Progress` per non-final phase,
+  one `Terminal`, exactly one `CancelAccepted` on a boundary cancel; `I-RPC2`/
+  `I-RPC10`), asserted by `action_runs_all_phases` and
+  `cancel_at_each_phase_boundary`. `HandleTable::compact(ack)` adds the explicit
+  compaction gate and dense re-pack, and `rebuild_guidance` emits a deterministic
+  coordinated-rebuild checklist (rebuild/restart every node binary; schema
+  bindings never regenerated — `I-H3`/`I-H4`/`I-H7`); `drm ids compact --yes`
+  prints it. The `drm-router` serial codec pins the shared COBS golden vectors
+  and runs a byte-exact host↔MCU cross-decode matrix (`serial_cobs_golden`,
+  `mcu_host_interop_matrix`), mirrored by the MCU host self-test
+  (`bindings/c/mcu/selftest.c`, fixed `DRM_SERIAL_MAX_WIRE = 264` buffers).
+  Gate evidence [m16w3.md](docs/gates/m16w3.md); [metrics-m16.md](docs/metrics/metrics-m16.md)
+  records `RPC_CANCEL_GREEN = 1`, `IDS_COMPACT_GREEN = 1`, `SERIAL_MATRIX = 1`.
 - Week M16 W2 tranche: RPC action phase machine + trace/record gate prep. NEW
   [action.rs](crates/drm-rpc/src/action.rs) (`ActionState`/`ActionContext`/
   `Phase`/`ActionExec`) executes one declared phase per reactor worker step so

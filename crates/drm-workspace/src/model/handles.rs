@@ -1,12 +1,17 @@
 //! Handle assignment ([handle-system.md](../../../docs/algorithms/toolchain/handle-system.md)
 //! §Functions `assign`): canonical topic path → stable numeric handle across
 //! builds, prior assignments authoritative, tombstones never reused until
-//! explicit compaction. REQ: REQ-TOOL-036, REQ-TOOL-039, REQ-TOOL-080.
+//! explicit compaction. §Functions `compact` adds the explicit ack gate and the
+//! coordinated-rebuild guidance (I-H4/I-H7). REQ: REQ-TOOL-036, REQ-TOOL-038,
+//! REQ-TOOL-039, REQ-TOOL-080.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use drm_types::Status;
+
+use super::WorkspaceModel;
 
 /// Why a numeric handle is reserved (never silently reused, I-H5).
 /// REQ: REQ-TOOL-081.
@@ -122,5 +127,72 @@ impl HandleTable {
         }
         out.next_free = u32::try_from(self.assignments.len()).unwrap_or(u32::MAX);
         out
+    }
+
+    /// Explicit compaction gate (`handle-system.md` §Functions `compact`): any
+    /// non-compact command leaves assignments untouched; compaction requires
+    /// acknowledgement (I-H4). With `ack`, the table is densely re-packed and
+    /// reservations are dropped.
+    /// REQ: REQ-TOOL-038.
+    ///
+    /// # Errors
+    /// [`Status::InvalidArg`] when `ack` is `false` (explicit only).
+    pub fn compact(&self, ack: bool) -> Result<Self, Status> {
+        if !ack {
+            return Err(Status::InvalidArg);
+        }
+        Ok(self.compact_repack())
+    }
+}
+
+/// Coordinated-rebuild guidance emitted after an explicit compaction
+/// (`handle-system.md` §Functions `compact`): a handle change is a new
+/// deployment identity, so every node binary compiling a deployment handle
+/// table must rebuild and restart together, while schema bindings never
+/// rebuild (I-H4/I-H7).
+/// REQ: REQ-TOOL-038.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebuildGuidance {
+    /// Nodes (sorted) whose binaries must rebuild and restart.
+    pub rebuild_nodes: Vec<String>,
+    /// Deterministic operator checklist.
+    pub checklist: String,
+}
+
+/// Builds the coordinated-rebuild checklist for `packed` from `model`
+/// (`handle-system.md` §Functions `compact`: `record_rebuild_guidance`).
+/// Every deployed node binary links the runtime that reads the deployment
+/// handle table, so all nodes rebuild; the checklist keeps the operator
+/// actions explicit and deterministic. Code bindings are never regenerated
+/// (I-H7).
+/// REQ: REQ-TOOL-038.
+#[must_use]
+pub fn rebuild_guidance(model: &WorkspaceModel, packed: &HandleTable) -> RebuildGuidance {
+    let mut rebuild_nodes: Vec<String> = model.nodes.keys().cloned().collect();
+    rebuild_nodes.sort();
+    let mut checklist = String::new();
+    let _ = writeln!(
+        checklist,
+        "compacted {} live assignment(s) to dense handles 0..{}; reservations dropped (I-H4/REQ-TOOL-038).",
+        packed.assignments.len(),
+        packed.assignments.len().saturating_sub(1),
+    );
+    checklist.push_str("new deployment identity — coordinated redeploy required:\n");
+    checklist.push_str(
+        "  [ ] regenerate all handle-dependent deployment artifacts \
+         (routing/runtime tables; MCU topic tables where compiled in)\n",
+    );
+    if rebuild_nodes.is_empty() {
+        checklist.push_str("  [ ] no node binaries embed deployment tables\n");
+    } else {
+        for node in &rebuild_nodes {
+            let _ = writeln!(checklist, "  [ ] rebuild + restart `{node}`");
+        }
+    }
+    checklist.push_str("  [ ] confirm every affected node restarted before traffic resumes\n");
+    checklist.push_str("schema bindings are never regenerated (I-H7).\n");
+    RebuildGuidance {
+        rebuild_nodes,
+        checklist,
     }
 }

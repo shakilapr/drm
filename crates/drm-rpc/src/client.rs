@@ -103,6 +103,11 @@ pub struct RpcClient<'a> {
     waiters: Vec<Option<Waiter>>,
     stale_event_count: u64,
     invalid_order_count: u64,
+    accepted_count: u64,
+    started_count: u64,
+    progress_count: u64,
+    cancel_accepted_count: u64,
+    terminal_count: u64,
     write_buf: Vec<u8>,
     read_buf: Vec<u8>,
     cancel_buf: [u8; codec::CANCEL_FRAME],
@@ -150,6 +155,11 @@ impl<'a> RpcClient<'a> {
             waiters: (0..max_in_flight).map(|_| None).collect(),
             stale_event_count: 0,
             invalid_order_count: 0,
+            accepted_count: 0,
+            started_count: 0,
+            progress_count: 0,
+            cancel_accepted_count: 0,
+            terminal_count: 0,
             write_buf,
             read_buf,
             cancel_buf: [0_u8; codec::CANCEL_FRAME],
@@ -347,6 +357,41 @@ impl<'a> RpcClient<'a> {
         self.invalid_order_count
     }
 
+    /// `Accepted` lifecycle events observed on the event stream.
+    /// REQ: REQ-OPS-010, REQ-OPS-025.
+    #[must_use]
+    pub fn accepted_count(&self) -> u64 {
+        self.accepted_count
+    }
+
+    /// `Started` lifecycle events observed (`I-RPC2`/`I-RPC10`).
+    /// REQ: REQ-OPS-010, REQ-OPS-025.
+    #[must_use]
+    pub fn started_count(&self) -> u64 {
+        self.started_count
+    }
+
+    /// `Progress` events observed (advisory; `I-RPC7`).
+    /// REQ: REQ-OPS-010, REQ-OPS-025.
+    #[must_use]
+    pub fn progress_count(&self) -> u64 {
+        self.progress_count
+    }
+
+    /// `CancelAccepted` events observed (`I-RPC2`).
+    /// REQ: REQ-OPS-011, REQ-OPS-025.
+    #[must_use]
+    pub fn cancel_accepted_count(&self) -> u64 {
+        self.cancel_accepted_count
+    }
+
+    /// `Terminal` events observed (`I-RPC10`).
+    /// REQ: REQ-OPS-010, REQ-OPS-025.
+    #[must_use]
+    pub fn terminal_count(&self) -> u64 {
+        self.terminal_count
+    }
+
     /// Publishes a best-effort `Cancel` for `cid` (failure is silent, matching
     /// `rpc-actions.md` §Edge Cases "Cancel topic full").
     /// REQ: REQ-OPS-011, REQ-OPS-023.
@@ -359,12 +404,31 @@ impl<'a> RpcClient<'a> {
         }
     }
 
+    /// Records one observed lifecycle event by kind (state-transition
+    /// observation; `I-RPC10`).
+    /// REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-025.
+    fn observe_kind(&mut self, kind: EventKind) {
+        match kind {
+            EventKind::Accepted => self.accepted_count = self.accepted_count.saturating_add(1),
+            EventKind::Started => self.started_count = self.started_count.saturating_add(1),
+            EventKind::Progress => self.progress_count = self.progress_count.saturating_add(1),
+            EventKind::CancelAccepted => {
+                self.cancel_accepted_count = self.cancel_accepted_count.saturating_add(1);
+            }
+            EventKind::CancelRejected => {}
+            EventKind::Terminal(_) => {
+                self.terminal_count = self.terminal_count.saturating_add(1);
+            }
+        }
+    }
+
     /// Applies one event to its waiter (`I-RPC1`/`I-RPC10`).
     /// REQ: REQ-OPS-013, REQ-OPS-025.
     fn dispatch(&mut self, ev: RpcEvent) {
         if matches!(ev.kind, EventKind::Accepted) {
             self.observed_session = ev.server_session;
         }
+        self.observe_kind(ev.kind);
         let decision = match self
             .waiters
             .iter()

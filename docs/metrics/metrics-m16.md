@@ -110,3 +110,62 @@ make -C bindings/c/mcu host-test host-audit
 cargo xtask audit-traceability
 cargo xtask check-layering
 ```
+
+## M16W3 — RPC Actions & Cancellation, Handle Compaction, Serial Interop
+
+| Variable | Target | Measured |
+|---|---|---|
+| `RPC_CANCEL_GREEN` | deterministic cancel per phase (I-RPC2) | 1 — `drm-rpc` `cancel_at_each_phase_boundary` (`k ∈ 0..4`: exactly one `CancelAccepted`, `Started`/`Progress` only once a phase actually runs, one `Terminal`), `action_runs_all_phases` (`Accepted`→`Started`→`Progress`×3→`Terminal`, zero invalid-order) |
+| `IDS_COMPACT_GREEN` | compaction + tombstones per policy (I-H3/I-H4) | 1 — `drm-workspace` `handle_compact` 4/4: `handle_compact_gate` (no ack ⇒ `InvalidArg`, table byte-identical), `handle_compact_repack`, `handle_compact_scope` (topic paths preserved, dense re-pack, tombstones cleared, deployment artifact changes, bindings untouched), `handle_compact_guidance` (deterministic checklist) |
+| `SERIAL_MATRIX` | host↔MCU byte-for-byte cells complete | 1 — `drm-router` `serial_cobs_golden` (shared COBS vectors), `mcu_host_interop_matrix` (`len ∈ {0,1,3,127,253,254,255,280,600}` × e2e; host wire == canonical MCU frame; CRC32C parity; host decode recovers MCU bytes; every covered-byte flip + missing delimiter refused); `make -C bindings/c/mcu host-test` prints `mcu selftest: OK (host parity)` |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **RPC per-phase observation** (`crates/drm-rpc/src/client.rs`): `RpcClient`
+  counts each lifecycle event kind as it dispatches (`observe_kind`): one
+  `Accepted`, one `Started`, one `Progress` per non-final phase, one `Terminal`,
+  and exactly one `CancelAccepted` on a boundary cancel (I-RPC2/I-RPC10). The
+  accessors make the transition sequence assertable in `action_runs_all_phases`
+  and `cancel_at_each_phase_boundary`.
+- **Handle compaction** (`crates/drm-workspace/src/model/handles.rs`):
+  `HandleTable::compact(ack)` refuses without acknowledgement and otherwise
+  densely re-packs and drops reservations; `rebuild_guidance(model, packed)`
+  returns a deterministic `RebuildGuidance` (rebuild/restart every node binary,
+  regenerate handle-dependent artifacts, bindings never regenerated —
+  I-H4/I-H7). `drm ids compact --yes` calls the gate and prints
+  `compact_guidance`.
+- **Serial interop matrix** (`crates/drm-router/src/transport/serial.rs`;
+  `bindings/c/mcu/selftest.c`): the host COBS/CRC32C path and the fixed-buffer
+  MCU subset produce byte-identical frames and cross-decode every cell; the MCU
+  self-test exercises the same class within `DRM_SERIAL_MAX_WIRE = 264`.
+- Gate evidence [m16w3.md](../gates/m16w3.md); phase tracker
+  [phase-32.md](../gates/phase-32.md); [CHANGELOG.md](../../CHANGELOG.md) M16W3
+  tranche.
+
+Notes:
+
+- No architecture divergence: pinned invariants only (rpc-actions I-RPC2/I-RPC10,
+  handle-system I-H3/I-H4/I-H7, serial-mcu I-SR3/I-SR4/I-SR6); no ADR.
+- MCU 2 h target soak remains deferred to the `mcu-cross` hardware lane; host
+  parity is green in-session.
+
+### Weekly gate checklist (chaired by E2, Friday)
+
+- [x] `RPC_CANCEL_GREEN = 1`; `IDS_COMPACT_GREEN = 1`; `SERIAL_MATRIX = 1`
+- [x] Variables measured; PR hygiene
+- **`GATE_STATUS(M16W3) = PASS`**
+
+### How to reproduce
+
+```text
+cargo test -p drm-rpc cancel
+cargo test -p drm-rpc action_runs_all_phases
+cargo test -p drm-workspace handle_compact
+cargo test -p drm-router serial_cobs_golden
+cargo test -p drm-router mcu_host_interop_matrix
+cargo test -p drm-cli
+make -C bindings/c/mcu host-test
+cargo xtask audit-traceability
+cargo xtask check-layering
+```

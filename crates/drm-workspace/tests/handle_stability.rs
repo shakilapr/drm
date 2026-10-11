@@ -1,10 +1,14 @@
 //! Handle assignment stability tests ([handle-system.md](../../../docs/algorithms/toolchain/handle-system.md)
-//! Test Matrix; work-plan M02W2-E2-T1/T2). REQ: REQ-TOOL-036, REQ-TOOL-038,
-//! REQ-TOOL-082.
+//! Test Matrix; work-plan M02W2-E2-T1/T2, M16W3-E2-T1). REQ: REQ-TOOL-036,
+//! REQ-TOOL-037, REQ-TOOL-038, REQ-TOOL-082.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use drm_workspace::model::handles::{AssignDelta, AssignmentHistory, HandleTable, ReserveReason};
+use drm_workspace::deploy;
+use drm_workspace::model::handles::{
+    AssignDelta, AssignmentHistory, HandleTable, ReserveReason, rebuild_guidance,
+};
+use drm_workspace::model::{PackageInput, TreeInput, build};
 
 fn fixture<T, E: std::fmt::Debug>(r: Result<T, E>, what: &str) -> T {
     match r {
@@ -185,4 +189,107 @@ fn handle_history_semantics() {
         reserved: BTreeMap::new(),
     });
     assert_eq!(t0.next_free, 0);
+}
+
+/// One-package, one-node model: topic `pkg/front` published by `front_node`.
+fn model_with_node() -> drm_workspace::model::WorkspaceModel {
+    let tree = TreeInput {
+        packages: vec![PackageInput {
+            name: "pkg".to_string(),
+            topics: vec![("front".to_string(), b"v: u32\n".to_vec())],
+        }],
+        nodes: vec![(
+            "front_node".to_string(),
+            b"name = \"front_node\"\npublishes = [\"pkg/front\"]\nconsumes = []\n".to_vec(),
+        )],
+        topology: None,
+    };
+    fixture(build(&tree), "model")
+}
+
+/// REQ: REQ-TOOL-038 — I-H4: compaction requires acknowledgement; without the
+/// flag the table is refused and left byte-identical (explicit only).
+#[test]
+fn handle_compact_gate() {
+    let mut prior = AssignmentHistory::default();
+    prior.assignments.insert("a".to_string(), 3);
+    prior.assignments.insert("b".to_string(), 7);
+    prior.reserved.insert(4, ReserveReason::Deleted);
+    let t = HandleTable::from_history(&prior);
+    let before = t.clone();
+    assert!(t.compact(false).is_err(), "no ack ⇒ refuse (I-H4)");
+    assert_eq!(t, before, "refusal leaves assignments untouched");
+    let packed = fixture(t.compact(true), "ack");
+    assert_eq!(packed.assignments["a"], 0);
+    assert_eq!(packed.assignments["b"], 1);
+    assert!(packed.reserved.is_empty());
+}
+
+/// REQ: REQ-TOOL-037, REQ-TOOL-038 — I-H4/I-H7: compaction preserves topic
+/// identity, changes handle-dependent deployment artifacts, and never touches
+/// schema bindings; the guidance enumerates every rebuilding node.
+#[test]
+fn handle_compact_scope() {
+    let model = model_with_node();
+    let topic = "pkg/front";
+    let mut prior = AssignmentHistory::default();
+    prior.assignments.insert(topic.to_string(), 9);
+    prior.assignments.insert("pkg/old".to_string(), 12);
+    prior.reserved.insert(10, ReserveReason::Deleted);
+    let table = HandleTable::from_history(&prior);
+    let topics: BTreeSet<String> = model.topics.keys().cloned().collect();
+    let assigned = fixture(table.assign(&topics), "assign").0;
+    assert!(assigned.reserved.contains_key(&12), "pkg/old tombstoned");
+    let packed = fixture(assigned.compact(true), "compact");
+
+    // Topic identity (the path) is preserved; live handles re-pack dense.
+    let live: BTreeSet<String> = model.topics.keys().cloned().collect();
+    let after: BTreeSet<String> = packed.assignments.keys().cloned().collect();
+    assert_eq!(after, live, "canonical topic paths unchanged");
+    assert_eq!(packed.assignments[topic], 0);
+    assert!(
+        packed.reserved.is_empty(),
+        "coordinated redeploy clears tombstones"
+    );
+
+    // Deployment artifacts embed handles ⇒ they change ...
+    assert_ne!(
+        deploy::render(&model, &assigned),
+        deploy::render(&model, &packed),
+        "handle-dependent deployment artifact changes"
+    );
+
+    // ... while the rebuild guidance scopes consumers of deployment tables and
+    // records that schema bindings are never regenerated (I-H7).
+    let guidance = rebuild_guidance(&model, &packed);
+    assert_eq!(guidance.rebuild_nodes, vec!["front_node".to_string()]);
+    assert!(
+        guidance
+            .checklist
+            .contains("schema bindings are never regenerated")
+    );
+}
+
+/// REQ: REQ-TOOL-038 — the coordinated-rebuild checklist is deterministic and
+/// names every node binary plus the artifact regeneration and restart steps.
+#[test]
+fn handle_compact_guidance() {
+    let model = model_with_node();
+    let mut t = HandleTable::default();
+    t.assignments.insert("pkg/front".to_string(), 4);
+    t.reserved.insert(1, ReserveReason::Deleted);
+    t.next_free = 5;
+    let packed = fixture(t.compact(true), "packed");
+    let g = rebuild_guidance(&model, &packed);
+    assert_eq!(g.rebuild_nodes, vec!["front_node".to_string()]);
+    assert!(g.checklist.contains("new deployment identity"));
+    assert!(
+        g.checklist
+            .contains("regenerate all handle-dependent deployment artifacts")
+    );
+    assert!(g.checklist.contains("MCU topic tables"));
+    assert!(g.checklist.contains("rebuild + restart `front_node`"));
+    assert!(g.checklist.contains("bindings are never regenerated"));
+    // Deterministic: same inputs ⇒ identical checklist.
+    assert_eq!(g, rebuild_guidance(&model, &packed));
 }

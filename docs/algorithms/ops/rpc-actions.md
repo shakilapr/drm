@@ -186,7 +186,7 @@ Seeds [§Functions](#functions): `call`, `pump_events`, `serve`, `poll_requests`
 and the outbox `commit`/`flush`. Deltas: none — this section records the review; the
 implementation lands in Phase 32 (M15W1).
 
-## Implementation Status (M16W2)
+## Implementation Status (M16W2–M16W3)
 
 The action phase machine landed in `crates/drm-rpc/src/action.rs`
 (`ActionState`, `ActionContext`, `Phase`, `ActionExec`). `UnaryService::action`
@@ -198,13 +198,22 @@ terminal is `Terminal(Cancelled)`. `ActionContext::checkpoint` provides
 intra-phase cooperation; `Phase.expected_max_duration_ns` remains SLO metadata
 (`I-RPC8`). The `dispatch` fixture runs `C ∈ 1..=16` concurrent clients.
 
+M16W3 observes the per-phase state-transition sequence. `RpcClient` counts each
+lifecycle event kind as it dispatches (`observe_kind`, `I-RPC10`): a full action
+observes exactly one `Accepted`, one `Started`, one `Progress` per non-final
+phase, and one `Terminal`; a cancel at boundary `k` observes exactly one
+`CancelAccepted` with no phase after the ack. The client accessors
+(`accepted_count`/`started_count`/`progress_count`/`cancel_accepted_count`/
+`terminal_count`) make the transition sequence assertable.
+
 | Element | Location | Test |
 |---|---|---|
 | `ActionState`/`ActionContext`/`Phase`/`ActionExec`/`ActionStep`, `run_action` stepping | `crates/drm-rpc/src/action.rs` | `action_runs_all_phases`, `cancel_at_each_phase_boundary` |
 | `UnaryService::action`/`finish`, `run_workers` phase stepping, cancel token | `crates/drm-rpc/src/server.rs` | `cancel_at_each_phase_boundary`, `action_phases_run` counter |
 | cid dispatch `C ∈ 1..=16` | `crates/drm-rpc/src/tests.rs` | `dispatch_concurrent_no_cross_correlation` |
+| per-kind lifecycle observation, `CancelAccepted` ack | `crates/drm-rpc/src/client.rs` | `action_runs_all_phases`, `cancel_at_each_phase_boundary` |
 
-REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-013.
+REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-013, REQ-OPS-025.
 
 ## Edge Cases & Errors
 

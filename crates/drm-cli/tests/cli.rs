@@ -1,8 +1,9 @@
 //! End-to-end tests: the built `drm` binary is invoked via
 //! `std::process::Command` against throwaway fixture workspaces. Covers the
 //! compact gate (I-H4/REQ-TOOL-038), dense sorted compaction output
-//! (REQ-TOOL-080), the read-only ids report, and the `assign` round-trip verify
-//! (REQ-TOOL-013, REQ-TOOL-047).
+//! (REQ-TOOL-080), the read-only ids report, its determinism, the coordinated
+//! rebuild guidance, and the `assign` round-trip verify (REQ-TOOL-013,
+//! REQ-TOOL-047).
 //!
 //! REQ: REQ-TOOL-038, REQ-TOOL-080, REQ-TOOL-037, REQ-TOOL-047.
 
@@ -158,6 +159,57 @@ fn compact_with_yes_is_dense_and_sorted() {
         stdout(&out).contains("new deployment identity"),
         "guidance missing"
     );
+}
+
+/// REQ: REQ-TOOL-080 — the `ids` report is deterministic: repeated runs emit
+/// byte-identical stdout (canonical sorted render, no nondeterministic fields).
+#[test]
+fn ids_report_is_deterministic() {
+    let root = fixture(
+        "report-determinism",
+        Some(
+            "{\n  \"format_version\": 1,\n  \"next_free\": 4,\n  \"assignments\": {\n    \
+             \"planning/trajectory\": 1,\n    \"control/target\": 3\n  },\n  \"reserved\": {\n    \
+             \"2\": { \"reason\": \"deleted\" }\n  }\n}\n",
+        ),
+    );
+    let first = drm(&root, &["ids"]);
+    let second = drm(&root, &["ids"]);
+    assert!(first.status.success(), "stderr: {}", stderr(&first));
+    assert!(second.status.success(), "stderr: {}", stderr(&second));
+    assert_eq!(
+        stdout(&first),
+        stdout(&second),
+        "report must be byte-identical across runs"
+    );
+}
+
+/// REQ: REQ-TOOL-038 — `--yes` compaction emits the coordinated-rebuild
+/// checklist: deployment artifacts regenerate, deployment-table consumers
+/// rebuild/restart, and schema bindings are never regenerated (I-H4/I-H7).
+#[test]
+fn compact_guidance_checklist() {
+    let root = fixture(
+        "compact-guidance",
+        Some(
+            "{\n  \"format_version\": 1,\n  \"next_free\": 2,\n  \"assignments\": {\n    \
+             \"control/target\": 0\n  },\n  \"reserved\": {\n    \"1\": { \"reason\": \
+             \"deleted\" }\n  }\n}\n",
+        ),
+    );
+    let out = drm(&root, &["ids", "compact", "--yes"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    for needle in [
+        "new deployment identity",
+        "regenerate all handle-dependent deployment artifacts",
+        "MCU topic tables",
+        "rebuild + restart",
+        "restarted before traffic resumes",
+        "schema bindings are never regenerated",
+    ] {
+        assert!(text.contains(needle), "guidance missing `{needle}`: {text}");
+    }
 }
 
 /// REQ: REQ-TOOL-013, REQ-TOOL-047 — `assign control/target --consume controller`

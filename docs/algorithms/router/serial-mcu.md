@@ -106,6 +106,27 @@ live in [mcu-bring-up.md](../../spec/mcu-bring-up.md). No invariant changed.
 
 Deltas: none — this section records the final plan; implementation lands in Phase 32 (M15W1).
 
+## Implementation Status (M16W3)
+
+The host↔MCU interop matrix is byte-exact. `drm-router::transport::serial`
+`serial_cobs_golden` pins the shared COBS vectors (`[]`→`01`, `00`→`01 01`,
+`010203`→`04 010203`, `1100 22`→`02 11 02 22`) that the MCU host self-test
+reproduces. `mcu_host_interop_matrix` sweeps `len ∈ {0,1,3,127,253,254,255,280,600}`
+× e2e on/off: the host encoder's wire equals the independently assembled
+canonical MCU frame (I-SR6), the CRC32C trailer covers exactly
+header+payload[+e2e] (I-SR3), the host decoder recovers every cell from the
+MCU bytes, every covered-byte flip and a missing trailing delimiter are refused.
+The C self-test `test_interop_matrix` (`bindings/c/mcu/selftest.c`) runs the
+same class of cells within the fixed MCU buffers (`DRM_SERIAL_MAX_WIRE = 264`),
+including a stale-CRC covered-byte drop + resync.
+
+| Element | Location | Test |
+|---|---|---|
+| COBS golden vectors | `crates/drm-router/src/transport/serial.rs`; `bindings/c/mcu/selftest.c` | `serial_cobs_golden`, `test_cobs_golden` |
+| host↔MCU cross-decode matrix, CRC/escape parity, error paths | `crates/drm-router/src/transport/serial.rs`; `bindings/c/mcu/selftest.c` | `mcu_host_interop_matrix`, `test_interop_matrix` |
+
+REQ: REQ-OPS-004, REQ-ROUTE-025, REQ-ROUTE-026.
+
 ## Edge Cases & Errors
 
 | Case | Result |
