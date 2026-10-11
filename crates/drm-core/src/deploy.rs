@@ -132,3 +132,6 @@ pub fn clean<S: ShmBackend, L: LockBackend>(
     }
     Ok(CleanReport::Cleaned)
 }
+
+#[cfg(test)]
+mod tests;
