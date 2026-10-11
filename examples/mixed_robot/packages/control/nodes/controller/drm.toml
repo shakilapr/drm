@@ -1,0 +1,7 @@
+name = "controller"
+language = "c"
+publishes = ["control/target"]
+consumes = ["planning/trajectory"]
+
+[build]
+command = ['sh', '-c', 'test -n "$DRM_GEN_INCLUDE" && test -f "$DRM_DEPLOY_METADATA"']

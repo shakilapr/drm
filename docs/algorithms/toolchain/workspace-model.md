@@ -49,7 +49,8 @@ pub struct NodeEntry {
  publish_meta: SortedMap<TopicName, PublishMeta>, // expected_rate (planning only)
  consume_meta: SortedMap<TopicName, ConsumeMeta>, // deadline/read mode/required/reliability (freshness + contract)
  spatial: SpatialContract, // [spatial] write = [frames], read = [frames] + per-read history requirements (spatial-core §Node Spatial Contracts)
- language: Language, build: BuildAdapter,
+ language: Option<Language>, // declared implementation language; absent until declared
+ build: Option<BuildAdapter>, // [build] system = "cmake" | "cargo" or command = [...] (build-orchestration.md)
 }
 
 /// Dimensioned value parsed ONCE at model build (REQ-TOOL-068). Downstream

@@ -37,7 +37,7 @@ pub enum IdsAction {
 }
 
 /// The parsed command to execute.
-/// REQ: REQ-TOOL-037.
+/// REQ: REQ-TOOL-037, REQ-TOOL-012.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// `drm ids ...`.
@@ -50,6 +50,22 @@ pub enum Command {
         direction: Direction,
         /// Target node identity.
         node: String,
+    },
+    /// `drm build [<workspace>] [--target <node>]...` — orchestrator
+    /// (REQ-TOOL-012). An optional positional workspace mirrors
+    /// `drm build examples/mixed_robot`.
+    Build {
+        /// Optional target node subset.
+        targets: Vec<String>,
+        /// Optional positional workspace (overrides `--workspace`).
+        workspace: Option<String>,
+    },
+    /// `drm info` — read-only model + verify projection (REQ-TOOL-045).
+    Info,
+    /// `drm dev [--once]` — watch skeleton (REQ-TOOL-016).
+    Dev {
+        /// Stop after the initial build (smoke mode).
+        once: bool,
     },
     /// `drm help` / `-h` / `--help` / no arguments.
     Help,
@@ -74,11 +90,16 @@ Usage:
   drm [--workspace <dir>] ids compact --yes Re-pack handles dense (explicit; I-H4)
   drm [--workspace <dir>] assign <topic> --consume <node>
   drm [--workspace <dir>] assign <topic> --publish <node>
+  drm [--workspace <dir>] build [--target <node>]...
+  drm [--workspace <dir>] info
+  drm [--workspace <dir>] dev [--once]
   drm [--workspace <dir>] help
 
 Options:
   --workspace, -C <dir>   Workspace root (default: current directory)
   --yes                   Acknowledge handle compaction (required)
+  --target <node>         Restrict `build` to a node (repeatable)
+  --once                  `dev`: run the initial build only
   -h, --help              Print this help
 ";
 
@@ -92,6 +113,8 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
     let mut workspace = PathBuf::from(".");
     let mut positionals: Vec<String> = Vec::new();
     let mut yes = false;
+    let mut once = false;
+    let mut targets: Vec<String> = Vec::new();
     let mut consume: Option<String> = None;
     let mut publish: Option<String> = None;
 
@@ -105,6 +128,17 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
                     .ok_or_else(|| format!("`{arg}` requires a path"))?;
                 workspace = PathBuf::from(v);
                 i += 2;
+            }
+            "--target" => {
+                let v = raw
+                    .get(i + 1)
+                    .ok_or_else(|| "`--target` requires a node".to_string())?;
+                targets.push(v.clone());
+                i += 2;
+            }
+            "--once" => {
+                once = true;
+                i += 1;
             }
             "--consume" => {
                 let v = raw
@@ -138,15 +172,17 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
         }
     }
 
-    let command = build_command(&positionals, yes, consume, publish)?;
+    let command = build_command(&positionals, yes, once, targets, consume, publish)?;
     Ok(Args { workspace, command })
 }
 
 /// Maps positionals + collected flags into a [`Command`].
-/// REQ: REQ-TOOL-037, REQ-TOOL-038.
+/// REQ: REQ-TOOL-037, REQ-TOOL-038, REQ-TOOL-012.
 fn build_command(
     positionals: &[String],
     yes: bool,
+    once: bool,
+    targets: Vec<String>,
     consume: Option<String>,
     publish: Option<String>,
 ) -> Result<Command, String> {
@@ -156,6 +192,19 @@ fn build_command(
             Some("compact") => Ok(Command::Ids(IdsAction::Compact { yes })),
             Some(other) => Err(format!("unknown `ids` subcommand `{other}`")),
         },
+        Some("build") => match positionals.len() {
+            0 | 1 => Ok(Command::Build {
+                targets,
+                workspace: None,
+            }),
+            2 => Ok(Command::Build {
+                targets,
+                workspace: Some(positionals[1].clone()),
+            }),
+            _ => Err(format!("unexpected `build` argument `{}`", positionals[2])),
+        },
+        Some("info") => Ok(Command::Info),
+        Some("dev") => Ok(Command::Dev { once }),
         Some("assign") => {
             let topic = positionals
                 .get(1)
@@ -251,5 +300,37 @@ mod tests {
     #[test]
     fn unknown_option_rejected() {
         assert!(super::parse(&["--nope".to_string()]).is_err());
+    }
+
+    /// REQ: REQ-TOOL-012 — `build` accepts a positional workspace, `--target`
+    /// repeats, `info` takes nothing, and `dev --once` sets the smoke flag.
+    #[test]
+    fn build_info_dev_shapes() {
+        let a = super::parse(&[
+            "build".to_string(),
+            "examples/mixed_robot".to_string(),
+            "--target".to_string(),
+            "controller".to_string(),
+        ])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(
+            a.command,
+            super::Command::Build {
+                targets: vec!["controller".to_string()],
+                workspace: Some("examples/mixed_robot".to_string()),
+            }
+        );
+        assert_eq!(
+            super::parse(&["info".to_string()])
+                .unwrap_or_else(|e| unreachable!("{e}"))
+                .command,
+            super::Command::Info
+        );
+        assert_eq!(
+            super::parse(&["dev".to_string(), "--once".to_string()])
+                .unwrap_or_else(|e| unreachable!("{e}"))
+                .command,
+            super::Command::Dev { once: true }
+        );
     }
 }

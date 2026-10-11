@@ -1,0 +1,7 @@
+name = "driver"
+language = "rust"
+publishes = ["actuator/command"]
+consumes = ["control/target"]
+
+[build]
+command = ['sh', '-c', 'test -n "$DRM_GEN_INCLUDE" && test -f "$DRM_DEPLOY_METADATA"']

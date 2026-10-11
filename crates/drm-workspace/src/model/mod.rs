@@ -78,15 +78,20 @@ pub struct PackageMeta {
     pub topics: BTreeSet<TopicName>,
 }
 
-/// Node interface declaration (structural slice: publish/consume sets; timing
-/// metadata, spatial contracts, language, and build adapters land with
-/// manifest parsing growth). REQ: REQ-TOOL-047.
+/// Node interface declaration (structural slice: publish/consume sets plus the
+/// optional declared language and native build adapter; timing metadata and
+/// spatial contracts land with manifest parsing growth).
+/// REQ: REQ-TOOL-047, REQ-TOOL-012.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NodeEntry {
     /// Topics this node publishes (single-writer is a verify check, not here).
     pub publishes: BTreeSet<TopicName>,
     /// Topics this node consumes.
     pub consumes: BTreeSet<TopicName>,
+    /// Declared implementation language, when present.
+    pub language: Option<crate::orchestrator::Language>,
+    /// Declared native build adapter (`[build]`), when present.
+    pub build: Option<crate::orchestrator::BuildAdapter>,
 }
 
 /// In-memory workspace model. `BTree*` everywhere so filesystem read order can
@@ -374,6 +379,8 @@ fn build_nodes(
                     NodeEntry {
                         publishes: manifest.publishes,
                         consumes: manifest.consumes,
+                        language: manifest.language,
+                        build: manifest.build,
                     },
                 );
             }

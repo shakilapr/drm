@@ -47,8 +47,8 @@ drm/
 │   ├── drm-ffi/                    # canonical C ABI exports; drm.h single source of truth
 │   ├── drm-router/                 # boundary router: framing, priority lanes, traffic shaping
 │   ├── drm-spatial/                # spatial-temporal engine (Phase 33)
-│   ├── drm-workspace/              # parser, WorkspaceModel, verifier, codegen, topology
-│   │   └── src/{parser,model,verifier,codegen,topology}/
+│   ├── drm-workspace/              # parser, WorkspaceModel, verify, codegen, topology, orchestrator, watch, deploy
+│   │   └── src/{parser,model,verify,codegen,topology,orchestrator,watch,deploy}/
 │   ├── drm-record/                 # record/replay; recorder-owned buffers; no disk I/O on borrows
 │   ├── drm-diag/                   # out-of-band diagnostics aggregation daemon
 │   ├── drm-trace/                  # non-blocking best-effort event tracing

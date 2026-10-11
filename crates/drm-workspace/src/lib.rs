@@ -8,10 +8,13 @@
 pub mod budget;
 pub mod canon;
 pub mod codegen;
+pub mod deploy;
 pub mod model;
+pub mod orchestrator;
 pub mod parser;
 pub mod topology;
 pub mod verify;
+pub mod watch;
 
 #[cfg(test)]
 mod tests {

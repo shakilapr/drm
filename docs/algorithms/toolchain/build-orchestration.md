@@ -1,7 +1,7 @@
 # Build Orchestration & Watch Mode Algorithms
 
 Normative terminology follows [docs/standards.md](../../standards.md).
-Scope: `drm build` as high-level orchestrator (parse → handles → deployment artifacts → generate → verify → invoke native builder), native build adapters (CMake/Ninja, Cargo, custom command), and `drm dev` filesystem watch — two data event categories plus error/rescan control signals, event-loss recovery, pending-dirty retention across invalid declaration batches. Watch events are invalidation hints, not truth (architecture.md §DRM as Orchestrator, §Clear Division of Responsibilities, §Development Watch Mode). Owner: E2 (crate `drm-workspace`, `drm-cli`). Phase 25. Depends on [workspace-model.md](workspace-model.md), [codegen-invalidation.md](codegen-invalidation.md), [handle-system.md](handle-system.md).
+Scope: `drm build` as high-level orchestrator (parse → handles → deployment artifacts → generate → verify → invoke native builder), native build adapters (CMake/Ninja, Cargo, custom command) with per-adapter environment hooks, `drm info` (read-only model/verify projection), and `drm dev` filesystem watch — two data event categories plus error/rescan control signals, event-loss recovery, pending-dirty retention across invalid declaration batches. Watch events are invalidation hints, not truth (architecture.md §DRM as Orchestrator, §Clear Division of Responsibilities, §Development Watch Mode, §Tiered Developer Commands). Owner: E2 (crate `drm-workspace`, `drm-cli`). Phase 25. Depends on [workspace-model.md](workspace-model.md), [codegen-invalidation.md](codegen-invalidation.md), [handle-system.md](handle-system.md).
 
 ## REQ Bindings
 
@@ -37,7 +37,26 @@ struct WatchState {
  pending_source: SortedSet<PathBuf>, // I-BO6: source paths awaiting a valid model
  pending_rescan: bool, // I-BO7: loss detected ⇒ rescan before trusting events
 }
+
+// Adapter hooks: the environment DRM guarantees to every native adapter so node
+// builds find generated bindings and deployment metadata without guessing paths.
+pub struct AdapterInvocation {
+ program: String, args: Vec<String>,
+ env: SortedMap<String, String>, // DRM_GEN_INCLUDE, DRM_DEPLOY_METADATA (below)
+}
+pub const GEN_DIR_REL: &str = ".drm/gen"; // include root (c|cpp subtrees)
+pub const DEPLOY_DIR_REL: &str = ".drm/deploy"; // deployment artifact root
+pub const GEN_INCLUDE_ENV: &str = "DRM_GEN_INCLUDE"; // `:`-joined include paths
+pub const DEPLOY_METADATA_ENV: &str = "DRM_DEPLOY_METADATA"; // path to deployment.json
+
+// I-BO1 sequence probe: emitted once per orchestration step, in order.
+pub enum BuildStep { Parse, Model, Handles, Deploy, Codegen, Verify, Adapter(NodeName) }
 ```
+
+`drm info` is a **pure projection**: it renders the last in-memory `WorkspaceModel`
+plus the `drm verify` summary. It performs no mutation, no codegen, no adapter
+invocation, and introduces no semantics of its own (architecture.md §Tiered
+Developer Commands).
 
 ## Invariants
 
@@ -102,6 +121,13 @@ fn recover_by_rescan(st: &mut WatchState, ws: &Path) -> Result<(), Status> {
  st.pending_rescan = false;
  Ok(())
 }
+
+// Adapter hooks (E1-T1): canonical include paths + deployment metadata path,
+// exported as environment so adapters never hard-code `.drm` layout.
+fn include_paths(ws: &Path) -> Vec<PathBuf> { vec![ws.join(GEN_DIR_REL).join("c"), ws.join(GEN_DIR_REL).join("cpp")] }
+fn deployment_metadata_path(ws: &Path) -> PathBuf { ws.join(DEPLOY_DIR_REL).join("deployment.json") }
+fn invocation_for(node: &NodeEntry, ws: &Path) -> AdapterInvocation // per BuildAdapter: cmake/cargo/command + canonical flags
+fn info(model: &WorkspaceModel, verify: &[VerifyFinding]) -> String // render_model + verify summary; deterministic, read-only
 ```
 
 ## Protocols
@@ -151,5 +177,7 @@ fn recover_by_rescan(st: &mut WatchState, ws: &Path) -> Result<(), Status> {
 | `watch_overflow_rescan` (injected event drop) | I-BO7 recovery, no lost build |
 | `watch_binary_source` (non-UTF8 file) | I-BO8 owning node invoked |
 | `adapter_matrix` (cmake/cargo/command) | each invoked with configured args |
+| `adapter_hooks` | invocation carries `DRM_GEN_INCLUDE` + `DRM_DEPLOY_METADATA` |
+| `info_projection` | deterministic model render + verify summary; no mutation |
 | no-source-tracking probe | single adapter call per source change |
 | handle reassignment → only deployment-table consumers rebuild | I-BO1/I-G9 boundary |

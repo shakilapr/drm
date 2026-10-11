@@ -5,16 +5,21 @@
 //! the Rust engine).
 //!
 //! Implemented slice: `drm ids` (committed assignment-lockfile report +
-//! explicit compaction) and `drm assign` (manifest mutation + verify). Argument
-//! parsing is hand-written over [`std::env::args`](std::env::args) — no parser
+//! explicit compaction), `drm assign` (manifest mutation + verify), `drm build`
+//! (orchestrator, REQ-TOOL-012), `drm info` (read-only model projection,
+//! REQ-TOOL-045), and `drm dev` (watch skeleton, REQ-TOOL-016). Argument parsing
+//! is hand-written over [`std::env::args`](std::env::args) — no parser
 //! dependency. `#![forbid(unsafe_code)]` (facade).
 
 #![forbid(unsafe_code)]
 
 pub mod args;
 pub mod assign;
+pub mod build;
+pub mod dev;
 pub mod error;
 pub mod ids;
+pub mod info;
 pub mod ws;
 
 pub use args::{Args, Command, Direction, IdsAction};
@@ -40,6 +45,15 @@ pub fn run(raw: &[String]) -> Result<(), CliError> {
             direction,
             node,
         } => assign::run(&args.workspace, &topic, direction, &node),
+        Command::Build {
+            targets,
+            workspace: path,
+        } => {
+            let root = path.map_or_else(|| args.workspace.clone(), std::path::PathBuf::from);
+            build::run(&root, &targets)
+        }
+        Command::Info => info::run(&args.workspace),
+        Command::Dev { once } => dev::run(&args.workspace, once),
     }
 }
 
