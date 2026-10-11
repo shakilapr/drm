@@ -711,6 +711,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "drm-core",
+ "drm-router",
  "drm-types",
  "drm-workspace",
  "serde",

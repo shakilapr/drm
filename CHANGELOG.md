@@ -11,6 +11,24 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M14 W1 tranche: Windows↔Linux full interop matrix + serial-MCU doc
+  final. The cross-OS interop harness
+  ([cross_os.rs](xtask/src/cross_os.rs)) now spans the full work-plan matrix
+  `{windows, linux} × {udp, tcp, serial} × {c, cpp, rust, python}`: `InteropLang`
+  adds C++, `InteropTransport` adds `Serial` (cross-platform in-process
+  host-loopback through the byte-exact `drm-router` COBS/CRC32C codec),
+  `interop_core_matrix` is the 24-cell gate-blocking same-language core and
+  `interop_matrix` the 96-cell full table split by `CellClass {Core, Tracked}`;
+  `run_interop` writes the complete cell table to
+  `target/interop/matrix-report.txt`. Physical-matrix runbook + loopback
+  evidence in [phase-31-runbook.md](docs/gates/phase-31-runbook.md);
+  [serial-mcu.md](docs/algorithms/router/serial-mcu.md) finalized (COBS binding;
+  absorbs the M02W3/M05W3/M06W1/M13W1 drafts). Gate evidence in the M14W1
+  section of [phase-31.md](docs/gates/phase-31.md); conformance matrix and port
+  board updated ([tests/conformance/README.md](tests/conformance/README.md));
+  `ci.yml`/`windows-nightly.yml` gain the serial interop step;
+  [metrics-m14.md](docs/metrics/metrics-m14.md) records `FULL_MATRIX = 1`,
+  `SERIAL_DOC = 1`.
 - Week M13 W4 tranche: Windows crash-recovery matrix + Phase 31 gate prep +
   month-13 review. Windows publisher kill/restart ×50
   ([windows.rs](crates/drm-core/src/channel/lifecycle/tests/windows.rs)

@@ -26,7 +26,7 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 | `xtask test --two-host` | two-host router/transport matrix |
 | `xtask test --cross-os` | cross-OS conformance manifest (`xtask/src/cross_os.rs` `SUBSET`); every Linux suite row green on Windows or scheduled with a port board entry (owner + gate-risk) |
 | `xtask test --cross-os --full` | full conformance run ×`CONFORMANCE_RUNS` (run 2 must be green), per-run evidence under `target/conformance/` |
-| `xtask test --cross-os --transport <udp\|tcp>` | cross-OS interop matrix (`xtask/src/cross_os.rs` `INTEROP_MATRIX`): `{publisher_os, consumer_os} × {C, Rust, Python} × transport` cells executed over loopback (or the two-netns simulation fallback) with per-cell evidence under `target/interop/` |
+| `xtask test --cross-os --transport <udp\|tcp\|serial>` | cross-OS interop matrix (`xtask/src/cross_os.rs` `interop_matrix`): `{publisher_os, consumer_os} × {C, C++, Rust, Python} × {udp, tcp, serial}` cells executed over loopback (or the two-netns simulation fallback) with per-cell evidence under `target/interop/` and the full cell table at `target/interop/matrix-report.txt`; the 24 same-language cells are core (gate-blocking), mixed-language pairs tracked; `serial` is a host-loopback of the byte-exact codec |
 | `xtask bench --report-regressions` | benchmark regression report (audit.yml) |
 | `xtask abi-check --against <ref>` | ABI/layout compatibility vs a previous release (release.yml) |
 | `xtask publish` | lockstep crates.io publishing (release.yml) |

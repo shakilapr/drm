@@ -1,14 +1,16 @@
 # Nightly Windows conformance (work-plan M12W2-E4-T2, M12W4-E4-T1,
-# extended M13W1-E1/E3/E4, full port M13W3, crash matrix M13W4): the cross-OS
-# manifest defined in xtask/src/cross_os.rs — SHM sections, process identity,
-# `LockFileEx` locks, Windows publisher/consumer lifecycle (in-place `Init`
-# reinit, restart epoch parity), the publisher crash matrix (kill/restart ×50),
-# reader-kill reclamation, link-cut isolation, the bounded serial codec, socket
-# transports, router framing/lanes/shaping, toolchain verify/budget/determinism,
-# and the bindings golden/FFI rows. The subset runs three consecutive times so
-# runner flakiness surfaces (M12W4 Tests: green ×3); the full manifest runs ×2
-# with run 2 required green (M13W3 Tests: full run ×2). Results feed
-# docs/metrics/metrics-m12.md, docs/metrics/metrics-m13.md,
+# extended M13W1-E1/E3/E4, full port M13W3, crash matrix M13W4, full interop
+# matrix M14W1): the cross-OS manifest defined in xtask/src/cross_os.rs — SHM
+# sections, process identity, `LockFileEx` locks, Windows publisher/consumer
+# lifecycle (in-place `Init` reinit, restart epoch parity), the publisher crash
+# matrix (kill/restart ×50), reader-kill reclamation, link-cut isolation, the
+# bounded serial codec, socket transports, router framing/lanes/shaping,
+# toolchain verify/budget/determinism, the bindings golden/FFI rows, and the
+# full {C, C++, Rust, Python} × {udp, tcp, serial} interop matrix. The subset
+# runs three consecutive times so runner flakiness surfaces (M12W4 Tests:
+# green ×3); the full manifest runs ×2 with run 2 required green (M13W3 Tests:
+# full run ×2). Results feed docs/metrics/metrics-m12.md,
+# docs/metrics/metrics-m13.md, docs/metrics/metrics-m14.md,
 # docs/gates/phase-31.md, and docs/gates/month-13.md.
 # REQ: REQ-QAL-008, REQ-CORE-054, REQ-CORE-056, REQ-CORE-057, REQ-CORE-074,
 # REQ-CORE-075, REQ-CORE-076, REQ-CORE-077, REQ-CORE-078, REQ-CORE-101,
@@ -51,8 +53,9 @@ jobs:
           echo "::group::reader-kill reclamation matrix"
           cargo test -p drm-core --lib reclaim_kill_matrix_windows -- --nocapture
           echo "::endgroup::"
-      - name: cross-OS interop matrix (UDP + TCP cells)
+      - name: cross-OS interop matrix (UDP + TCP + serial cells)
         shell: bash
         run: |
           cargo xtask test --cross-os --transport udp
           cargo xtask test --cross-os --transport tcp
+          cargo xtask test --cross-os --transport serial

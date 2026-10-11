@@ -1,7 +1,7 @@
 # Serial & MCU Runtime Algorithms
 
 Normative terminology follows [docs/standards.md](../../standards.md).
-Scope: serial-link transport framing and the constrained-device (MCU) runtime path — bounded frames, CRC integrity, escaping, freestanding C subset, zero-forbidden-heap data path, host↔MCU interop. Implements architecture.md §External Device Interoperability, §Decoupled Framing and Packing (bounded serial frames), codebase §3.3 (MCU subset). Owner: E3 (crate `drm-router::serial`, `bindings/c` MCU subset). Phase 32. Depends on [router-core.md](router-core.md) (frame = one sample), [lanes-shaping.md](lanes-shaping.md) (shaping), [c-abi-surface.md](../bindings/c-abi-surface.md) (surface).
+Scope: serial-link transport framing and the constrained-device (MCU) runtime path — bounded frames, CRC integrity, escaping, freestanding C subset, zero-forbidden-heap data path, host↔MCU interop. Implements architecture.md §External Device Interoperability, §Decoupled Framing and Packing (bounded serial frames), codebase §3.3 (MCU subset). Owner: E3 (crate `drm-router::serial`, `bindings/c` MCU subset). Phase 32. **Finalized M14W1**, absorbing the M02W3 spec draft, the M05W3 adapter draft, the M06W1 error-path hardening draft, and the M13W1 codec draft; the COBS selection below is binding. Depends on [router-core.md](router-core.md) (frame = one sample), [lanes-shaping.md](lanes-shaping.md) (shaping), [c-abi-surface.md](../bindings/c-abi-surface.md) (surface).
 
 ## REQ Bindings
 
@@ -78,7 +78,7 @@ Selection criteria, stated before the decision: (1) worst-case overhead bounded 
 | SLIP | unbounded (n × 2) | O(1)/byte | yes | 0xC0 | rejected: criterion 1 fails, plus no error detection aid |
 | HDLC bit-stuffing | ~1 bit per 32 avg, sub-byte | bit-level shifter | yes | 0x7E flag | rejected: criteria 1–2 fail — bound is statistical, decode is bit-granular on MCU |
 
-Decision lands with Phase 32; until then COBS is the provisionally binding choice (wire diagrams above assume it). Any re-opening requires a new ADR comparing ≥ 2 alternatives against the same four criteria.
+Decision finalized M14W1 (Phase 32): COBS is the binding choice (wire diagrams above assume it). Any re-opening requires a new ADR comparing ≥ 2 alternatives against the same four criteria.
 
 *Host↔MCU exchange (interop gate I-SR6):*
 
@@ -121,9 +121,9 @@ Decision lands with Phase 32; until then COBS is the provisionally binding choic
 | `serial_blocking_estimate` (verify report vs declared deadlines) | I-SR7 |
 | MCU steady-state suite on target | loop/stack bounds and allocation barriers pass |
 
-## Draft: frame limits, CRC, escape options (M02W3-E3-T3)
+## Finalized: frame limits, CRC, escape options (absorbed M02W3/M05W3/M06W1/M13W1; Phase 32)
 
-Draft for Phase 32 confirmation. Alters neither the COBS selection nor I-SR1–I-SR7 above; bounds below derive from the declared `max_frame_bytes` (I-SR2) and never split a sample (I-SR1).
+Finalized at M14W1. Alters neither the COBS selection nor I-SR1–I-SR7 above; bounds below derive from the declared `max_frame_bytes` (I-SR2) and never split a sample (I-SR1).
 
 ### Frame limits per MTU class
 

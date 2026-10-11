@@ -11,6 +11,7 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 drm-core = { path = "../crates/drm-core" }
+drm-router = { path = "../crates/drm-router" }
 drm-types = { path = "../crates/drm-types" }
 drm-workspace = { path = "../crates/drm-workspace" }
 

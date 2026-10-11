@@ -1,7 +1,8 @@
 //! Cross-OS conformance manifest (work-plan M12W4-E4-T1, extended M13W1/M13W2,
-//! full port M13W3-E1/E2/E3/E4; windows-backends.md §Test Matrix). Every Linux
-//! conformance suite row must run green on the Windows runner or carry an
-//! explicit port note (`WindowsState::Scheduled`) tracked on [`PORT_BOARD`].
+//! full port M13W3-E1/E2/E3/E4, full matrix M14W1-E4; windows-backends.md
+//! §Test Matrix). Every Linux conformance suite row must run green on the
+//! Windows runner or carry an explicit port note (`WindowsState::Scheduled`)
+//! tracked on [`PORT_BOARD`].
 //! `cargo xtask test --cross-os` executes every green row on the current host —
 //! Windows-only rows are `cfg`-gated and no-op elsewhere — so the same manifest
 //! defines the nightly Windows run and the local smoke, with no divergent lists.
@@ -359,38 +360,38 @@ pub const PORT_BOARD: &[PortGap] = &[
     PortGap {
         row: "serial-loopback",
         owner: "E3",
-        week: "M14W1",
-        risk: "COM/named-pipe fixture pending; serial gate M16W4",
+        week: "M14W2",
+        risk: "COM/named-pipe fixture pending; serial gate M16W4; M14W2 fix window",
     },
     PortGap {
         row: "golden-c",
         owner: "E4",
-        week: "M14W1",
-        risk: "clang-cl decoder pending; Phase 31 gate M14W2",
+        week: "M14W2",
+        risk: "clang-cl decoder pending; Phase 31 gate M14W2 fix window",
     },
     PortGap {
         row: "golden-cpp",
         owner: "E4",
-        week: "M14W1",
-        risk: "clang-cl decoder pending; Phase 31 gate M14W2",
+        week: "M14W2",
+        risk: "clang-cl decoder pending; Phase 31 gate M14W2 fix window",
     },
     PortGap {
         row: "golden-python",
         owner: "E4",
-        week: "M14W1",
-        risk: "Windows Python runtime pending; Phase 31 gate M14W2",
+        week: "M14W2",
+        risk: "Windows Python runtime pending; Phase 31 gate M14W2 fix window",
     },
     PortGap {
         row: "ffi-matrix",
         owner: "E4",
-        week: "M14W1",
-        risk: "FFI Windows cells pending; c-abi-surface Phase 30/32",
+        week: "M14W2",
+        risk: "FFI Windows cells pending; c-abi-surface Phase 30/32; M14W2 fix window",
     },
     PortGap {
         row: "borrow-disciplines",
         owner: "E4",
-        week: "M14W1",
-        risk: "Catch2 harness pending; Phase 31 gate M14W2",
+        week: "M14W2",
+        risk: "Catch2 harness pending; Phase 31 gate M14W2 fix window",
     },
 ];
 
@@ -516,8 +517,11 @@ pub fn run_full() -> Result<()> {
 // second host is available). Each cell is deployed under a
 // deployment-identity.md namespace derived from its endpoints; evidence
 // (bytes + timing) is archived per run under `target/interop/`. The Rust
-// language pair runs on every host via the simulation fallback; C and Python
-// cells are scheduled until their router-transport bindings land (Phase 32/33).
+// language pair runs on every host via the simulation fallback (serial as an
+// in-process host-loopback of the codec); C/C++/Python cells are scheduled
+// until their router-transport bindings land (Phase 32/33). The full matrix
+// marks the 24 same-language core cells gate-blocking and the mixed-language
+// remainder tracked (work-plan M14W1-E4-T1).
 // REQ: REQ-QAL-008, REQ-OPS-004, REQ-ROUTE-029, REQ-ROUTE-032.
 // ---------------------------------------------------------------------------
 
@@ -552,6 +556,8 @@ impl InteropOs {
 pub enum InteropLang {
     /// C binding (`bindings/c`).
     C,
+    /// C++ binding (`bindings/cpp`).
+    Cpp,
     /// Rust binding (`bindings/rust`).
     Rust,
     /// Python binding (`bindings/python`).
@@ -559,12 +565,17 @@ pub enum InteropLang {
 }
 
 impl InteropLang {
+    /// Every language in matrix order (work-plan M14W1 full matrix).
+    /// REQ: REQ-QAL-008.
+    pub const ALL: [Self; 4] = [Self::C, Self::Cpp, Self::Rust, Self::Python];
+
     /// Stable lowercase name used in cell ids and evidence.
     /// REQ: REQ-QAL-008.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Self::C => "c",
+            Self::Cpp => "cpp",
             Self::Rust => "rust",
             Self::Python => "python",
         }
@@ -579,11 +590,14 @@ pub enum InteropTransport {
     Udp,
     /// TCP length-framed records with ordered loss recovery (I-RT5).
     Tcp,
+    /// Serial COBS/CRC32C frames (I-SR1..I-SR6); the cross-OS cell is a host
+    /// loopback of the byte-exact codec (`serial-mcu.md` §Protocols interop).
+    Serial,
 }
 
 impl InteropTransport {
-    /// Both transports in matrix order.
-    pub const ALL: [Self; 2] = [Self::Udp, Self::Tcp];
+    /// Every transport in matrix order (work-plan M14W1 full matrix).
+    pub const ALL: [Self; 3] = [Self::Udp, Self::Tcp, Self::Serial];
 
     /// Stable lowercase name used in cell ids and the `--transport` flag.
     /// REQ: REQ-QAL-008.
@@ -592,6 +606,7 @@ impl InteropTransport {
         match self {
             Self::Udp => "udp",
             Self::Tcp => "tcp",
+            Self::Serial => "serial",
         }
     }
 
@@ -599,12 +614,13 @@ impl InteropTransport {
     /// REQ: REQ-QAL-008.
     ///
     /// # Errors
-    /// [`anyhow::Error`] for any value other than `udp` or `tcp`.
+    /// [`anyhow::Error`] for any value other than `udp`, `tcp`, or `serial`.
     pub fn parse(value: &str) -> Result<Self> {
         match value {
             "udp" => Ok(Self::Udp),
             "tcp" => Ok(Self::Tcp),
-            other => bail!("unknown interop transport `{other}` (expected udp or tcp)"),
+            "serial" => Ok(Self::Serial),
+            other => bail!("unknown interop transport `{other}` (expected udp, tcp, or serial)"),
         }
     }
 }
@@ -654,6 +670,31 @@ impl InteropCell {
     pub fn namespace(self) -> String {
         format!("drm.{}", self.id())
     }
+
+    /// Core vs tracked classification (work-plan M14W1-E4-T1): a **core** cell
+    /// is a same-language cross-OS pair — the 24 `{windows, linux} ×
+    /// {udp, tcp, serial} × {c, cpp, rust, python}` cells that are
+    /// gate-blocking for the M14W2 Phase 31 gate; a **tracked** cell is a
+    /// mixed-language pair, recorded but not gate-blocking.
+    /// REQ: REQ-QAL-008.
+    #[must_use]
+    pub fn class(self) -> CellClass {
+        if self.publisher.lang == self.consumer.lang {
+            CellClass::Core
+        } else {
+            CellClass::Tracked
+        }
+    }
+}
+
+/// Gate role of one interop cell (work-plan M14W1-E4-T1).
+/// REQ: REQ-QAL-008.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellClass {
+    /// Same-language cross-OS pair: gate-blocking for the Phase 31 gate.
+    Core,
+    /// Mixed-language pair: recorded and tracked, never gate-blocking.
+    Tracked,
 }
 
 /// Execution state of an interop cell.
@@ -673,22 +714,63 @@ pub const INTEROP_OS_DIRECTIONS: [(InteropOs, InteropOs); 2] = [
     (InteropOs::Linux, InteropOs::Windows),
 ];
 
-/// The three language pairs exercised per direction (Rust-first until the
-/// C/Python router-transport bindings land).
+/// The gate-blocking core language pairs (work-plan M14W1-E4-T1): one
+/// same-language pair per language, cross-OS. The rest of
+/// [`INTEROP_ALL_LANG_PAIRS`] are tracked.
 /// REQ: REQ-QAL-008.
-pub const INTEROP_LANG_PAIRS: [(InteropLang, InteropLang); 3] = [
+pub const INTEROP_CORE_LANG_PAIRS: [(InteropLang, InteropLang); 4] = [
+    (InteropLang::C, InteropLang::C),
+    (InteropLang::Cpp, InteropLang::Cpp),
     (InteropLang::Rust, InteropLang::Rust),
-    (InteropLang::Rust, InteropLang::C),
-    (InteropLang::Rust, InteropLang::Python),
+    (InteropLang::Python, InteropLang::Python),
 ];
 
-/// The full interop cell matrix: OS directions × language pairs × transports.
+/// Every language pair in matrix order (work-plan M14W1 full matrix): the 4
+/// core same-language pairs plus 12 tracked mixed-language pairs.
+/// REQ: REQ-QAL-008.
+pub const INTEROP_ALL_LANG_PAIRS: [(InteropLang, InteropLang); 16] = [
+    (InteropLang::C, InteropLang::C),
+    (InteropLang::C, InteropLang::Cpp),
+    (InteropLang::C, InteropLang::Rust),
+    (InteropLang::C, InteropLang::Python),
+    (InteropLang::Cpp, InteropLang::C),
+    (InteropLang::Cpp, InteropLang::Cpp),
+    (InteropLang::Cpp, InteropLang::Rust),
+    (InteropLang::Cpp, InteropLang::Python),
+    (InteropLang::Rust, InteropLang::C),
+    (InteropLang::Rust, InteropLang::Cpp),
+    (InteropLang::Rust, InteropLang::Rust),
+    (InteropLang::Rust, InteropLang::Python),
+    (InteropLang::Python, InteropLang::C),
+    (InteropLang::Python, InteropLang::Cpp),
+    (InteropLang::Python, InteropLang::Rust),
+    (InteropLang::Python, InteropLang::Python),
+];
+
+/// The full interop cell matrix: OS directions × every language pair ×
+/// transports. Core (same-language) cells are gate-blocking; mixed-language
+/// cells are tracked (work-plan M14W1-E4-T1).
 /// REQ: REQ-QAL-008.
 #[must_use]
 pub fn interop_matrix() -> Vec<InteropCell> {
+    build_matrix(&INTEROP_ALL_LANG_PAIRS)
+}
+
+/// The gate-blocking core matrix: OS directions × same-language pairs ×
+/// transports — the 24 cells `{windows, linux} × {udp, tcp, serial} ×
+/// {c, cpp, rust, python}` counted by work-plan M14W1.
+/// REQ: REQ-QAL-008.
+#[must_use]
+pub fn interop_core_matrix() -> Vec<InteropCell> {
+    build_matrix(&INTEROP_CORE_LANG_PAIRS)
+}
+
+/// Cross product of OS directions × language pairs × transports.
+/// REQ: REQ-QAL-008.
+fn build_matrix(pairs: &[(InteropLang, InteropLang)]) -> Vec<InteropCell> {
     let mut cells = Vec::new();
     for (pub_os, con_os) in INTEROP_OS_DIRECTIONS {
-        for (pub_lang, con_lang) in INTEROP_LANG_PAIRS {
+        for &(pub_lang, con_lang) in pairs {
             for transport in InteropTransport::ALL {
                 cells.push(InteropCell {
                     publisher: Endpoint {
@@ -708,9 +790,11 @@ pub fn interop_matrix() -> Vec<InteropCell> {
 }
 
 /// Host execution state of `cell`: the Rust pair runs everywhere via the
-/// documented two-netns simulation fallback; C and Python are scheduled until
-/// their transport bindings exist. The OS labels select each endpoint's
-/// deployment namespace, not a separate physical runner on the fallback path.
+/// documented two-netns simulation fallback; C/C++/Python are scheduled until
+/// their router-transport bindings exist. Serial is a host-loopback of the
+/// byte-exact codec, so a Rust serial cell runs in-process. The OS labels
+/// select each endpoint's deployment namespace, not a separate physical runner
+/// on the fallback path.
 /// REQ: REQ-QAL-008.
 #[must_use]
 pub fn cell_state(cell: InteropCell) -> CellState {
@@ -719,9 +803,14 @@ pub fn cell_state(cell: InteropCell) -> CellState {
     if rust_pair {
         CellState::Green
     } else {
-        CellState::Scheduled(
-            "C/Python router-transport bindings land Phase 32/33; loopback LAN or two-netns sim",
-        )
+        match cell.transport {
+            InteropTransport::Serial => CellState::Scheduled(
+                "C/C++/Python serial bindings land Phase 32; host-loopback only for Rust",
+            ),
+            InteropTransport::Udp | InteropTransport::Tcp => CellState::Scheduled(
+                "C/C++/Python router-transport bindings land Phase 32/33; loopback LAN or two-netns sim",
+            ),
+        }
     }
 }
 
@@ -758,12 +847,60 @@ pub fn run_cell(cell: InteropCell) -> Result<CellEvidence> {
     let bytes = match cell.transport {
         InteropTransport::Udp => udp_roundtrip(&payload)?,
         InteropTransport::Tcp => tcp_roundtrip(&payload)?,
+        InteropTransport::Serial => serial_roundtrip(&payload)?,
     };
     Ok(CellEvidence {
         cell,
         bytes,
         elapsed_ns: start.elapsed().as_nanos(),
     })
+}
+
+/// Serial host-loopback exchange (work-plan M14W1-E4-T1): encode one bounded
+/// frame with the `drm-router` COBS/CRC32C codec and decode it back
+/// byte-exact. This is the in-process stand-in for the cross-OS serial link;
+/// the decoded payload must match exactly (I-SR1/I-SR4/I-SR6).
+/// REQ: REQ-OPS-004, REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026.
+///
+/// # Errors
+/// [`anyhow::Error`] when the frame bound is invalid, encoding fails, decoding
+/// fails, or the decoded payload differs.
+fn serial_roundtrip(payload: &[u8]) -> Result<usize> {
+    use drm_router::transport::serial::{
+        SerialFrame, SerialLinkConfig, frame_decode, frame_encode,
+    };
+    use drm_router::wire::{HEADER_LEN, WireHeader};
+
+    let decoded_len = HEADER_LEN
+        .checked_add(payload.len())
+        .ok_or_else(|| anyhow::anyhow!("serial frame length overflow"))?;
+    let max_frame_bytes = u16::try_from(decoded_len)
+        .map_err(|_| anyhow::anyhow!("serial frame bound exceeds u16"))?;
+    let cfg = SerialLinkConfig::new(115_200, max_frame_bytes)
+        .map_err(|e| anyhow::anyhow!("serial config rejected: {e:?}"))?;
+    let header = WireHeader {
+        flags: 0,
+        wire_channel_id: 0x00C0_FFEE,
+        stream_epoch: 0,
+        source_seq: 1,
+        payload_len: u32::try_from(payload.len())
+            .map_err(|_| anyhow::anyhow!("serial payload exceeds u32"))?,
+    };
+    let frame = SerialFrame {
+        header,
+        e2e_crc: None,
+        payload,
+    };
+    let mut wire = vec![0_u8; cfg.max_wire_bytes()];
+    let wire_len = frame_encode(&cfg, &frame, &mut wire)
+        .map_err(|e| anyhow::anyhow!("serial encode failed: {e:?}"))?;
+    let mut decoded = vec![0_u8; cfg.max_coded_input_len()];
+    let out = frame_decode(&cfg, wire.get(..wire_len).unwrap_or(&wire), &mut decoded)
+        .map_err(|e| anyhow::anyhow!("serial decode failed: {e:?}"))?;
+    if out.payload != payload {
+        bail!("serial payload mismatch on host loopback");
+    }
+    Ok(out.payload.len())
 }
 
 /// UDP loopback exchange: one datagram out, echoed back, byte-exact.
@@ -855,10 +992,55 @@ fn write_evidence(evidence: &CellEvidence) -> Result<()> {
     Ok(())
 }
 
-/// `cargo xtask test --cross-os --transport <udp|tcp>`: executes every green
-/// interop cell for the transport (or both when `transport` is `None`),
-/// archives per-cell evidence, and reports the scheduled cells. Fails on the
-/// first failing cell.
+/// Archives the full cell table — every `{os} × {lang} × {transport}` cell with
+/// its gate class and host execution state — under
+/// `target/interop/matrix-report.txt` (work-plan M14W1-E4-T1 "report
+/// generated"). Core cells are the gate-blocking 24; the remainder is tracked.
+/// REQ: REQ-QAL-008.
+///
+/// # Errors
+/// [`anyhow::Error`] when the directory or report file cannot be written.
+fn write_matrix_report() -> Result<()> {
+    use std::fmt::Write as _;
+
+    let dir = Path::new("target").join("interop");
+    std::fs::create_dir_all(&dir)?;
+    let matrix = interop_matrix();
+    let core = interop_core_matrix();
+    let mut body = String::from("cell\tclass\tstate\n");
+    for cell in &matrix {
+        let state = match cell_state(*cell) {
+            CellState::Green => "green",
+            CellState::Scheduled(_) => "scheduled",
+        };
+        let class = match cell.class() {
+            CellClass::Core => "core",
+            CellClass::Tracked => "tracked",
+        };
+        let _ = writeln!(body, "{}\t{class}\t{state}", cell.id());
+    }
+    for lang in InteropLang::ALL {
+        let n = core
+            .iter()
+            .filter(|c| c.publisher.lang == lang && c.consumer.lang == lang)
+            .count();
+        let _ = writeln!(body, "core_lang_{}={n}", lang.name());
+    }
+    let _ = writeln!(
+        body,
+        "total={}\ncore={}\ntracked={}",
+        matrix.len(),
+        core.len(),
+        matrix.len() - core.len()
+    );
+    std::fs::write(dir.join("matrix-report.txt"), body)?;
+    Ok(())
+}
+
+/// `cargo xtask test --cross-os --transport <udp|tcp|serial>`: executes every
+/// green interop cell for the transport (or all when `transport` is `None`),
+/// archives per-cell evidence, writes the full cell table report, and reports
+/// the scheduled cells. Fails on the first failing cell.
 /// REQ: REQ-QAL-008, REQ-OPS-004.
 ///
 /// # Errors
@@ -885,18 +1067,21 @@ pub fn run_interop(transport: Option<InteropTransport>) -> Result<()> {
             }
         }
     }
-    let scope = transport.map_or("udp+tcp", InteropTransport::name);
+    write_matrix_report()?;
+    let scope = transport.map_or("udp+tcp+serial", InteropTransport::name);
     println!("interop matrix ({scope}): {green} green cell(s), {scheduled} scheduled");
     Ok(())
 }
 
 /// REQ: REQ-QAL-008 — the interop matrix covers every OS direction × language
-/// pair × transport, every cell is classified, and the Rust pair runs on the
-/// host (simulation fallback) while C/Python carry a schedule note.
+/// pair × transport, every cell is classified, the 24 same-language core cells
+/// are gate-blocking, and the Rust pair runs on the host (simulation fallback)
+/// while C/C++/Python carry a schedule note.
 #[cfg(test)]
 mod interop_tests {
     use super::{
-        CellState, INTEROP_LANG_PAIRS, INTEROP_OS_DIRECTIONS, InteropTransport, cell_state,
+        CellClass, CellState, INTEROP_ALL_LANG_PAIRS, INTEROP_CORE_LANG_PAIRS,
+        INTEROP_OS_DIRECTIONS, InteropLang, InteropTransport, cell_state, interop_core_matrix,
         interop_matrix, run_cell,
     };
 
@@ -904,11 +1089,12 @@ mod interop_tests {
     #[test]
     fn matrix_covers_every_combination() {
         let cells = interop_matrix();
-        let expected =
-            INTEROP_OS_DIRECTIONS.len() * INTEROP_LANG_PAIRS.len() * InteropTransport::ALL.len();
+        let expected = INTEROP_OS_DIRECTIONS.len()
+            * INTEROP_ALL_LANG_PAIRS.len()
+            * InteropTransport::ALL.len();
         assert_eq!(cells.len(), expected, "matrix size");
         for (pub_os, con_os) in INTEROP_OS_DIRECTIONS {
-            for (pub_lang, con_lang) in INTEROP_LANG_PAIRS {
+            for (pub_lang, con_lang) in INTEROP_ALL_LANG_PAIRS {
                 for transport in InteropTransport::ALL {
                     let found = cells.iter().filter(|c| {
                         c.publisher.os == pub_os
@@ -923,8 +1109,54 @@ mod interop_tests {
         }
     }
 
+    /// REQ: REQ-QAL-008 — the gate-blocking core matrix is exactly the 24
+    /// `{windows, linux} × {udp, tcp, serial} × {c, cpp, rust, python}`
+    /// same-language cells (work-plan M14W1-E4-T1).
+    #[test]
+    fn core_matrix_is_twenty_four_cells() {
+        let core = interop_core_matrix();
+        assert_eq!(core.len(), 24, "24 core cells");
+        for cell in &core {
+            assert_eq!(cell.class(), CellClass::Core, "core cell {}", cell.id());
+        }
+        // Every language is represented as both publisher and consumer.
+        for lang in InteropLang::ALL {
+            assert!(
+                core.iter()
+                    .any(|c| c.publisher.lang == lang && c.consumer.lang == lang),
+                "core matrix misses same-language pair {lang:?}"
+            );
+        }
+    }
+
+    /// REQ: REQ-QAL-008 — same-language pairs are core (gate-blocking);
+    /// mixed-language pairs are tracked.
+    #[test]
+    fn mixed_language_pairs_are_tracked() {
+        for cell in interop_matrix() {
+            let same = cell.publisher.lang == cell.consumer.lang;
+            let expected = if same {
+                CellClass::Core
+            } else {
+                CellClass::Tracked
+            };
+            assert_eq!(cell.class(), expected, "class of {}", cell.id());
+        }
+        let tracked = interop_matrix()
+            .iter()
+            .filter(|c| c.class() == CellClass::Tracked)
+            .count();
+        assert_eq!(
+            tracked,
+            INTEROP_OS_DIRECTIONS.len()
+                * (INTEROP_ALL_LANG_PAIRS.len() - INTEROP_CORE_LANG_PAIRS.len())
+                * InteropTransport::ALL.len(),
+            "tracked cell count"
+        );
+    }
+
     /// REQ: REQ-QAL-008 — every cell is classified; scheduled cells carry a
-    /// note. The Rust pair is green, C/Python scheduled.
+    /// note. The Rust pair is green, C/C++/Python scheduled.
     #[test]
     fn every_cell_is_classified() {
         for cell in interop_matrix() {
@@ -938,9 +1170,9 @@ mod interop_tests {
         }
     }
 
-    /// REQ: REQ-OPS-004, REQ-ROUTE-029, REQ-ROUTE-032 — a green Rust cell
-    /// executes a real loopback exchange for both transports and reports the
-    /// payload byte count.
+    /// REQ: REQ-OPS-004, REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026 — a green
+    /// Rust cell executes a real exchange for every transport (UDP/TCP
+    /// loopback, serial host-loopback codec) and reports the payload byte count.
     #[test]
     fn green_cells_round_trip() {
         for cell in interop_matrix() {
@@ -950,6 +1182,24 @@ mod interop_tests {
                 assert!(evidence.bytes > 0, "cell {} carried bytes", cell.id());
                 assert!(!cell.namespace().is_empty());
             }
+        }
+    }
+
+    /// REQ: REQ-OPS-004 — the serial host-loopback covers every Rust serial
+    /// cell in both directions (I-SR1/I-SR4/I-SR6).
+    #[test]
+    fn serial_cells_use_host_loopback() {
+        let serial: Vec<_> = interop_matrix()
+            .into_iter()
+            .filter(|c| {
+                c.transport == InteropTransport::Serial && cell_state(*c) == CellState::Green
+            })
+            .collect();
+        assert_eq!(serial.len(), 2, "both OS directions");
+        for cell in serial {
+            let evidence =
+                run_cell(cell).unwrap_or_else(|e| unreachable!("serial {}: {e}", cell.id()));
+            assert!(evidence.bytes > 0);
         }
     }
 }
