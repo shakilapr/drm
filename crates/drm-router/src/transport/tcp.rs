@@ -415,4 +415,24 @@ mod tests {
         };
         assert_eq!(t.send_frame(&header, &[0_u8; 100]), Err(Status::InvalidArg));
     }
+
+    /// REQ: REQ-ROUTE-029 — socket-error mapping is platform-neutral: the
+    /// canonical `Status` classes are identical on Windows and Linux (E3
+    /// Windows transport smoke).
+    #[test]
+    fn tcp_error_mapping_parity() {
+        use std::io::ErrorKind;
+        let cases = [
+            (ErrorKind::WouldBlock, Status::Retry),
+            (ErrorKind::TimedOut, Status::Retry),
+            (ErrorKind::PermissionDenied, Status::Permission),
+            (ErrorKind::AddrInUse, Status::InvalidConfig),
+            (ErrorKind::AddrNotAvailable, Status::InvalidConfig),
+            (ErrorKind::BrokenPipe, Status::InvalidArg),
+        ];
+        for (kind, want) in cases {
+            let e = io::Error::new(kind, "t");
+            assert_eq!(super::map_io(&e), want, "{kind:?}");
+        }
+    }
 }

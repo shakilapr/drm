@@ -248,7 +248,8 @@ Extension commands are registered in `xtask/README.md` and covered by ADR 0003: 
 | Workflow | Trigger | Contents |
 |---|---|---|
 | `ci.yml` | every PR / push | Matrix: Linux x86_64 + aarch64, Windows x86_64. `xtask lint`, `xtask test`, conformance, `check-layering`, semver-checks, frontend lint/build |
-| `sanitizers.yml` | PR (core paths) + nightly | ASan/TSan full matrix; Miri where applicable |
+| `sanitizers.yml` | PR (core paths) + nightly | ASan/TSan full matrix; Miri where applicable; scheduled Windows MSVC ASan |
+| `windows-nightly.yml` | nightly | Windows platform subset: SHM/identity/`LockFileEx` locks + socket transports |
 | `audit.yml` | nightly + release | cargo-deny, advisories, `audit-zero-alloc`, `audit-traceability`, `gen-check`, docs/examples execution, benchmark regression report |
 | `release.yml` | tag `v*` | crates.io publish, Python wheels (maturin), Studio artifacts, SBOM, ABI compatibility check vs previous release |
 

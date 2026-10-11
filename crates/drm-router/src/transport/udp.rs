@@ -274,6 +274,25 @@ mod tests {
         assert_eq!(tx.send_frame(&over, &[0_u8; 1401]), Err(Status::InvalidArg));
     }
 
+    /// REQ: REQ-ROUTE-032 — socket-error mapping is platform-neutral: the
+    /// canonical `Status` classes are identical on Windows and Linux (E3
+    /// Windows transport smoke).
+    #[test]
+    fn udp_error_mapping_parity() {
+        use std::io::{Error, ErrorKind};
+        let cases = [
+            (ErrorKind::WouldBlock, Status::Retry),
+            (ErrorKind::TimedOut, Status::Retry),
+            (ErrorKind::PermissionDenied, Status::Permission),
+            (ErrorKind::AddrInUse, Status::InvalidConfig),
+            (ErrorKind::AddrNotAvailable, Status::InvalidConfig),
+            (ErrorKind::ConnectionRefused, Status::InvalidArg),
+        ];
+        for (kind, want) in cases {
+            assert_eq!(super::map_io(&Error::new(kind, "t")), want, "{kind:?}");
+        }
+    }
+
     /// REQ: REQ-ROUTE-032 — a bounded receive queue drops the newest arrivals
     /// under burst (counted), and the receive path never blocks.
     #[test]

@@ -52,3 +52,25 @@ jobs:
         run: |
           cargo +nightly miri test -p drm-core --test canon_le_assert
           cargo +nightly miri test -p drm-workspace --lib
+
+  windows-asan:
+    # Windows ASan triage (work-plan M12W2-E1-T2): nightly `-Zsanitizer=address`
+    # over the Windows SHM/identity/locks suites. Scheduled only; a finding is a
+    # triage item (carry-over allowed to M12W3 Day 1 per the week's risk
+    # register). REQ: REQ-CORE-075, REQ-CORE-078.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - name: ASan over drm-core Windows suite
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+          RUSTFLAGS: "-Zsanitizer=address"
+          ASAN_OPTIONS: "abort_on_error=1"
+        run: >
+          cargo +nightly test -Zbuild-std
+          --target x86_64-pc-windows-msvc
+          -p drm-core --lib win_

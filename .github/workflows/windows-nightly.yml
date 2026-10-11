@@ -1,0 +1,25 @@
+# Nightly Windows platform subset (work-plan M12W2-E4-T2): SHM sections,
+# process identity, `LockFileEx` locks, and the socket transports run nightly on
+# a Windows host so platform facts (release-on-death lag, handler limits) surface
+# ahead of the weekly gates. Results feed docs/metrics/metrics-m12.md.
+# REQ: REQ-CORE-074, REQ-CORE-075, REQ-CORE-076, REQ-CORE-077, REQ-CORE-078,
+# REQ-ROUTE-029, REQ-ROUTE-032.
+name: windows-nightly
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  windows-platform:
+    runs-on: windows-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable # honors rust-toolchain.toml
+      - name: windows shm + locks + identity
+        run: cargo test -p drm-core --lib win_ -- --nocapture
+      - name: windows transport subset (UDP/TCP loopback + error mapping)
+        run: cargo test -p drm-router --lib transport -- --nocapture

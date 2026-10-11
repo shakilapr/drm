@@ -51,3 +51,48 @@ Notes:
   therefore compiles and runs on both hosts.
 - `windows-backends.md` was already merged before this week (E1-T0 acceptance);
   no divergence was recorded, so no algorithm-doc change landed.
+
+## M12W2 — Phase 26 Gate (Verify Engine), Windows SHM + Locks
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 26)` | PASS | PASS — [phase-26.md](../gates/phase-26.md); all eleven #26 rejection classes ⇄ executable fixtures, `I-V1`..`I-V6` supporting |
+| `WIN_IDENTITY_LOCKS` | identity + locks suites green on Windows (`I-W3`, `I-W5`) | `cargo test -p drm-core --lib win_` — `win_lock_release_on_death` (`I-W3`), `win_pid_reuse` (`I-W5`), `win_active_hold_lifecycle` (`I-W8`), `win_create_failure_matrix` (`I-W7`), `win_close_last_handle` (`I-W4b`), plus the M12W1 smoke tests |
+| `WIN_SOCKETS` | UDP/TCP pair green on Windows | `cargo test -p drm-router --lib transport` — loopback pair + `udp_error_mapping_parity`/`tcp_error_mapping_parity` |
+| `WIN_ASAN` | ASan (clang-cl) over Windows suites, 0 findings | scheduled nightly job (`.github/workflows/sanitizers.yml` `windows-asan`) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Phase 26 gate doc [phase-26.md](../gates/phase-26.md): the complete #26
+  negative matrix — no publisher (`V-SW-1`), multiple publishers (`V-SW-2`),
+  invalid schemas (`V-SCH`), conflicting IDs (`V-ID`), invalid placement
+  (`V-PLC`), impossible route / framing overflow (`V-RT`), reliability mismatch
+  (`V-REL`), incompatible consumer requirements (`V-CMP`), memory-budget and
+  precommit-budget violations (`V-MEM`) — each rejected with check ID + REQ
+  citation; valid equivalents pass.
+- Windows identity + locks suite (`crates/drm-core/src/shm/windows.rs`): release
+  on death (`I-W3`, kill-then-reacquire), incarnation/PID-reuse guard (`I-W5`),
+  active-hold lifecycle (`I-W8`), create-conflict rollback (`I-W7`), and
+  last-handle section teardown (`I-W4b`). `test_guard` is now compiled on every
+  test host (plain mutex), so the spawn/lock tests serialize on Windows too.
+- Windows transports smoke: socket error-mapping parity fixtures in
+  `drm-router::transport::{udp,tcp}` (platform-neutral) alongside the existing
+  loopback pair tests.
+- CI: the `windows-smoke` job also runs the router transport subset; new
+  `windows-nightly.yml` schedules the platform subset (SHM/identity/locks/
+  sockets) nightly; `sanitizers.yml` gains a scheduled `windows-asan` job.
+
+Notes:
+
+- Windows-only suites cannot run on the Linux authoring host; they are
+  cross-compiled (`cargo clippy -p drm-core -p drm-router --target
+  x86_64-pc-windows-msvc --tests -D warnings`) and gated by the `windows-latest`
+  CI jobs.
+- `WIN_ASAN` uses nightly `-Zsanitizer=address` on MSVC; if the toolchain proves
+  unavailable the triage carries over to M12W3 Day 1 (E1), as the week's risk
+  register allows.
+- No architecture divergence: the engine and Windows backend already match
+  [verify-engine.md](../algorithms/toolchain/verify-engine.md) and
+  [windows-backends.md](../algorithms/runtime/windows-backends.md), so no ADR or
+  algorithm-doc change landed.

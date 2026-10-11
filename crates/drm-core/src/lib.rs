@@ -10,5 +10,5 @@ pub mod hazard;
 pub mod ring;
 pub mod shm;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) mod test_guard;

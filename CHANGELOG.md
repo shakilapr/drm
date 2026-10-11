@@ -11,6 +11,16 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M12 W2 tranche: Phase 26 gate ([docs/gates/phase-26.md](docs/gates/phase-26.md),
+  the eleven work-plan #26 rejection classes ⇄ executable verify-engine fixtures
+  with `I-V1`..`I-V6` supporting evidence) and the Windows identity + locks
+  continuation ([windows-backends.md](docs/algorithms/runtime/windows-backends.md))
+  — `drm-core::shm::windows` release-on-death (`I-W3`), incarnation/PID-reuse
+  (`I-W5`), active-hold lifecycle (`I-W8`), create-conflict rollback (`I-W7`),
+  and last-handle teardown (`I-W4b`) tests; platform-neutral socket error-mapping
+  parity fixtures in `drm-router::transport::{udp,tcp}`; `test_guard` compiled on
+  every test host; extended `windows-smoke` CI, a scheduled `windows-nightly.yml`
+  platform subset, and a scheduled MSVC `windows-asan` job in `sanitizers.yml`.
 - Week M12 W1 tranche: Phase 30 gate ([docs/gates/phase-30.md](docs/gates/phase-30.md),
   the four work-plan #30 criteria ⇄ executable lane/shaping/reliability tests) and the
   Windows runtime backend start ([windows-backends.md](docs/algorithms/runtime/windows-backends.md))

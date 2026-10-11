@@ -405,6 +405,10 @@ pub fn identity_alive(pid: i32, start_ticks: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
     use super::{WinLockBackend, WinShm, current_identity, identity_alive, is_alive};
     use crate::shm::{
         LockBackend, LockPaths, SegmentName, ShmBackend, ShmError, windows_section_name,
@@ -504,5 +508,213 @@ mod tests {
         assert!(identity_alive(me.pid, me.start_ticks));
         assert!(!identity_alive(me.pid, me.start_ticks.wrapping_add(1)));
         assert!(!is_alive(0));
+    }
+
+    /// Unique per-test lock directory (temp dir + process id + tag).
+    fn lock_dir(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("drm-win-{tag}-{}", std::process::id()))
+    }
+
+    /// Spins (sleeping) until `path` exists or a bounded deadline elapses.
+    fn wait_for(path: &Path, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !path.exists() {
+            assert!(Instant::now() < deadline, "timed out waiting: {what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// REQ: REQ-CORE-078 — I-W7: a conflicting create closes its own handle and
+    /// leaves the winner mapping intact.
+    #[test]
+    fn win_create_failure_matrix() {
+        let shm = WinShm;
+        let n = name("create-matrix");
+        let m = ok(shm.create_exclusive(&n, 64), "create");
+        assert!(matches!(
+            shm.create_exclusive(&n, 64),
+            Err(ShmError::AlreadyExists)
+        ));
+        let m2 = ok(shm.open_existing(&n, 64), "winner intact");
+        shm.unmap(m2);
+        shm.unmap(m);
+    }
+
+    /// REQ: REQ-CORE-078, REQ-CORE-098 — I-W4b: a pagefile-backed section dies
+    /// with its last mapping, so a restart recreates fresh (there is no unlink).
+    #[test]
+    fn win_close_last_handle() {
+        let shm = WinShm;
+        let n = name("close-last");
+        let m = ok(shm.create_exclusive(&n, 64), "create");
+        let m2 = ok(shm.open_existing(&n, 64), "reopen");
+        shm.unmap(m2);
+        assert!(
+            shm.open_existing(&n, 64).is_ok(),
+            "one mapping keeps the section alive"
+        );
+        shm.unmap(m);
+        assert!(
+            matches!(shm.open_existing(&n, 64), Err(ShmError::NotFound)),
+            "last handle closed ⇒ section gone"
+        );
+    }
+
+    /// REQ: REQ-CORE-075 — I-W8: every running node holds one shared active
+    /// lock; the `drm clean` exclusive probe is refused while any shared hold is
+    /// live and succeeds once all shared holds release.
+    #[test]
+    fn win_active_hold_lifecycle() {
+        let _serial = crate::test_guard::acquire();
+        let locks = WinLockBackend;
+        let dir = lock_dir("active-hold");
+        ok(std::fs::create_dir_all(&dir), "dir");
+        let active = LockPaths::new(&dir).active();
+        let node_a = ok(locks.try_shared(&active), "node a shared");
+        let node_b = ok(locks.try_shared(&active), "node b shared");
+        assert!(matches!(
+            locks.try_exclusive(&active),
+            Err(ShmError::AlreadyExists)
+        ));
+        locks.release(node_b);
+        assert!(matches!(
+            locks.try_exclusive(&active),
+            Err(ShmError::AlreadyExists)
+        ));
+        locks.release(node_a);
+        let clean = ok(locks.try_exclusive(&active), "clean exclusive");
+        locks.release(clean);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// REQ: REQ-CORE-075 — I-W3: a `LockFileEx` range held by a test child is
+    /// released by the kernel when the child is killed, so the next acquirer
+    /// succeeds (no stale authority survives death).
+    #[test]
+    fn win_lock_release_on_death() {
+        let _serial = crate::test_guard::acquire();
+        let locks = WinLockBackend;
+        let dir = lock_dir("kill");
+        ok(std::fs::create_dir_all(&dir), "lock dir");
+        let lock_path = LockPaths::new(&dir).active();
+        let ready = dir.join("ready");
+        let exe = ok(std::env::current_exe(), "current_exe");
+        let mut child = ok(
+            Command::new(exe)
+                .args([
+                    "--exact",
+                    "shm::windows::tests::win_lock_holder_child",
+                    "--nocapture",
+                ])
+                .env("DRM_TEST_LOCK_PATH", &lock_path)
+                .env("DRM_TEST_LOCK_READY", &ready)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn(),
+            "spawn holder",
+        );
+        wait_for(&ready, "holder acquired");
+        assert!(
+            matches!(
+                locks.try_exclusive(&lock_path),
+                Err(ShmError::AlreadyExists)
+            ),
+            "live holder keeps the range"
+        );
+        ok(child.kill(), "kill holder");
+        ok(child.wait(), "reap holder");
+        // The OS may release the range with a short lag; poll, never force.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match locks.try_exclusive(&lock_path) {
+                Ok(hold) => {
+                    locks.release(hold);
+                    break;
+                }
+                Err(ShmError::AlreadyExists) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => unreachable!("post-death acquire: {e:?}"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Child driver for `win_lock_release_on_death`: acquire the lock named by
+    /// `DRM_TEST_LOCK_PATH`, signal `DRM_TEST_LOCK_READY`, then block until
+    /// killed. A normal suite run (no env) returns immediately.
+    /// REQ: REQ-CORE-075.
+    #[test]
+    fn win_lock_holder_child() {
+        let (Ok(path), Ok(ready)) = (
+            std::env::var("DRM_TEST_LOCK_PATH"),
+            std::env::var("DRM_TEST_LOCK_READY"),
+        ) else {
+            return;
+        };
+        let hold = ok(
+            WinLockBackend.try_exclusive(Path::new(&path)),
+            "child exclusive",
+        );
+        // Leak the handle: the child holds the range until the kernel kills it.
+        std::mem::forget(hold);
+        let _ = std::fs::write(ready, b"ready");
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    }
+
+    /// REQ: REQ-CORE-074 — I-W5: incarnation-safe diagnostic identity. A
+    /// recorded child identity is dead once the child exits (a reused PID also
+    /// mismatches its creation time); a perturbed creation time on a live PID is
+    /// a different incarnation.
+    #[test]
+    fn win_pid_reuse() {
+        let _serial = crate::test_guard::acquire();
+        let dir = lock_dir("reuse");
+        ok(std::fs::create_dir_all(&dir), "dir");
+        let out = dir.join("id");
+        let exe = ok(std::env::current_exe(), "current_exe");
+        let mut child = ok(
+            Command::new(exe)
+                .args([
+                    "--exact",
+                    "shm::windows::tests::win_identity_child",
+                    "--nocapture",
+                ])
+                .env("DRM_TEST_IDENTITY_OUT", &out)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn(),
+            "spawn identity child",
+        );
+        ok(child.wait(), "reap identity child");
+        let text = ok(std::fs::read_to_string(&out), "identity file");
+        let mut parts = text.split_ascii_whitespace();
+        let pid = parts
+            .next()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or_else(|| unreachable!("child pid in `{text}`"));
+        let start = parts
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or_else(|| unreachable!("child start in `{text}`"));
+        assert!(!identity_alive(pid, start), "exited incarnation is dead");
+        let me = current_identity();
+        assert!(identity_alive(me.pid, me.start_ticks));
+        assert!(!identity_alive(me.pid, me.start_ticks.wrapping_add(1)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Child driver for `win_pid_reuse`: write `pid start_ticks` to
+    /// `DRM_TEST_IDENTITY_OUT`, then exit. A normal suite run (no env) returns.
+    /// REQ: REQ-CORE-074.
+    #[test]
+    fn win_identity_child() {
+        let Ok(out) = std::env::var("DRM_TEST_IDENTITY_OUT") else {
+            return;
+        };
+        let me = current_identity();
+        let _ = std::fs::write(out, format!("{} {}", me.pid, me.start_ticks));
     }
 }
