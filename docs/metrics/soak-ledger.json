@@ -1,0 +1,12 @@
+{
+  "runs": [
+    {
+      "topology": "single_machine",
+      "hours": 0,
+      "iterations": 1,
+      "anomalies": 0,
+      "clean": true,
+      "finished_unix_s": 1791726008
+    }
+  ]
+}

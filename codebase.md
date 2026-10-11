@@ -95,7 +95,7 @@ drm/
 │   ├── fixtures/                   # manifests, .drm schemas, golden/ byte vectors
 │   ├── fuzz/                       # cargo-fuzz targets: schema, framing, hazard protocol
 │   ├── stress/                     # chaos: kill -9 races, PID reuse, pool exhaustion
-│   └── soak/                       # long-duration stability
+│   └── soak/                       # long-duration stability (rotation + ledger)
 │
 ├── docs/
 │   ├── README.md                   # documentation index
@@ -213,7 +213,7 @@ Artifact rules:
 | Sanitizer | core crates | ASan/TSan/Miri | memory and races; Miri on lock-free modules (OS SHM excluded) | PR (core) + nightly |
 | Conformance | `tests/conformance` | matrix harness (`xtask test --cross-os`) | 4-language ABI + interop; cross-OS subset (green or scheduled) | every PR |
 | Stress/chaos | `tests/stress` | harness | kill -9 at every borrow stage, PID reuse, pool exhaustion | nightly |
-| Soak | `tests/soak` | harness | long-duration zero corruption/deadlock | weekly + W8 gate |
+| Soak | `tests/soak` | harness (`xtask soak`) | long-duration zero corruption/deadlock; daily 24 h rotating topologies, three-consecutive-clean gate | daily + W8 gate |
 | Golden vectors | `tests/fixtures/golden/` | all bindings | byte-identical layouts C/C++/Rust/Python | every PR |
 | Examples | `examples/` | CI jobs | sample workspace builds and runs headless | every PR |
 
@@ -240,7 +240,7 @@ Artifact rules:
 | `xtask audit-traceability` | REQ citation coverage (§3.1 R2) |
 | `xtask docs` | build docs + execute examples headless |
 
-Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak`, `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
+Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak` (`--duration <h>` | `--iterations <n>`, `--topology`, `--ledger`, `--dashboard`), `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
 
 `xtask` is the single automation entry point — cross-platform by construction (Windows is a first-class platform, Phase 31), no external runner binaries required.
 
@@ -250,6 +250,7 @@ Extension commands are registered in `xtask/README.md` and covered by ADR 0003: 
 | `ci.yml` | every PR / push | Matrix: Linux x86_64 + aarch64, Windows x86_64. `xtask lint`, `xtask test`, conformance, `check-layering`, semver-checks, frontend lint/build |
 | `sanitizers.yml` | PR (core paths) + nightly | ASan/TSan full matrix; Miri where applicable; scheduled Windows MSVC ASan |
 | `windows-nightly.yml` | nightly | Windows conformance manifest (`cargo xtask test --cross-os`, green ×3; `--full` run ×2, run 2 green): SHM/identity/`LockFileEx` locks, publisher/consumer lifecycle parity (in-place `Init` reinit, restart epochs), publisher crash matrix (kill/restart ×50), reader-kill reclamation, link-cut isolation, bounded serial codec, socket transports, router framing/lanes/shaping, serial route integration, toolchain verify/budget/determinism, bindings golden/FFI rows (scheduled on `PORT_BOARD`), full cross-OS interop matrix (`--transport udp`/`tcp`/`serial`; 24 gate-blocking same-language core cells, mixed-language remainder tracked) |
+| `soak-nightly.yml` | daily | 24 h soak over rotating topologies (`cargo xtask soak --duration 24`); records the run in the I-QAL2 ledger and uploads the dashboard artifact; a non-clean run opens a triage issue |
 | `audit.yml` | nightly + release | cargo-deny, advisories, `audit-zero-alloc`, `audit-traceability`, `gen-check`, docs/examples execution, benchmark regression report |
 | `release.yml` | tag `v*` | crates.io publish, Python wheels (maturin), Studio artifacts, SBOM, ABI compatibility check vs previous release |
 

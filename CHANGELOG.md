@@ -11,6 +11,19 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M18 W4 tranche: hardening close, soak escalation, month-18 review. The
+  soak harness escalates to daily 24 h runs over rotating topologies
+  (`single-machine` → `two-machine-sim` → `physical-pair`) with an I-QAL2
+  evidence ledger (`docs/metrics/soak-ledger.json`), a per-run anomaly
+  dashboard, and the three-consecutive-clean gate rule
+  (`xtask/src/soak.rs`, [soak-ledger.md](docs/spec/soak-ledger.md);
+  `REQ-QAL-013`, `REQ-QAL-014`); `.github/workflows/soak-nightly.yml` schedules
+  the daily run. The hardening gate closes with every fuzz/chaos/benchmark/
+  matrix/sanitizer suite green (`HARDENING_GATE = PASS`, `SOAK_DAILY =
+  scheduled`), and the month-18 review commits M19–M22 to the spatial wave
+  ([month-18.md](docs/gates/month-18.md), [m18w4.md](docs/gates/m18w4.md),
+  [m18w3.md](docs/gates/m18w3.md)); [metrics-m18.md](docs/metrics/metrics-m18.md)
+  records the M18W3/M18W4 variables.
 - Week M18 W2 tranche: hardening — benchmark baseline + Studio Graph/Run
   panels. The benchmark harness lands with a fixed pinned-CPU methodology
   (`crates/drm-core/benches/{latency,throughput}.rs`,

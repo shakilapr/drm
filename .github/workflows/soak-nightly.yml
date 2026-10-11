@@ -1,0 +1,49 @@
+# Daily soak (work-plan M18W4-E1-T1; qualification.md I-QAL2,
+# REQ-QAL-005/REQ-QAL-013/REQ-QAL-014). Runs the escalation harness
+# (`cargo xtask soak`) over rotating topologies: the harness picks the next
+# topology from the committed ledger, so consecutive daily runs cover
+# single-machine, two-machine simulation, then physical-pair. A non-clean run is
+# recorded in the ledger and fails the job (triage-first); the
+# three-consecutive-clean rule gates the hardening gate. Ledger format:
+# docs/spec/soak-ledger.md.
+#
+# The full 24 h budget runs on the dedicated soak lane (self-hosted label
+# `soak`). A dispatch-only hosted smoke keeps the harness itself exercised
+# without the 24 h budget.
+name: soak-nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  soak:
+    # SOAK_DAILY: 24 h regression run, next topology in rotation.
+    runs-on: [self-hosted, soak]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 24 h soak (rotating topology)
+        run: cargo xtask soak --duration 24
+      - name: dashboard
+        if: always()
+        run: cargo xtask soak --dashboard
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soak-ledger
+          path: docs/metrics/soak-ledger.json
+
+  smoke:
+    # Dispatch-only short verification of the harness on a hosted runner.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: soak smoke (one iteration)
+        run: cargo xtask soak --iterations 1 --ledger target/soak-ledger.json
+      - name: dashboard
+        if: always()
+        run: cargo xtask soak --dashboard --ledger target/soak-ledger.json

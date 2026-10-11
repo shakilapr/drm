@@ -9,11 +9,11 @@ mod cross_os;
 mod gencheck;
 mod golden;
 mod layering;
+mod soak;
 mod studio_ts;
 mod workplan;
 
 use std::process::Command;
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -33,7 +33,7 @@ fn main() -> std::process::ExitCode {
 fn run(args: &[String]) -> Result<()> {
     let Some(cmd) = args.first() else {
         bail!(
-            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability | soak --duration <h> | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
+            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability | soak (--duration <h>|--iterations <n>) [--topology <t>] [--ledger <path>] [--dashboard] | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
         );
     };
     let flags = &args[1..];
@@ -43,7 +43,7 @@ fn run(args: &[String]) -> Result<()> {
         "test" => test(flags),
         "check-layering" => layering::check(flags),
         "audit-traceability" => audit_traceability(flags),
-        "soak" => soak(flags),
+        "soak" => soak::run(flags),
         "golden-gen" => golden::generate(flags),
         "gen-check" => gencheck::run(flags),
         "workplan" => workplan::run(flags),
@@ -153,58 +153,6 @@ fn test(flags: &[String]) -> Result<()> {
         ),
     }
     Ok(())
-}
-
-/// REQ: REQ-QAL-005 — `xtask soak --duration <h>`: long-duration stability
-/// skeleton. Repeats the workspace suite (`cargo test --workspace`) for the
-/// requested wall-clock budget; every iteration must finish clean — any
-/// failure aborts the soak with that iteration's error (triage-first,
-/// qualification.md I-QAL2). Placeholder scope (work-plan M02W4-E4-T2):
-/// existing suites only; rotating topologies, continuous aging, and the
-/// accelerated boundary suite land with the runtime phases they gate.
-///
-/// # Errors
-/// Non-integer or zero duration, unknown flags, or any failing suite
-/// iteration.
-fn soak(flags: &[String]) -> Result<()> {
-    match flags
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
-        ["--duration", h] => {
-            let hours = soak_hours(h)?;
-            let budget = Duration::from_secs(hours * 3600);
-            let start = Instant::now();
-            let mut iterations = 0_u64;
-            loop {
-                spawn("cargo", &["test", "--workspace"]).context("xtask soak: suite run")?;
-                iterations += 1;
-                if start.elapsed() >= budget {
-                    break;
-                }
-            }
-            eprintln!("xtask soak: {iterations} clean iteration(s) within the {hours} h budget");
-            Ok(())
-        }
-        other => bail!("soak flags: {other:?} (expected --duration <hours>)"),
-    }
-}
-
-/// Parses the soak duration in whole hours.
-/// REQ: REQ-QAL-005.
-///
-/// # Errors
-/// [`anyhow::Error`] when the value is not an integer hour or is zero.
-fn soak_hours(raw: &str) -> Result<u64> {
-    let hours: u64 = raw
-        .parse()
-        .map_err(|_| anyhow!("soak duration `{raw}` is not an integer hour"))?;
-    if hours == 0 {
-        bail!("soak duration must be at least 1 hour");
-    }
-    Ok(hours)
 }
 
 /// REQ: REQ-QAL-003 — `xtask audit-traceability --registry`: registry.csv structural
@@ -401,28 +349,6 @@ mod citation_tests {
         assert_eq!(offenders.len(), 1, "uncited file must be listed");
         assert!(offenders[0].ends_with("uncited.rs"));
         std::fs::remove_dir_all(&dir).unwrap_or_else(|e| unreachable!("cleanup: {e}"));
-    }
-}
-
-/// REQ: REQ-QAL-005 — soak duration parsing: integer hours only, zero is
-/// rejected, non-numeric input is a structured error.
-#[cfg(test)]
-mod soak_tests {
-    use super::soak_hours;
-
-    #[test]
-    fn duration_parsing() {
-        assert_eq!(
-            soak_hours("1").unwrap_or_else(|e| unreachable!("1 h: {e}")),
-            1
-        );
-        assert_eq!(
-            soak_hours("24").unwrap_or_else(|e| unreachable!("24 h: {e}")),
-            24
-        );
-        for bad in ["0", "1.5", "h", "", "-1"] {
-            assert!(soak_hours(bad).is_err(), "bad duration: {bad}");
-        }
     }
 }
 

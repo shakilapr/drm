@@ -21,7 +21,7 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 | Command | Purpose |
 |---|---|
 | `xtask golden-gen` | regenerate `tests/fixtures/golden/` byte vectors (idempotent) |
-| `xtask soak` | long-duration stability suite (`tests/soak`) |
+| `xtask soak` | long-duration stability suite (`tests/soak`); `--duration <h>` or `--iterations <n>`, `--topology <single-machine\|two-machine-sim\|physical-pair>`, `--ledger <path>`, `--dashboard`. Rotating topologies, I-QAL2 evidence ledger, three-consecutive-clean gate (`xtask/src/soak.rs`, [soak-ledger.md](../docs/spec/soak-ledger.md)) |
 | `xtask test --stress` | chaos/stress suites (`tests/stress`) |
 | `xtask test --two-host` | two-host router/transport matrix |
 | `xtask test --cross-os` | cross-OS conformance manifest (`xtask/src/cross_os.rs` `SUBSET`); every Linux suite row green on Windows or scheduled with a port board entry (owner + gate-risk) |

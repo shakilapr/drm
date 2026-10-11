@@ -110,3 +110,84 @@ cargo xtask test
 cargo xtask check-layering
 cargo xtask audit-traceability
 ```
+
+## M18W3 — Hardening: Full Matrix + Sanitizer Matrix + Burn-Down
+
+| Variable | Target | Measured |
+|---|---|---|
+| `MATRIX_FULL_GREEN` | all supported cells green ×1 (I-QAL4 groundwork) | recorded — conformance harness `cargo xtask test --cross-os` (`xtask/src/cross_os.rs` `SUBSET`; green rows + `PORT_BOARD` scheduled rows); Windows manifest [windows-nightly.yml](../../.github/workflows/windows-nightly.yml) |
+| `SANITIZER_FULL` | ASan/TSan/Miri matrix green | recorded — [sanitizers.yml](../../.github/workflows/sanitizers.yml): ASan over the workspace (Linux), Miri on pure-safe targets (`canon_le_assert`, `drm-workspace --lib`), Windows ASan nightly |
+| `P0P1_COUNT` | P0 = 0; P1 ≤ documented open set | P0 = 0; P1 open set tracked on [fuzz-triage-board.md](../spec/fuzz-triage-board.md) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Full matrix** ([cross_os.rs](../../xtask/src/cross_os.rs)): the OS×language×transport
+  conformance manifest and interop matrix; every Linux row green on Windows or
+  scheduled with a port-board entry (owner + gate-risk).
+- **Sanitizer matrix** ([sanitizers.yml](../../.github/workflows/sanitizers.yml)):
+  ASan/TSan/Miri coverage; 0 findings.
+- **Burn-down**: P0 = 0; P1 remainder carried to M18W4.
+- **EXP — fuzz budget**: structure-aware corpus retained for the frame/parser
+  targets; strategy recorded in [fuzz-coverage.md](../spec/fuzz-coverage.md).
+
+### Weekly gate checklist (chaired by E2, Friday)
+
+- [x] `MATRIX_FULL_GREEN = 1`; `SANITIZER_FULL = 1`; `P0P1_COUNT` recorded
+- [x] Variables measured; PR hygiene
+- **`GATE_STATUS(M18W3) = PASS`**
+
+### How to reproduce
+
+```text
+cargo xtask test --cross-os
+cargo xtask test --cross-os --full
+cargo xtask fmt --check
+cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask test
+cargo xtask check-layering
+cargo xtask audit-traceability
+```
+
+## M18W4 — Hardening Close, Soak Escalation, Month-18 Review
+
+| Variable | Target | Measured |
+|---|---|---|
+| `HARDENING_GATE` | PASS — fuzz/chaos/benchmarks/matrix/sanitizer gates green | PASS — fuzz fleet 6 targets nightly ([fuzz-nightly.yml](../../.github/workflows/fuzz-nightly.yml), `FUZZ_CRASHES = 0`), chaos suites green (`CHAOS_GREEN = 1`), bench invariants green (`BENCH_INVARIANTS = green`, `REQ-QAL-012`), matrix full green (`MATRIX_FULL_GREEN = 1`), sanitizers 0 findings (`SANITIZER_FULL = 1`), P0 = 0 ([m18w1.md](../gates/m18w1.md), [m18w2.md](../gates/m18w2.md), [m18w3.md](../gates/m18w3.md)) |
+| `SOAK_DAILY` | 24 h soak scheduled daily (I-QAL2 groundwork) | scheduled — [soak-nightly.yml](../../.github/workflows/soak-nightly.yml) daily 24 h on the soak lane; escalation harness `cargo xtask soak` (`REQ-QAL-013`) with the I-QAL2 ledger `docs/metrics/soak-ledger.json` and per-run anomaly dashboard (`REQ-QAL-014`); first run recorded (1 clean single-machine iteration; gate `PENDING`, clean streak 1/3) |
+| `MONTH18_REVIEW` | ON_TRACK | ON_TRACK — [month-18.md](../gates/month-18.md) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Soak escalation** ([soak.rs](../../xtask/src/soak.rs),
+  [soak-ledger.md](../spec/soak-ledger.md)): daily 24 h runs over rotating
+  topologies (`single-machine` → `two-machine-sim` → `physical-pair`), an
+  anomaly ⇒ triage → fix → restart, and the three-consecutive-clean gate rule.
+- **Soak dashboard** (`cargo xtask soak --dashboard`): per-run anomaly counter
+  trend and gate verdict from the committed I-QAL2 ledger.
+- **Gate doc + month review** ([m18w4.md](../gates/m18w4.md),
+  [month-18.md](../gates/month-18.md)); M19 spatial-wave commitment.
+- **Burn-down close**: P0 = 0; P1 remainder tracked.
+
+### Weekly gate checklist (chaired by E3, Friday)
+
+- [x] `HARDENING_GATE = PASS`; `SOAK_DAILY = scheduled`
+- [x] `MONTH18_REVIEW = ON_TRACK`
+- [x] Variables measured; PR hygiene
+- **`GATE_STATUS(M18W4) = PASS`**
+
+### How to reproduce
+
+```text
+cargo xtask soak --iterations 1 --topology single-machine
+cargo xtask soak --dashboard
+cargo xtask test --stress
+cargo xtask fmt --check
+cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask test
+cargo xtask check-layering
+cargo xtask audit-traceability
+```

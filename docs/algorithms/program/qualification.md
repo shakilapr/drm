@@ -14,6 +14,8 @@ Scope: Phase 34 whole-system qualification — requirement traceability, fault i
 | `REQ-QAL-fuzz-resolved` | fuzz/sanitizer: 0 unresolved reproducible findings; corpus replay 100% | `REQ-QAL-007` |
 | `REQ-QAL-deterministic-builds` | two independent runners per supported platform, bit-identical declared artifacts | `REQ-QAL-001` |
 | `REQ-QAL-docs-ci` | documentation/examples execute in CI | `REQ-QAL-002` |
+| `REQ-QAL-soak-escalation` | daily 24 h runs over rotating topologies; anomaly ⇒ triage → fix → restart; three-consecutive-clean rule gates the hardening gate | `REQ-QAL-013` |
+| `REQ-QAL-soak-dashboard` | per-run anomaly counters trended; evidence ledger in I-QAL2 format | `REQ-QAL-014` |
 
 ## Data Structures
 
@@ -79,6 +81,35 @@ fn qualify() -> QualificationReport {
 2. For each supported platform (e.g. ubuntu-x86_64, ubuntu-aarch64, windows-x86_64): build on two isolated clean runners; hash the declared primary artifacts (`drm.h` + workspace crate outputs) and compare per platform.
 3. Differences ⇒ locate with binary diff (diffoscope), fix the nondeterminism source (timestamps, paths, env, linker variation), re-verify.
 
+## Soak Escalation Harness (M18W4)
+
+`REQ-QAL-013`, `REQ-QAL-014`; refines the soak protocol above. The harness is
+`cargo xtask soak` (`xtask/src/soak.rs`); the ledger format is
+[docs/spec/soak-ledger.md](../../spec/soak-ledger.md).
+
+```rust
+pub enum Topology { SingleMachine, TwoMachineSim, PhysicalPair } // rotation order
+pub struct SoakRun {
+ topology: Topology, hours: u64, iterations: u64,
+ anomalies: u64, clean: bool, finished_unix_s: u64,
+}
+pub struct SoakLedger { runs: Vec<SoakRun> } // I-QAL2 evidence ledger
+```
+
+- **Escalation**: daily 24 h runs (`xtask soak --duration 24`), one per topology
+  in round-robin order (`Topology::next_after(run_count)`), so consecutive runs
+  exercise single-machine, two-machine simulation, then physical-pair links.
+  `--topology` pins one explicitly for a targeted re-run.
+- **Anomaly ⇒ triage**: any failing suite iteration is recorded as a
+  non-clean run (anomaly counter) and the harness exits nonzero; the operator
+  fixes the defect and restarts. Counters reset only on a clean full run.
+- **Three-consecutive-clean rule** (`I-QAL2`): the regression gate holds iff the
+  trailing clean-run streak is ≥ [`REQUIRED_CLEAN_RUNS`] (3). An anomaly resets
+  the streak; the clock restarts only on an anomaly.
+- **Dashboard** (`REQ-QAL-014`): `xtask soak --dashboard` renders the ledger as
+  a per-run trend (topology, iterations, anomaly counter, clean flag, trailing
+  streak, gate verdict). The ledger is the committed evidence artifact.
+
 ## Edge Cases & Errors
 
 | Case | Result |
@@ -99,6 +130,8 @@ fn qualify() -> QualificationReport {
 | matrix artifact (evidence-classed rows) | I-QAL1 100% + evidence complete |
 | mutation ledger (seeded defects fail linked tests) | I-QAL1 audit green |
 | soak ledgers (3 × 24 h clean + ≥ 72 h uninterrupted + accelerated suite) | I-QAL2 |
+| soak escalation harness (topology rotation, ledger, three-consecutive-clean rule) | `REQ-QAL-013` |
+| soak dashboard (per-run anomaly trend + gate verdict) | `REQ-QAL-014` |
 | repro job (2 runners × each platform, declared artifacts) | I-QAL3 bit-identical |
 | conformance matrix | I-QAL4 |
 | bench invariants | I-QAL5 |
