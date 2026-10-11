@@ -171,6 +171,25 @@ jobs:
       - name: extension host suites (budget + E2E + chaos)
         run: cargo test -p drm-extension-host
 
+  fault:
+    # Fault-injection campaigns (work-plan M23W2-E1-T1/E2-T1/E3-T1): the five
+    # runtime/transport campaigns run green (`FAULT_CAMPAIGNS = 5/5`) —
+    # publisher-crash, exhaustion-burst, subscriber-kill, serial-bomb, and
+    # link-storm — and the deterministic scenario replay digest is recorded
+    # (qualification.md I-QAL2, REQ-QAL-010/015/016).
+    # REQ: REQ-QAL-010, REQ-QAL-015, REQ-QAL-016.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: fault campaigns (5/5)
+        run: cargo xtask fault --json target/fault-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fault-report
+          path: target/fault-report.json
+
   mcu:
     # MCU host parity + zero-forbidden-heap audit, wired as a permanent blocking
     # gate on every PR/push (regression permanence, AGENTS #14; work-plan

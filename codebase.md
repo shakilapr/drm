@@ -215,7 +215,8 @@ Artifact rules:
 | Sanitizer | core crates | ASan/TSan/Miri | memory and races; Miri on lock-free modules (OS SHM excluded) | PR (core) + nightly |
 | Conformance | `tests/conformance` | matrix harness (`xtask test --cross-os`) | 4-language ABI + interop; cross-OS subset (green or scheduled) | every PR |
 | Stress/chaos | `tests/stress` | harness | kill -9 at every borrow stage, PID reuse, pool exhaustion | nightly |
-| Soak | `tests/soak` | harness (`xtask soak`) | long-duration zero corruption/deadlock; daily 24 h rotating topologies, three-consecutive-clean gate | daily + W8 gate |
+| Soak | `tests/soak` | harness (`xtask soak`) | long-duration zero corruption/deadlock; daily 24 h rotating topologies, parallel runs, memory-boundedness, three-consecutive-clean gate | daily + W8 gate |
+| Fault injection | `xtask fault` | campaign harness (`xtask/src/fault.rs`) | publisher-crash, exhaustion-burst, subscriber-kill, serial-bomb, link-storm green; deterministic replay digest | W8 gate |
 | Golden vectors | `tests/fixtures/golden/` | all bindings | byte-identical layouts C/C++/Rust/Python | every PR |
 | Examples | `examples/` | CI jobs | sample workspace builds and runs headless | every PR |
 
@@ -242,7 +243,7 @@ Artifact rules:
 | `xtask audit-traceability` | REQ citation coverage (§3.1 R2) |
 | `xtask docs` | build docs + execute examples headless |
 
-Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak` (`--duration <h>` | `--iterations <n>`, `--topology`, `--ledger`, `--dashboard`), `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
+Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak` (`--duration <h>` | `--iterations <n>`, `--topology`, `--parallel <n>`, `--memory-bound <mb>`, `--report <path>`, `--ledger`, `--dashboard`), `fault` (`--campaign`, `--seed`, `--steps`, `--list`, `--dry-run`, `--json`), `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
 
 `xtask` is the single automation entry point — cross-platform by construction (Windows is a first-class platform, Phase 31), no external runner binaries required.
 

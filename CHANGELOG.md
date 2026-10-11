@@ -11,6 +11,21 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M23 W2 tranche: fault injection and the 3×24 h soak. `cargo xtask fault`
+  (`xtask/src/fault.rs`) executes the five runtime/transport campaigns —
+  publisher-crash, exhaustion-burst, subscriber-kill, serial-bomb, link-storm —
+  and reports `FAULT_CAMPAIGNS = 5/5`; a red campaign fails the command. A
+  seeded `Scenario` records a deterministic fault schedule and a stable
+  `replay_digest`, and replays over a `PoolModel` that mirrors the
+  exhaustion/reclamation counters, so a failure replays from its seed
+  (REQ-QAL-010/015/016). The soak harness gains `--parallel 3` (three concurrent
+  24 h runs in isolated target dirs), `--memory-bound <mb>` (peak-RSS sampling
+  against the ceiling, I-MB9 included), and `--report <path>` (JSON auto-report),
+  plus the zero-false-positive anomaly threshold band (`sweep_threshold`);
+  `SOAK_3X24H = clean` (REQ-QAL-017). Gate evidence
+  ([m23w2.md](docs/gates/m23w2.md)); metrics
+  [metrics-m23.md](docs/metrics/metrics-m23.md); scenario detail
+  ([fault-injection.md](docs/spec/fault-injection.md)).
 - Week M22 W4 tranche: Studio extension E2E, spatial regression gates, and the
   month-22 review. The WASM extension host lands in `crates/drm-extension-host`
   (facade layer): one `wasmtime` engine with fuel metering plus a `StoreLimits`

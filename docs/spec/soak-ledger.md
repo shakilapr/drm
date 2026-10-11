@@ -13,6 +13,7 @@ I-QAL2 (`REQ-QAL-005`, `REQ-QAL-013`, `REQ-QAL-014`). Owner: E1 (harness) + E4
 |---|---|---|
 | `REQ-QAL-soak-escalation` | daily 24 h runs over rotating topologies; anomaly ⇒ triage → fix → restart; three-consecutive-clean rule | `REQ-QAL-013` |
 | `REQ-QAL-soak-dashboard` | per-run anomaly counters trended; evidence ledger in I-QAL2 format | `REQ-QAL-014` |
+| `REQ-QAL-soak-memory-bounded` | parallel 24 h runs with a memory-boundedness ceiling and an auto-report | `REQ-QAL-017` |
 
 ## Harness
 
@@ -27,6 +28,9 @@ I-QAL2). The run is appended to the ledger and the dashboard is printed.
 | `--duration <h>` | run until the `<h>`-hour budget elapses (at least one iteration) |
 | `--iterations <n>` | run exactly `<n>` iterations (short verification / smoke) |
 | `--topology <name>` | pin the topology (`single-machine`, `two-machine-sim`, `physical-pair`); default is rotation |
+| `--parallel <n>` | run `<n>` runs concurrently, each in an isolated `target/soak-slot-<i>` (three parallel 24 h runs, M23W2) |
+| `--memory-bound <mb>` | memory ceiling in MiB; each run's peak resident set is sampled and checked (`I-MB9`, M23W2) |
+| `--report <path>` | write the JSON evidence report (gate, memory, threshold band, runs) |
 | `--ledger <path>` | ledger path (default `docs/metrics/soak-ledger.json`) |
 | `--dashboard` | render the ledger trend and exit (no run) |
 
@@ -62,6 +66,8 @@ one record per run, append-only.
       "iterations": 1180,
       "anomalies": 0,
       "clean": true,
+      "peak_rss_kb": 524288,
+      "bound_kb": 2097152,
       "finished_unix_s": 1760000000
     }
   ]
@@ -74,6 +80,9 @@ one record per run, append-only.
 - `iterations` — completed suite iterations.
 - `anomalies` — failed suite iterations in this run (`0` for a clean run).
 - `clean` — `true` iff `anomalies == 0`.
+- `peak_rss_kb` — peak resident set of the run's child processes (KiB); `0` when
+  sampling is unavailable or the field predates M23W2 (defaulted on load).
+- `bound_kb` — the `--memory-bound` ceiling in KiB; `0` means unbounded (legacy).
 - `finished_unix_s` — run completion time (Unix seconds), for trending.
 
 An absent ledger is an empty ledger (no runs yet).
@@ -101,12 +110,33 @@ The anomaly counter column is the trend: any nonzero value is a triage item
 carried to the owning engineer, and the gate stays red until three consecutive
 clean runs follow.
 
+## Memory-boundedness (M23W2)
+
+`--memory-bound <mb>` samples each run's peak resident set (`VmHWM`) against the
+declared ceiling; a run above its ceiling fails the command. The spatial-index
+budget is covered by
+[memory-budget.md](../algorithms/memory-budget.md) I-MB9, so the soak ceiling is
+the runtime envelope around that static proof. A run with no ceiling
+(`bound_kb == 0`) is treated as unbounded (legacy), so an older ledger still
+loads.
+
+## Anomaly threshold band (EXP, M23W2)
+
+The `EXP` sweep (`sweep_threshold`) chooses the smallest counter threshold with
+zero clean-run false positives and reports how many anomalous runs it still
+detects. On a clean ledger every counter is zero, so the band is
+`threshold = 0, false_positives = 0`; the dashboard prints the band after the
+per-run rows. The counters are `corruption`, `deadlock`, and the generic
+`anomaly` counter.
+
 ## Reproduce
 
 ```text
 cargo xtask soak --iterations 1 --topology single-machine
 cargo xtask soak --duration 24
+cargo xtask soak --duration 24 --parallel 3 --memory-bound 2048
+cargo xtask soak --iterations 1 --report target/soak-report.json
 cargo xtask soak --dashboard
 ```
 
-REQ: REQ-QAL-005, REQ-QAL-013, REQ-QAL-014.
+REQ: REQ-QAL-005, REQ-QAL-013, REQ-QAL-014, REQ-QAL-017.

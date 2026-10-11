@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod cross_os;
+mod fault;
 mod gencheck;
 mod golden;
 mod layering;
@@ -35,7 +36,7 @@ fn main() -> std::process::ExitCode {
 fn run(args: &[String]) -> Result<()> {
     let Some(cmd) = args.first() else {
         bail!(
-            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--two-host|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability [--registry|--citations|--matrix] | soak (--duration <h>|--iterations <n>) [--topology <t>] [--ledger <path>] [--dashboard] | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
+            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--two-host|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability [--registry|--citations|--matrix] | soak (--duration <h>|--iterations <n>) [--topology <t>] [--ledger <path>] [--parallel <n>] [--memory-bound <mb>] [--report <path>] [--dashboard] | fault [--campaign <name>] [--seed <n>] [--steps <n>] [--list] [--dry-run] [--json <path>] | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
         );
     };
     let flags = &args[1..];
@@ -46,6 +47,7 @@ fn run(args: &[String]) -> Result<()> {
         "check-layering" => layering::check(flags),
         "audit-traceability" => audit_traceability(flags),
         "soak" => soak::run(flags),
+        "fault" => fault::run(flags),
         "golden-gen" => golden::generate(flags),
         "gen-check" => gencheck::run(flags),
         "workplan" => workplan::run(flags),

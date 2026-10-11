@@ -16,6 +16,9 @@ Scope: Phase 34 whole-system qualification — requirement traceability, fault i
 | `REQ-QAL-docs-ci` | documentation/examples execute in CI | `REQ-QAL-002` |
 | `REQ-QAL-soak-escalation` | daily 24 h runs over rotating topologies; anomaly ⇒ triage → fix → restart; three-consecutive-clean rule gates the hardening gate | `REQ-QAL-013` |
 | `REQ-QAL-soak-dashboard` | per-run anomaly counters trended; evidence ledger in I-QAL2 format | `REQ-QAL-014` |
+| `REQ-QAL-fault-campaigns` | five fault campaigns (publisher-crash, exhaustion-burst, subscriber-kill, serial-bomb, link-storm) green | `REQ-QAL-015` |
+| `REQ-QAL-fault-deterministic-replay` | a seeded fault schedule replays to a stable digest | `REQ-QAL-016` |
+| `REQ-QAL-soak-memory-bounded` | parallel 24 h runs with a memory-boundedness ceiling and an auto-report | `REQ-QAL-017` |
 
 ## Data Structures
 
@@ -110,6 +113,33 @@ pub struct SoakLedger { runs: Vec<SoakRun> } // I-QAL2 evidence ledger
   a per-run trend (topology, iterations, anomaly counter, clean flag, trailing
   streak, gate verdict). The ledger is the committed evidence artifact.
 
+## Fault Injection Campaigns (M23W2)
+
+`REQ-QAL-010`, `REQ-QAL-015`, `REQ-QAL-016`; harness is `cargo xtask fault`
+(`xtask/src/fault.rs`); detail: [fault-injection.md](../../spec/fault-injection.md).
+
+```rust
+pub enum FaultCampaign { PublisherCrash, ExhaustionBurst, SubscriberKill, SerialBomb, LinkStorm }
+pub struct Scenario { seed: u64, steps: u64 } // seeded xorshift64 fault schedule
+pub struct Replay { published: u64, dropped: u64, reclaimed: u64, digest: u64 }
+```
+
+- **Campaigns** (`FAULT_CAMPAIGNS = 5/5`): publisher-crash (mid-publish
+  teardown), exhaustion-burst (pool exhaustion under
+  [exhaustion-reclamation.md](../runtime/exhaustion-reclamation.md) policies),
+  subscriber-kill (hazard-slot correctness under
+  [hazard-protocol.md](../runtime/hazard-protocol.md)), serial-bomb (transport
+  framing), and link-storm (router flapping). A red campaign fails the command
+  (triage-first).
+- **Determinism** (`REQ-QAL-016`): the seeded schedule and its digest are the
+  reproduction key; the `PoolModel` replay mirrors the exhaustion/reclamation
+  counters, so a failure replays from its recorded seed.
+- **Soak harness (M23W2)**: `xtask soak --parallel 3 --memory-bound <mb>
+  --report <path>` runs three parallel 24 h runs in isolated target dirs,
+  samples peak RSS against the ceiling (I-MB9 included), and writes the
+  auto-report; the ledger threshold band picks the zero-false-positive anomaly
+  band (`REQ-QAL-017`).
+
 ## Edge Cases & Errors
 
 | Case | Result |
@@ -132,6 +162,9 @@ pub struct SoakLedger { runs: Vec<SoakRun> } // I-QAL2 evidence ledger
 | soak ledgers (3 × 24 h clean + ≥ 72 h uninterrupted + accelerated suite) | I-QAL2 |
 | soak escalation harness (topology rotation, ledger, three-consecutive-clean rule) | `REQ-QAL-013` |
 | soak dashboard (per-run anomaly trend + gate verdict) | `REQ-QAL-014` |
+| fault campaigns (publisher-crash, exhaustion-burst, subscriber-kill, serial-bomb, link-storm) | `REQ-QAL-015` |
+| deterministic fault scenario (seeded schedule + stable replay digest) | `REQ-QAL-016` |
+| soak memory-boundedness + parallel runs + auto-report | `REQ-QAL-017` |
 | repro job (2 runners × each platform, declared artifacts) | I-QAL3 bit-identical |
 | conformance matrix | I-QAL4 |
 | bench invariants | I-QAL5 |
