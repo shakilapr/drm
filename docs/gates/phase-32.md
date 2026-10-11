@@ -31,6 +31,8 @@ Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
 | RPC per-phase state-transition observation + cancel ack | `crates/drm-rpc/src/client.rs` per-kind counters; `action_runs_all_phases`/`cancel_at_each_phase_boundary` (I-RPC2/I-RPC10, REQ-OPS-010/011/025); [m16w3.md](m16w3.md) | PASS (M16W3) |
 | Handle compaction gate + coordinated-rebuild guidance | `HandleTable::compact`/`rebuild_guidance`; `drm ids compact --yes`; `handle_compact_gate`/`handle_compact_scope`/`handle_compact_guidance` (I-H3/I-H4/I-H7, REQ-TOOL-038); [m16w3.md](m16w3.md) | PASS (M16W3) |
 | Serial host↔MCU interop matrix byte-exact | `serial_cobs_golden`/`mcu_host_interop_matrix`; `bindings/c/mcu/selftest.c` `test_interop_matrix` (I-SR3/I-SR4/I-SR6, REQ-OPS-004/REQ-ROUTE-025/026); [m16w3.md](m16w3.md) | PASS (M16W3) |
+| Record/replay sub-gate (borrow scope, bounded, policies, MCAP interop, replay faithful) | `crates/drm-record/src/{lib,mcap,replay}.rs`; `record_borrow_scope`/`record_bounded`/`record_policies`/`replay_roundtrip`/`record_mcap_interop` (I-RC1..I-RC4/I-RC6, REQ-OPS-005..009); [m16w4.md](m16w4.md) | PASS (M16W4) |
+| Serial/interop sub-gate (cross-decode, corruption, oversize, zero-heap audit) | `crates/drm-router/src/transport/serial.rs`; `mcu_host_interop_matrix`/`serial_corruption`/`serial_oversize`; `make -C bindings/c/mcu host-audit` (I-SR2/I-SR3/I-SR5/I-SR6, REQ-ROUTE-025/026/REQ-CORE-087); [m16w4.md](m16w4.md) | PASS (M16W4) |
 
 ## Phase 32 submodule suite mapping (M16W2–M16W3)
 
@@ -60,6 +62,10 @@ and result. `PASS` = green in-session; `deferred` = hardware/CI-owned lane.
   interop matrix (I-SR3/I-SR4/I-SR6, `m16w3.md`). Remaining Phase 32 output
   (`drm record`/`drm diag` CLI, constrained-device data path) continues in
   M16W4–M19.
+- M16W4 closed the record/replay sub-gate (I-RC1..I-RC4 plus third-party MCAP
+  interop, I-RC6) and the serial/interop sub-gate (I-SR2/I-SR3/I-SR5/I-SR6);
+  month-16 review ON_TRACK ([month-16.md](month-16.md)). Phase 32 close-out
+  (introspection/trace/RPC gates) and Studio start carry to M17.
 
 REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004, REQ-OPS-005,
 REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-009, REQ-OPS-010,

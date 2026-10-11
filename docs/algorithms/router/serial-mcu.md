@@ -127,6 +127,21 @@ including a stale-CRC covered-byte drop + resync.
 
 REQ: REQ-OPS-004, REQ-ROUTE-025, REQ-ROUTE-026.
 
+## Implementation Status (M16W4)
+
+Serial gate signed (E3 presents). Host↔MCU interop matrix re-run byte-exact;
+corruption injection and oversize rejection green; zero-forbidden-heap linker
+audit on the MCU data path green.
+
+| Element | Location | Test |
+|---|---|---|
+| cross-decode matrix byte-exact | `crates/drm-router/src/transport/serial.rs` | `mcu_host_interop_matrix`, `serial_cobs_golden` |
+| corruption injection detected | `crates/drm-router/src/transport/serial.rs`; `bindings/c/mcu/selftest.c` | `serial_corruption`, `test_interop_matrix` |
+| oversize rejection (encode + decode) | `crates/drm-router/src/transport/serial.rs` | `serial_oversize`, `serial_oversize_declared_rejected` |
+| zero-forbidden-heap linker audit | `bindings/c/mcu/Makefile` | `make host-audit` (`mcu audit: zero forbidden allocator symbols`) |
+
+REQ: REQ-OPS-004, REQ-ROUTE-025, REQ-ROUTE-026, REQ-CORE-087.
+
 ## Edge Cases & Errors
 
 | Case | Result |

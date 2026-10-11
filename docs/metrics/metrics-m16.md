@@ -169,3 +169,54 @@ make -C bindings/c/mcu host-test
 cargo xtask audit-traceability
 cargo xtask check-layering
 ```
+
+## M16W4 — Record/Replay Gate, Serial Interop Gate, Month-16 Review
+
+| Variable | Target | Measured |
+|---|---|---|
+| `RECORD_GATE` | borrow-scope, bounded, policies, MCAP interop, replay faithful | PASS — `drm-record` 18/18: `record_borrow_scope` (I-RC1, zero borrows held during disk writes), `record_bounded` (I-RC2, exact per-topic budget), `record_policies` (I-RC3, `Drop`/`Stop`/`Backpressure` exact), `replay_roundtrip` (I-RC4, payload/order/timestamps/gaps), `record_mcap_interop` (I-RC6, third-party reader) |
+| `SERIAL_GATE` | host↔MCU byte-for-byte + error paths | PASS — `drm-router --lib transport::serial` 15/15: `mcu_host_interop_matrix`/`serial_cobs_golden` (I-SR6 byte-exact), `serial_corruption` (I-SR3 injection detected), `serial_oversize`/`serial_oversize_declared_rejected` (I-SR2 rejection); `make -C bindings/c/mcu host-test host-audit` (I-SR5 zero forbidden allocator symbols) |
+| `MONTH16_REVIEW` | ON_TRACK | ON_TRACK — [month-16.md](../gates/month-16.md); M17 commitment = Phase 32 close-out + Studio start |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Third-party MCAP interop** (`crates/drm-record/src/tests.rs`
+  `record_mcap_interop`): a recorded session read back through the third-party
+  `mcap` crate — `Summary::read` reports standard statistics (7 messages, 3
+  channels/schemas, 9 DRM metadata records) and `MessageStream` yields one
+  message per sample with `publish_time = log_time` and the recorded payload
+  bytes (I-RC6).
+- **Record/replay gate evidence** (`docs/gates/m16w4.md`): I-RC1..I-RC4 re-run
+  as gate evidence; MCAP third-party interop added.
+- **Serial/interop gate evidence** (`docs/gates/m16w4.md`): byte-exact
+  cross-decode matrix, corruption injection, oversize rejection, and the
+  zero-forbidden-heap linker audit on the MCU data path.
+- **Month-16 review** (`docs/gates/month-16.md`): variables, Phase 32 sub-gate
+  ledger, carry-over, risk deltas, M17 commitment.
+- Phase tracker [phase-32.md](../gates/phase-32.md); [CHANGELOG.md](../../CHANGELOG.md)
+  M16W4 tranche.
+
+Notes:
+
+- No architecture divergence: pinned invariants only (record-replay
+  I-RC1..I-RC4/I-RC6, serial-mcu I-SR2/I-SR3/I-SR5/I-SR6); no ADR.
+- MCU 2 h target soak remains deferred to the `mcu-cross` hardware lane; host
+  parity and the zero-forbidden-heap linker audit are green in-session.
+
+### Weekly gate checklist (chaired by E3, Friday)
+
+- [x] `RECORD_GATE = PASS`; `SERIAL_GATE = PASS`; `MONTH16_REVIEW = ON_TRACK`
+- [x] Variables measured; PR hygiene
+- **`GATE_STATUS(M16W4) = PASS`**
+
+### How to reproduce
+
+```text
+cargo test -p drm-record
+cargo test -p drm-record record_mcap_interop
+cargo test -p drm-router --lib transport::serial
+make -C bindings/c/mcu host-test host-audit
+cargo xtask audit-traceability
+cargo xtask check-layering
+```

@@ -546,6 +546,56 @@ fn record_mcap_zstd() {
     assert_eq!(messages[39].sequence, 39);
 }
 
+/// REQ: REQ-OPS-006, REQ-OPS-009 — I-RC6: the third-party `mcap` reader parses
+/// the recorded session end to end — standard statistics/summary, one message
+/// per recorded sample on its topic channel with `publish_time = log_time`, and
+/// the `drm.sample`/`drm.gap` metadata records indexed alongside. Confirms the
+/// stream is standard MCAP, not a DRM-private container.
+#[test]
+fn record_mcap_interop() {
+    let (bytes, summary) = record_known_session();
+
+    let parsed = mcap::Summary::read(&bytes)
+        .unwrap_or_else(|e| unreachable!("summary: {e:?}"))
+        .unwrap_or_else(|| unreachable!("summary section present"));
+    let stats = parsed
+        .stats
+        .as_ref()
+        .unwrap_or_else(|| unreachable!("statistics record"));
+    assert_eq!(
+        stats.message_count, 7,
+        "third-party reader counts every sample"
+    );
+    assert_eq!(stats.channel_count, 3);
+    assert_eq!(stats.schema_count, 3);
+    assert_eq!(
+        stats.metadata_count,
+        u32::try_from(summary.messages + summary.gaps).unwrap_or(0),
+        "DRM sample + gap metadata records are counted"
+    );
+    assert_eq!(parsed.channels.len(), 3, "one channel per recorded topic");
+
+    let messages: Vec<mcap::Message<'static>> = mcap::MessageStream::new(&bytes)
+        .unwrap_or_else(|e| unreachable!("stream: {e:?}"))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|e| unreachable!("messages: {e:?}"));
+    assert_eq!(messages.len(), 7);
+    for m in &messages {
+        assert_eq!(m.publish_time, m.log_time, "publish_time mirrors log_time");
+        assert!(!m.data.is_empty());
+    }
+    let topic1: Vec<u8> = messages
+        .iter()
+        .filter(|m| m.channel.topic == "a")
+        .map(|m| m.data[0])
+        .collect();
+    assert_eq!(
+        topic1,
+        vec![0x10, 0x11, 0x12, 0x13],
+        "topic channel carries the recorded payloads verbatim"
+    );
+}
+
 /// REQ: REQ-OPS-007, REQ-OPS-008 — I-RC1/I-RC3: a slow disk (bounded `pump`)
 /// lets the ingress policy act; `Drop` coalesces the backlog into the ledger
 /// while `Backpressure` loses nothing.

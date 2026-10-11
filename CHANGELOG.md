@@ -11,6 +11,20 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M16 W4 tranche: record/replay gate + serial interop gate + month-16
+  review. `drm-record` adds `record_mcap_interop`: a recorded session read back
+  through the pinned third-party `mcap` crate — `Summary::read` reports the
+  standard statistics (messages, channels/schemas, DRM metadata count) and
+  `MessageStream` yields one message per sample with `publish_time = log_time`
+  and the recorded payload bytes verbatim (`I-RC6`). Record gate evidence
+  re-runs `record_borrow_scope`/`record_bounded`/`record_policies`/
+  `replay_roundtrip` (`I-RC1`..`I-RC4`); serial gate evidence re-runs the
+  byte-exact host↔MCU cross-decode matrix (`I-SR6`), corruption injection
+  (`I-SR3`), oversize rejection (`I-SR2`), and the zero-forbidden-heap linker
+  audit on the MCU data path (`I-SR5`, `make host-audit`). Gate evidence
+  [m16w4.md](docs/gates/m16w4.md); month review [month-16.md](docs/gates/month-16.md);
+  [metrics-m16.md](docs/metrics/metrics-m16.md) records `RECORD_GATE = PASS`,
+  `SERIAL_GATE = PASS`, `MONTH16_REVIEW = ON_TRACK`.
 - Week M16 W3 tranche: RPC per-phase state transitions, handle compaction,
   serial host↔MCU interop. `RpcClient` counts each lifecycle event kind as it
   dispatches (one `Accepted`, one `Started`, one `Progress` per non-final phase,

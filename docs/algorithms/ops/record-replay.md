@@ -150,6 +150,26 @@ off-by-one at the slab boundary), `record_policies` + `record_slow_disk_policy`
 
 REQ: REQ-OPS-005, REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-019.
 
+## Implementation Status (M16W4)
+
+Record gate signed (E4 presents, E3 chairs). Every `I-RC1`..`I-RC4` invariant
+re-run as gate evidence, plus a dedicated third-party MCAP interop test:
+
+| Element | Location | Test |
+|---|---|---|
+| borrow window, exact budget, policies, gap ledger | `crates/drm-record/src/lib.rs` | `record_borrow_scope`, `record_bounded`, `record_policies`, `record_gap_ledger` |
+| third-party MCAP reader interop | `crates/drm-record/src/mcap.rs` | `record_mcap_interop` |
+| replay round-trip (payload/order/timestamps/gaps) | `crates/drm-record/src/replay.rs` | `replay_roundtrip`, `replay_publisher_faithful` |
+
+`record_mcap_interop` parses a recorded session with the third-party `mcap`
+crate: `Summary::read` reports the standard statistics (7 messages, 3
+channels/schemas, 9 DRM metadata records) and `MessageStream` yields one
+message per sample with `publish_time = log_time` and the recorded payload
+bytes verbatim.
+
+REQ: REQ-OPS-005, REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-009,
+REQ-OPS-018, REQ-OPS-019.
+
 ## Edge Cases & Errors
 
 | Case | Result |
