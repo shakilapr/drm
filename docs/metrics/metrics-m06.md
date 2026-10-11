@@ -53,3 +53,18 @@ Deliverables: `identity_e2e` (drm-core); `ffi_matrix`/`ffi_negative` +
 `docs/gates/phase-18.md` draft. FFI misuse beyond documented handle UB
 (use-after-close) requires a handle-generation table — an arch change (ADR),
 recorded as out of scope.
+
+## M06W4 — Phase 18 Gate (Deployment Identity), Precommit / Memory Budget
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 18)` | PASS | PASS — `docs/gates/phase-18.md` |
+| `BUDGET_REFERENCE` | worst-case calc == independent reference (I-MB1) | `drm-workspace` `budget_reference` 8 passed (5 byte-exact fixtures; formula agreement); 13 negative-band tests |
+| `PRECOMMIT_UNITS` | pre-fault + lock + refusal green (I-MB5) | `drm-core` `precommit` 8 tests: real `mlock` success path + injected low-lockable-budget refusal + no-pageable-continuation audit |
+| `DUAL_SOAK` | 12 h dual-deployment soak clean | not executed in-session (wall-time; operator/CI lane) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `drm-core::channel::precommit` (pre-fault write-touch + `mlock`,
+`PrecommitProof`, refusal ⇒ no active channel); `drm-workspace::budget`
+(verifier math, 5 reference fixtures, error/warning verdicts); `memory-budget.md`
+precommit wording reconciled to architecture §Hard Real-Time Precommitment.

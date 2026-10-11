@@ -159,7 +159,7 @@ fn activate_precommitted(mapping: &Mapping, budget: &MemoryBudget) -> Result<(),
 
 1. Verifier passed statically (backend capability + lockable budget coverage + per-process locked set — I-MB2/I-MB7).
 2. Map segment (shm-backend).
-3. `precommit_and_prove`: Linux — `mlock` success is the residency proof (no `mincore` dependency); Windows — committed pages + `VirtualLock`, optional `QueryWorkingSetEx` diagnostic. Never touch payload bytes merely to fault pages.
+3. `precommit_and_prove`: Linux — `mlock` success is the residency proof (no `mincore` dependency); Windows — committed pages + `VirtualLock`, optional `QueryWorkingSetEx` diagnostic. Pre-fault each declared page with a content-preserving write-touch (read-then-rewrite the same byte) before locking, matching architecture.md §Hard Real-Time Precommitment ("pre-faults, memory-locks every declared precommitted region"); the touch must never alter payload bytes.
 4. Any proof failure ⇒ `LockFailed` and refuse active state.
 5. DRM never decommits or tracks pages afterward (platform-managed backing; architecture §Platform-Managed Paging).
 

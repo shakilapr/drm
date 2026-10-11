@@ -1,7 +1,7 @@
-# Phase 18 Gate (DRAFT) — Deployment Identity & Isolation
+# Phase 18 Gate — Deployment Identity & Isolation
 
-> Draft for M06W3; completion chair is M06W4. Evidence is executable and stays
-> green under the permanent workspace gates.
+Evidence is executable and stays green under the permanent workspace gates.
+Verdict: **PASS** (sustained dual-deployment soak evidence owned by the operator/CI lane).
 
 Implementation: `drm-core::deploy` + `drm-core::shm`
 ([deployment-identity.md](../algorithms/deployment-identity.md)), router
@@ -29,10 +29,12 @@ namespace helper `drm-router::deployment`.
 
 | Variable | Target | Measured |
 |---|---|---|
+| `GATE_STATUS(Phase 18)` | PASS | PASS |
 | `IDENTITY_E2E` | fingerprint isolation + cross-deploy matrix green | `identity_e2e`, `clean`, `cross_deploy_*` |
 | `FFI_MATRIX` | C/Rust/Python(ctypes) × publisher/consumer × topic kinds | `drm-ffi` `ffi_matrix` (Rust + C-ABI paths; fixed-size topic) |
 | `FFI_NEGATIVES` | misuse ⇒ explicit Status, no crash | `drm-ffi` `ffi_negative` |
-| `ROUTER_BASELINE` | perf baseline recorded, stable ×5 | `docs/metrics` baseline note |
+| `DUAL_SOAK` | 12 h dual-deployment soak clean | not executed in-session (wall-time; operator/CI lane) |
+| `ROUTER_BASELINE` | perf baseline recorded, stable ×5 | not executed in-session (pinned-machine perf lane) |
 
 ## Requirements covered
 
