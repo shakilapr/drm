@@ -21,6 +21,8 @@ mod lock;
 mod process;
 #[cfg(unix)]
 mod segment;
+#[cfg(windows)]
+mod windows;
 
 #[cfg(unix)]
 pub use lock::FlockBackend;
@@ -28,33 +30,89 @@ pub use lock::FlockBackend;
 pub use process::{current_identity, identity_alive, is_alive};
 #[cfg(unix)]
 pub use segment::PosixShm;
+#[cfg(windows)]
+pub use windows::{WinLockBackend, WinShm, current_identity, identity_alive, is_alive};
 
 /// POSIX `NAME_MAX` upper bound for `shm_open` names (shm-backend.md I0).
+#[cfg(unix)]
 const NAME_MAX: usize = 255;
 
-/// Generated backend segment name `/drm.<deployment_id>.<topic_hash>`. Canonical
-/// topic paths never reach the kernel namespace; the descriptor retains the
-/// canonical topic and validates it at attach.
+/// Windows mapping-name length bound (`Local\` prefix inclusive); enforce at
+/// verify so the real `CreateFileMappingW` never rejects a generated name.
+/// REQ: REQ-CORE-078.
+pub const WINDOWS_NAME_MAX: usize = 255;
+
+/// Windows mapping namespace prefix; the remainder may not contain `\`, since
+/// Windows mapping names forbid backslashes after the `Local\`/`Global\` prefix
+/// (architecture §Scoped Shared-Memory Namespaces).
+/// REQ: REQ-CORE-078.
+pub const WINDOWS_LOCAL_PREFIX: &str = "Local\\";
+
+/// Builds the Windows generated section name
+/// `Local\drm_<deployment_id>_<topic_hash>` (windows-backends.md §Data
+/// Structures). Pure string form, evaluated on every host so the naming rule is
+/// unit-tested even where `CreateFileMappingW` is unavailable.
+/// REQ: REQ-CORE-078, REQ-CORE-088.
+#[must_use]
+pub fn windows_section_name(deploy_id: &str, topic_hash: u64) -> String {
+    format!("{WINDOWS_LOCAL_PREFIX}drm_{deploy_id}_{topic_hash:016x}")
+}
+
+/// Windows mapping-name conformance (I0/I-W parity): `Local\` prefix, non-empty
+/// remainder with no further backslash, no NUL, within [`WINDOWS_NAME_MAX`].
+/// REQ: REQ-CORE-078.
+#[must_use]
+pub fn windows_name_conforms(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(WINDOWS_LOCAL_PREFIX) else {
+        return false;
+    };
+    !rest.is_empty()
+        && !rest.contains('\\')
+        && !name.contains('\0')
+        && name.len() <= WINDOWS_NAME_MAX
+}
+
+/// POSIX `shm_open` name conformance (I0): leading slash, no further slashes,
+/// no NUL, `NAME_MAX` or shorter, non-empty. Pure form so the rule is testable.
+/// REQ: REQ-CORE-088.
+#[cfg(unix)]
+#[must_use]
+pub fn posix_name_conforms(name: &str) -> bool {
+    !name.is_empty()
+        && name.starts_with('/')
+        && !name[1..].contains('/')
+        && !name.contains('\0')
+        && name.len() <= NAME_MAX
+}
+
+/// Generated backend segment name — `/drm.<deployment_id>.<topic_hash>` on POSIX,
+/// `Local\drm_<deployment_id>_<topic_hash>` on Windows (architecture §Scoped
+/// Shared-Memory Namespaces). Canonical topic paths never reach the kernel
+/// namespace; the descriptor retains the canonical topic and validates it at
+/// attach.
 /// REQ: REQ-CORE-088.
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SegmentName(Arc<str>);
 
 impl SegmentName {
     /// Validates the name against the platform create/open contract (I0: the real
-    /// `shm_open`/`open(2)` must accept it): leading slash, no further slashes, no
-    /// NUL, `NAME_MAX` or shorter, non-empty. Conformance failures mirror the
-    /// kernel's `EINVAL` as [`ShmError::Io`] with [`std::io::ErrorKind::InvalidInput`].
-    /// REQ: REQ-CORE-088.
+    /// `shm_open`/`CreateFileMappingW` must accept it): POSIX — leading slash, no
+    /// further slashes, no NUL, `NAME_MAX` or shorter; Windows — `Local\` prefix,
+    /// no further backslashes, no NUL, length-bounded. Conformance failures mirror
+    /// the platform rejection as [`ShmError::Io`] with
+    /// [`std::io::ErrorKind::InvalidInput`].
+    /// REQ: REQ-CORE-078, REQ-CORE-088.
     ///
     /// # Errors
     /// [`ShmError::Io`] on any conformance violation.
     pub fn new(name: &str) -> Result<Self, ShmError> {
-        if name.is_empty()
-            || !name.starts_with('/')
-            || name[1..].contains('/')
-            || name.contains('\0')
-            || name.len() > NAME_MAX
-        {
+        #[cfg(unix)]
+        let conforms = posix_name_conforms(name);
+        #[cfg(windows)]
+        let conforms = windows_name_conforms(name);
+        #[cfg(not(any(unix, windows)))]
+        let conforms = false;
+        if !conforms {
             return Err(ShmError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "invalid segment name",
@@ -76,14 +134,22 @@ impl fmt::Debug for SegmentName {
     }
 }
 
-/// Builds `/drm.<deployment_id>.<topic_hash>`; length-checked at verify (I0).
-/// REQ: REQ-CORE-088.
+/// Builds the platform generated segment name; length-checked at verify (I0).
+/// POSIX `/drm.<deployment_id>.<topic_hash>`; Windows
+/// `Local\drm_<deployment_id>_<topic_hash>`.
+/// REQ: REQ-CORE-078, REQ-CORE-088.
 ///
 /// # Errors
-/// [`ShmError::InvalidName`] when the deployment id or formatted hash would
-/// violate name conformance.
+/// [`ShmError::Io`] (`InvalidInput`) when the deployment id or formatted hash
+/// violates name conformance.
 pub fn backend_segment_name(deploy_id: &str, topic_hash: u64) -> Result<SegmentName, ShmError> {
-    SegmentName::new(&format!("/drm.{deploy_id}.{topic_hash:016x}"))
+    #[cfg(unix)]
+    let raw = format!("/drm.{deploy_id}.{topic_hash:016x}");
+    #[cfg(windows)]
+    let raw = windows_section_name(deploy_id, topic_hash);
+    #[cfg(not(any(unix, windows)))]
+    let raw = String::new();
+    SegmentName::new(&raw)
 }
 
 /// SHM backend failures (shm-backend.md Data Structures). Mapped 1:1 into the
@@ -137,14 +203,9 @@ pub struct Mapping {
 }
 
 impl Mapping {
-    /// Backend-internal constructor (Linux backend, unix only).
-    #[cfg_attr(
-        all(not(unix), not(test)),
-        expect(
-            dead_code,
-            reason = "platform mmap body lands with the OS backend (windows-backends.md)"
-        )
-    )]
+    /// Backend-internal constructor: POSIX [`super::segment::PosixShm`] after
+    /// `mmap`, Windows [`super::windows::WinShm`] after `MapViewOfFile`.
+    /// REQ: REQ-CORE-072, REQ-CORE-078.
     pub(crate) fn from_raw_parts(ptr: NonNull<u8>, len: usize) -> Self {
         Self { ptr, len }
     }
@@ -184,6 +245,26 @@ impl Drop for Mapping {
     }
 }
 
+#[cfg(windows)]
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        if self.len == 0 {
+            return;
+        }
+        // SAFETY: `ptr` was produced by `MapViewOfFile` over a live pagefile
+        // section and is exclusively owned by this `Mapping`; `UnmapViewOfFile`
+        // releases the view exactly once. The section survives until its last
+        // view closes (I-W4b).
+        unsafe {
+            windows_sys::Win32::System::Memory::UnmapViewOfFile(
+                windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
+                    Value: self.ptr.cast::<core::ffi::c_void>().as_ptr(),
+                },
+            );
+        }
+    }
+}
+
 impl fmt::Debug for Mapping {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // SAFETY-free: pointer address is never exposed in diagnostics.
@@ -198,9 +279,10 @@ impl fmt::Debug for Mapping {
 /// validates size only after stale classification (I3); every failure after
 /// exclusive creation rolls back fd and name (I7).
 /// Frozen v1 (work-plan M01W3-E1-T2): trait shape and method set are stable;
-/// breaking changes require a drm-core version bump. Linux impl:
-/// [`super::segment::PosixShm`]; Windows contract: windows-backends.md.
-/// REQ: REQ-CORE-072, REQ-CORE-098.
+/// breaking changes require a drm-core version bump. POSIX impl:
+/// [`super::segment::PosixShm`]; Windows impl: [`super::windows::WinShm`]
+/// (windows-backends.md).
+/// REQ: REQ-CORE-072, REQ-CORE-078, REQ-CORE-098.
 #[doc(alias = "shm create")]
 #[doc(alias = "shm open")]
 pub trait ShmBackend {
@@ -250,17 +332,18 @@ pub trait ShmBackend {
     fn precommit_and_prove(&self, m: &Mapping) -> Result<(), ShmError>;
 }
 
-/// Opaque held OS lock; `Drop` releases (flock binds to the open file description
-/// and the kernel releases it when the last duplicate closes - I4). The handle
-/// owns the lock-file descriptor, opened `O_CLOEXEC`, plus an optional backend
-/// release hook for backends whose lock state is not the OS descriptor itself
-/// (test backends); the hook runs after the descriptor closes.
-/// REQ: REQ-CORE-073, REQ-CORE-069.
+/// Opaque held OS lock; `Drop` releases. POSIX: `flock` binds to the open file
+/// description and the kernel releases it when the last duplicate closes (I4).
+/// Windows: the kernel releases the `LockFileEx` range when the last handle
+/// closes (I-W3). The handle owns the lock-file descriptor/handle plus an
+/// optional backend release hook for backends whose lock state is not the OS
+/// object itself (test backends); the hook runs before the OS close.
+/// REQ: REQ-CORE-073, REQ-CORE-069, REQ-CORE-075.
 pub struct LockHandle {
     #[cfg(unix)]
     fd: Option<std::os::fd::OwnedFd>,
-    #[cfg(not(unix))]
-    _priv: (),
+    #[cfg(windows)]
+    handle: Option<windows_sys::Win32::Foundation::HANDLE>,
     release_hook: Option<Box<dyn FnOnce() + Send>>,
 }
 
@@ -269,20 +352,31 @@ impl std::fmt::Debug for LockHandle {
         let mut s = f.debug_struct("LockHandle");
         #[cfg(unix)]
         s.field("fd", &self.fd.is_some());
-        #[cfg(not(unix))]
-        s.field("_priv", &());
+        #[cfg(windows)]
+        s.field("handle", &self.handle.is_some());
         s.field("release_hook", &self.release_hook.is_some());
         s.finish()
     }
 }
 
 impl LockHandle {
-    /// OS-descriptor constructor (platform backends).
+    /// OS-descriptor constructor (POSIX backends).
     /// REQ: REQ-CORE-073.
     #[cfg(unix)]
     pub(crate) fn from_fd(fd: std::os::fd::OwnedFd) -> Self {
         Self {
             fd: Some(fd),
+            release_hook: None,
+        }
+    }
+
+    /// Windows lock-file handle constructor; `Drop` closes it (kernel release,
+    /// I-W3).
+    /// REQ: REQ-CORE-075.
+    #[cfg(windows)]
+    pub(crate) fn from_windows_handle(handle: windows_sys::Win32::Foundation::HANDLE) -> Self {
+        Self {
+            handle: Some(handle),
             release_hook: None,
         }
     }
@@ -294,8 +388,8 @@ impl LockHandle {
         Self {
             #[cfg(unix)]
             fd: None,
-            #[cfg(not(unix))]
-            _priv: (),
+            #[cfg(windows)]
+            handle: None,
             release_hook: Some(hook),
         }
     }
@@ -306,6 +400,13 @@ impl Drop for LockHandle {
         if let Some(hook) = self.release_hook.take() {
             hook();
         }
+        #[cfg(windows)]
+        if let Some(handle) = self.handle.take() {
+            // SAFETY: `handle` is an owned `LockFileEx` lock-file handle opened
+            // by `WinLockBackend` and closed exactly once; closing it releases
+            // the locked range.
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+        }
     }
 }
 
@@ -314,9 +415,10 @@ impl Drop for LockHandle {
 /// descriptors open `O_CLOEXEC` and are sanitized at fork (I5). NFS/flock
 /// semantics are out of scope (documented exclusion).
 /// Frozen v1 (work-plan M01W3-E1-T2): trait shape and method set are stable;
-/// breaking changes require a drm-core version bump. Linux impl:
-/// [`super::lock::FlockBackend`]; Windows contract: windows-backends.md.
-/// REQ: REQ-CORE-073, REQ-CORE-069.
+/// breaking changes require a drm-core version bump. POSIX impl:
+/// [`super::lock::FlockBackend`]; Windows impl: [`super::windows::WinLockBackend`]
+/// (windows-backends.md).
+/// REQ: REQ-CORE-073, REQ-CORE-069, REQ-CORE-075.
 #[doc(alias = "shm lock")]
 pub trait LockBackend {
     /// Exclusive, non-blocking acquisition of the lock file at `path`.
@@ -338,10 +440,12 @@ pub trait LockBackend {
     fn release(self, h: LockHandle);
 }
 
-/// Runtime lock directory `/run/drm/<deployment_id>` — never under `/dev/shm`.
-/// Lock file names use the same generated topic identifier family as segment
-/// names (never canonical topic strings, whose `/` hierarchy would turn
-/// filenames into directories). REQ: REQ-CORE-069.
+/// Runtime lock directory — `/run/drm/<deployment_id>` on POSIX,
+/// `%ProgramData%\drm\<deployment_id>` on Windows; never under the segment
+/// namespace. Lock file names use the same generated topic identifier family as
+/// segment names (never canonical topic strings, whose separator hierarchy
+/// would turn filenames into directories).
+/// REQ: REQ-CORE-069, REQ-CORE-075.
 #[derive(Debug, Clone)]
 pub struct LockPaths(PathBuf);
 
@@ -385,7 +489,9 @@ impl LockPaths {
 pub struct ProcessIdentity {
     /// OS process id.
     pub pid: i32,
-    /// Process start time in platform ticks (Linux: `/proc/<pid>/stat` field 22).
+    /// Process start time in platform ticks (Linux: `/proc/<pid>/stat` field 22;
+    /// Windows: creation `FILETIME` as 100 ns units since 1601-01-01).
+    /// REQ: REQ-CORE-036, REQ-CORE-074.
     pub start_ticks: u64,
 }
 
@@ -401,10 +507,13 @@ pub enum CleanReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{CleanReport, LockPaths, SegmentName, ShmError, backend_segment_name};
+    use super::{CleanReport, ShmError, windows_name_conforms, windows_section_name};
+    #[cfg(unix)]
+    use super::{LockPaths, SegmentName, backend_segment_name};
     use drm_types::Status;
 
     /// REQ: REQ-CORE-088 — name conformance (I0); violations mirror the kernel's EINVAL.
+    #[cfg(unix)]
     #[test]
     fn segment_name_validates() {
         assert!(SegmentName::new("/drm.dep-1.0102").is_ok());
@@ -420,7 +529,8 @@ mod tests {
         ));
     }
 
-    /// REQ: REQ-CORE-088 — generated name family format.
+    /// REQ: REQ-CORE-088 — POSIX generated name family format.
+    #[cfg(unix)]
     #[test]
     fn backend_name_format() {
         let name = backend_segment_name("dep-1", 0x0102_0304_0506_0708);
@@ -432,6 +542,7 @@ mod tests {
     }
 
     /// REQ: REQ-CORE-069 — lock file name family.
+    #[cfg(unix)]
     #[test]
     fn lock_path_format() {
         let paths = LockPaths::new("/run/drm/dep-1");
@@ -447,6 +558,25 @@ mod tests {
             paths.consumer(7, 3),
             std::path::PathBuf::from("/run/drm/dep-1/t_7.3.consumer.lock")
         );
+    }
+
+    /// REQ: REQ-CORE-078, REQ-CORE-088 — Windows generated section name family
+    /// and conformance (I0/I-W parity); pure form, evaluated on every host.
+    #[test]
+    fn windows_name_conformance() {
+        let name = windows_section_name("dep-1", 0x0102_0304_0506_0708);
+        assert_eq!(name, "Local\\drm_dep-1_0102030405060708");
+        assert!(windows_name_conforms(&name));
+        assert!(!windows_name_conforms("drm_dep-1_0102"));
+        assert!(!windows_name_conforms("Local\\"));
+        assert!(!windows_name_conforms("Local\\a\\b"));
+        assert!(!windows_name_conforms("Local\\a\0b"));
+        let max = super::WINDOWS_NAME_MAX - super::WINDOWS_LOCAL_PREFIX.len();
+        let at_limit = format!("Local\\{}", "d".repeat(max));
+        assert_eq!(at_limit.len(), super::WINDOWS_NAME_MAX);
+        assert!(windows_name_conforms(&at_limit));
+        let over = format!("Local\\{}", "d".repeat(max + 1));
+        assert!(!windows_name_conforms(&over));
     }
 
     /// REQ: REQ-CORE-098 — `ShmError` → `Status` mapping (`shm-backend.md` Data Structures);

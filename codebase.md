@@ -43,7 +43,7 @@ drm/
 ├── crates/                         # Rust workspace members; layering in §2.1
 │   ├── drm-types/                  # primitives, handles, status codes; zero dependencies
 │   ├── drm-core/                   # SHM backends, channels, rings, hazard pools, epochs, precommit
-│   │   └── src/{shm,channel,hazard,ring,epoch,alloc}/
+│   │   └── src/{shm,channel,hazard,ring,epoch,alloc}/  # shm/{segment,lock,process}=POSIX, shm/windows=Win32
 │   ├── drm-ffi/                    # canonical C ABI exports; drm.h single source of truth
 │   ├── drm-router/                 # boundary router: framing, priority lanes, traffic shaping
 │   ├── drm-spatial/                # spatial-temporal engine (Phase 33)

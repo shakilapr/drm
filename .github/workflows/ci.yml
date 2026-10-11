@@ -39,6 +39,19 @@ jobs:
       - name: traceability
         run: cargo xtask audit-traceability --registry
 
+  windows-smoke:
+    # Windows SHM + LockFileEx backend smoke (work-plan M12W1-E4-T2,
+    # windows-backends.md §Test Matrix): section create/map round-trip,
+    # precommit, and lock acquire/release. Platform-only suites are cfg(unix);
+    # the win_ suite is the blocking Windows platform gate.
+    # REQ: REQ-CORE-074, REQ-CORE-075, REQ-CORE-076, REQ-CORE-077, REQ-CORE-078.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable # honors rust-toolchain.toml
+      - name: windows shm + lock smoke
+        run: cargo test -p drm-core --lib win_
+
   corpus:
     # Blocking parser-corpus matrix (work-plan M01W3-E4-T1): counts must print
     # 30/30 valid + 30/30 invalid in the log. REQ: REQ-TOOL-001.

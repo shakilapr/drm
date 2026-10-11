@@ -70,6 +70,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror",
+ "windows-sys",
 ]
 
 [[package]]

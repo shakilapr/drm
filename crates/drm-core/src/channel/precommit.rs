@@ -186,7 +186,7 @@ impl std::fmt::Debug for PrecommittedChannel {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::{PrecommitProver, PrecommittedChannel, activate_precommitted};
     use crate::channel::{Channel, OverflowPolicy};

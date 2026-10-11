@@ -11,6 +11,17 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M12 W1 tranche: Phase 30 gate ([docs/gates/phase-30.md](docs/gates/phase-30.md),
+  the four work-plan #30 criteria ⇄ executable lane/shaping/reliability tests) and the
+  Windows runtime backend start ([windows-backends.md](docs/algorithms/runtime/windows-backends.md))
+  — `drm-core::shm::windows` (`WinShm` pagefile-backed sections via
+  `CreateFileMappingW`/`MapViewOfFile` with `ERROR_ALREADY_EXISTS` ⇒ `AlreadyExists` and
+  undersized `StaleIncomplete` classification; `WinLockBackend` non-blocking `LockFileEx`
+  on non-inheritable handles; `VirtualLock` precommit refusal; PID + creation-`FILETIME`
+  diagnostic identity), platform-selected `SegmentName`/`backend_segment_name` with
+  `windows_section_name`/`windows_name_conforms`, `drm-core` `cfg(windows)` `windows-sys`
+  dependency, and a `windows-smoke` CI job; POSIX-only suites are `cfg(unix)`-gated so
+  `cargo test -p drm-core --lib` compiles on both hosts.
 - Week M10 W1 tranche: router UDP path completion and TCP streams —
   `Router::routes_on(link)` (I-RT1: egress scans only the serviced link's route
   bindings, so a local-only topic never egresses; [route_filter.rs](crates/drm-router/tests/route_filter.rs)
