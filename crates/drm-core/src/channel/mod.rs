@@ -201,6 +201,15 @@ impl Channel {
         self.arena.layout.count
     }
 
+    /// Declared payload capacity: the exact copied length for a fixed-size
+    /// channel. Introspection tools size their private copy buffer from this
+    /// bound (observability-plane I-OB5, read-only observers).
+    /// REQ: REQ-OPS-003.
+    #[must_use]
+    pub fn sample_max(&self) -> u64 {
+        self.sample_max
+    }
+
     /// Required-consumer record by index (records `0..required_count`).
     #[must_use]
     pub fn required(&self, i: usize) -> Option<&RequiredSequential> {

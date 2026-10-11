@@ -21,6 +21,10 @@ pub enum CliError {
     Refused(String),
     /// `drm verify` reported negatives; the change is not safe to land.
     Verify(String),
+    /// Introspection target (deployment/topic/sample) is absent; a namespace
+    /// scoping miss, never a silent empty view (observability-plane.md Edge
+    /// Cases: tool attached to stale deployment namespace ⇒ `NotFound`).
+    NotFound(String),
 }
 
 impl CliError {
@@ -34,7 +38,8 @@ impl CliError {
             | Self::Lockfile(_)
             | Self::Manifest(_)
             | Self::Refused(_)
-            | Self::Verify(_) => 1,
+            | Self::Verify(_)
+            | Self::NotFound(_) => 1,
         }
     }
 }
@@ -47,7 +52,8 @@ impl fmt::Display for CliError {
             | Self::Lockfile(m)
             | Self::Manifest(m)
             | Self::Refused(m)
-            | Self::Verify(m) => f.write_str(m),
+            | Self::Verify(m)
+            | Self::NotFound(m) => f.write_str(m),
         }
     }
 }

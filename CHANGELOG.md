@@ -11,6 +11,24 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M15 W1 tranche: introspection tools (echo/hz/log) + diag daemon start.
+  NEW [drm-diag](crates/drm-diag) ops crate: `diag_sample` epoch sandwich
+  (I-OB7), `deadline_tick` state machine (I-OB4), sliding-window `RateWindow`
+  (I-OB3), and the read-only `Observer` (I-OB5). `drm-core` gains the wait-free
+  per-producer SPSC trace lanes + build-time dictionary
+  ([trace/mod.rs](crates/drm-core/src/trace/mod.rs); I-OB1/I-OB6,
+  REQ-OPS-014/015/017); the lock-free primitive stays in the runtime layer
+  (codebase.md §2.2 confines `unsafe`). `drm` gains read-only `echo`/`hz`/`log`
+  subcommands ([echo.rs](crates/drm-cli/src/echo.rs),
+  [hz.rs](crates/drm-cli/src/hz.rs), [log.rs](crates/drm-cli/src/log.rs)) that
+  resolve deployment metadata and attach as non-publishing observers. Phase 33
+  parser groundwork behind feature `spatial-grammar`
+  ([parser/spatial.rs](crates/drm-workspace/src/parser/spatial.rs); non-breaking,
+  corpus unaffected). MCU bring-up skeleton
+  ([bindings/c/mcu](bindings/c/mcu), `.github/workflows/mcu-cross.yml`). Gate
+  evidence [m15w1.md](docs/gates/m15w1.md), phase tracker
+  [phase-32.md](docs/gates/phase-32.md), [metrics-m15.md](docs/metrics/metrics-m15.md)
+  records `ECHO_GREEN = 1`, `HZ_GREEN = 1`, `DIAG_SKELETON = 1`.
 - Week M14 W4 tranche: tooling-wave design lock + month-14 review. NEW
   [rpc-design-seed.md](docs/spec/rpc-design-seed.md) seeds `drm-rpc`
   (correlated topic pairs, `u64` cid per client session never reused,

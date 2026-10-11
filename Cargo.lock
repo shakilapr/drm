@@ -55,6 +55,7 @@ name = "drm-cli"
 version = "0.1.0"
 dependencies = [
  "drm-core",
+ "drm-diag",
  "drm-types",
  "drm-workspace",
  "serde_json",
@@ -71,6 +72,14 @@ dependencies = [
  "serde_json",
  "thiserror",
  "windows-sys",
+]
+
+[[package]]
+name = "drm-diag"
+version = "0.1.0"
+dependencies = [
+ "drm-core",
+ "drm-types",
 ]
 
 [[package]]

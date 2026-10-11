@@ -5,11 +5,14 @@
 //! drm [--workspace <dir>] ids
 //! drm [--workspace <dir>] ids compact [--yes]
 //! drm [--workspace <dir>] assign <topic> (--consume <node> | --publish <node>)
+//! drm [--workspace <dir>] echo <topic> [--raw]
+//! drm [--workspace <dir>] hz <topic>
+//! drm [--workspace <dir>] log [<topic>] [--level <level>]
 //! drm [--workspace <dir>] help
 //! ```
 //!
 //! REQ: REQ-TOOL-080 (deterministic tooling), REQ-TOOL-038 (compaction is an
-//! explicit acknowledged action).
+//! explicit acknowledged action), REQ-OPS-003 (read-only introspection).
 
 use std::path::PathBuf;
 
@@ -67,6 +70,27 @@ pub enum Command {
         /// Stop after the initial build (smoke mode).
         once: bool,
     },
+    /// `drm echo <topic> [--raw]` — read-only momentary borrow+copy observer
+    /// (observability-plane.md I-OB5, REQ-OPS-003).
+    Echo {
+        /// Canonical topic path.
+        topic: String,
+        /// Emit raw hex instead of the human rendering.
+        raw: bool,
+    },
+    /// `drm hz <topic>` — observed vs declared rate (REQ-OPS-001).
+    Hz {
+        /// Canonical topic path.
+        topic: String,
+    },
+    /// `drm log [<topic>] [--level <level>]` — read-only application log view
+    /// over the trace ring (REQ-OPS-003, REQ-OPS-014).
+    Log {
+        /// Optional topic filter.
+        topic: Option<String>,
+        /// Minimum severity to display.
+        level: String,
+    },
     /// `drm help` / `-h` / `--help` / no arguments.
     Help,
 }
@@ -93,6 +117,9 @@ Usage:
   drm [--workspace <dir>] build [--target <node>]...
   drm [--workspace <dir>] info
   drm [--workspace <dir>] dev [--once]
+  drm [--workspace <dir>] echo <topic> [--raw]
+  drm [--workspace <dir>] hz <topic>
+  drm [--workspace <dir>] log [<topic>] [--level <level>]
   drm [--workspace <dir>] help
 
 Options:
@@ -100,6 +127,8 @@ Options:
   --yes                   Acknowledge handle compaction (required)
   --target <node>         Restrict `build` to a node (repeatable)
   --once                  `dev`: run the initial build only
+  --raw                   `echo`: print raw hex bytes
+  --level <level>         `log`: error|warn|info|debug|trace (default info)
   -h, --help              Print this help
 ";
 
@@ -117,6 +146,8 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
     let mut targets: Vec<String> = Vec::new();
     let mut consume: Option<String> = None;
     let mut publish: Option<String> = None;
+    let mut raw_hex = false;
+    let mut level = String::from("info");
 
     let mut i = 0;
     while i < raw.len() {
@@ -158,6 +189,17 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
                 yes = true;
                 i += 1;
             }
+            "--raw" => {
+                raw_hex = true;
+                i += 1;
+            }
+            "--level" => {
+                let v = raw
+                    .get(i + 1)
+                    .ok_or_else(|| "`--level` requires a level".to_string())?;
+                level.clone_from(v);
+                i += 2;
+            }
             "--help" | "-h" => {
                 return Ok(Args {
                     workspace,
@@ -172,20 +214,45 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
         }
     }
 
-    let command = build_command(&positionals, yes, once, targets, consume, publish)?;
+    let command = build_command(
+        &positionals,
+        Flags {
+            yes,
+            once,
+            raw_hex,
+            level,
+            targets,
+            consume,
+            publish,
+        },
+    )?;
     Ok(Args { workspace, command })
 }
 
-/// Maps positionals + collected flags into a [`Command`].
-/// REQ: REQ-TOOL-037, REQ-TOOL-038, REQ-TOOL-012.
-fn build_command(
-    positionals: &[String],
+/// Collected flag values for [`build_command`] (keeps the arity bounded).
+/// REQ: REQ-TOOL-012.
+struct Flags {
     yes: bool,
     once: bool,
+    raw_hex: bool,
+    level: String,
     targets: Vec<String>,
     consume: Option<String>,
     publish: Option<String>,
-) -> Result<Command, String> {
+}
+
+/// Maps positionals + collected flags into a [`Command`].
+/// REQ: REQ-TOOL-037, REQ-TOOL-038, REQ-TOOL-012, REQ-OPS-003.
+fn build_command(positionals: &[String], flags: Flags) -> Result<Command, String> {
+    let Flags {
+        yes,
+        once,
+        raw_hex,
+        level,
+        targets,
+        consume,
+        publish,
+    } = flags;
     match positionals.first().map(String::as_str) {
         Some("ids") => match positionals.get(1).map(String::as_str) {
             None => Ok(Command::Ids(IdsAction::Report)),
@@ -205,6 +272,27 @@ fn build_command(
         },
         Some("info") => Ok(Command::Info),
         Some("dev") => Ok(Command::Dev { once }),
+        Some("echo") => {
+            let topic = positionals
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "`echo` requires a <topic>".to_string())?;
+            Ok(Command::Echo {
+                topic,
+                raw: raw_hex,
+            })
+        }
+        Some("hz") => {
+            let topic = positionals
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "`hz` requires a <topic>".to_string())?;
+            Ok(Command::Hz { topic })
+        }
+        Some("log") => Ok(Command::Log {
+            topic: positionals.get(1).cloned(),
+            level,
+        }),
         Some("assign") => {
             let topic = positionals
                 .get(1)
@@ -300,6 +388,48 @@ mod tests {
     #[test]
     fn unknown_option_rejected() {
         assert!(super::parse(&["--nope".to_string()]).is_err());
+    }
+
+    /// REQ: REQ-OPS-003 — the read-only introspection tools parse their topic,
+    /// `--raw`, and `--level` shapes.
+    #[test]
+    fn introspection_shapes() {
+        let echo = super::parse(&[
+            "echo".to_string(),
+            "camera/front".to_string(),
+            "--raw".to_string(),
+        ])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(
+            echo.command,
+            super::Command::Echo {
+                topic: "camera/front".to_string(),
+                raw: true,
+            }
+        );
+        let hz = super::parse(&["hz".to_string(), "camera/front".to_string()])
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(
+            hz.command,
+            super::Command::Hz {
+                topic: "camera/front".to_string(),
+            }
+        );
+        let log = super::parse(&[
+            "log".to_string(),
+            "--level".to_string(),
+            "debug".to_string(),
+        ])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(
+            log.command,
+            super::Command::Log {
+                topic: None,
+                level: "debug".to_string(),
+            }
+        );
+        assert!(super::parse(&["echo".to_string()]).is_err());
+        assert!(super::parse(&["hz".to_string()]).is_err());
     }
 
     /// REQ: REQ-TOOL-012 — `build` accepts a positional workspace, `--target`

@@ -10,6 +10,12 @@ license.workspace = true
 drm-types = { path = "../drm-types" }
 toml.workspace = true
 
+[features]
+# Phase 33 parser groundwork: spatial field-type keywords + frame-path binding.
+# Off by default so the Phase-2 schema corpus is byte-for-byte unaffected
+# (spatial-types-design.md §3; work-plan M15W1-E2-T1).
+spatial-grammar = []
+
 [dev-dependencies]
 proptest.workspace = true
 toml.workspace = true

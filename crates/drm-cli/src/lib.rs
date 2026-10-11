@@ -7,19 +7,25 @@
 //! Implemented slice: `drm ids` (committed assignment-lockfile report +
 //! explicit compaction), `drm assign` (manifest mutation + verify), `drm build`
 //! (orchestrator, REQ-TOOL-012), `drm info` (read-only model projection,
-//! REQ-TOOL-045), and `drm dev` (watch skeleton, REQ-TOOL-016). Argument parsing
-//! is hand-written over [`std::env::args`](std::env::args) — no parser
-//! dependency. `#![forbid(unsafe_code)]` (facade).
+//! REQ-TOOL-045), `drm dev` (watch skeleton, REQ-TOOL-016), and the read-only
+//! introspection tools `drm echo`/`hz`/`log` (observability-plane I-OB5,
+//! REQ-OPS-003). Argument parsing is hand-written over
+//! [`std::env::args`](std::env::args) — no parser dependency.
+//! `#![forbid(unsafe_code)]` (facade).
 
 #![forbid(unsafe_code)]
 
 pub mod args;
 pub mod assign;
+pub mod attach;
 pub mod build;
 pub mod dev;
+pub mod echo;
 pub mod error;
+pub mod hz;
 pub mod ids;
 pub mod info;
+pub mod log;
 pub mod ws;
 
 pub use args::{Args, Command, Direction, IdsAction};
@@ -54,6 +60,9 @@ pub fn run(raw: &[String]) -> Result<(), CliError> {
         }
         Command::Info => info::run(&args.workspace),
         Command::Dev { once } => dev::run(&args.workspace, once),
+        Command::Echo { topic, raw } => echo::run(&args.workspace, &topic, raw),
+        Command::Hz { topic } => hz::run(&args.workspace, &topic),
+        Command::Log { topic, level } => log::run(&args.workspace, topic.as_deref(), &level),
     }
 }
 

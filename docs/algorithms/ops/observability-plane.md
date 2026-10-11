@@ -130,6 +130,29 @@ Design reviewed against architecture §Two-Plane Architecture (Observability Pla
 - [x] Deadline state machine `WaitingFirst → Current ⇄ Late`; one `miss_count` increment per `Current → Late`; non-`exact` channels report no deadline state (I-OB4, `REQ-OPS-016`).
 - [x] Introspection tools never publish and release borrows immediately (I-OB5, `REQ-OPS-003`).
 
+## Implementation Status (M15W1)
+
+Phase 32 wave A landed the trace/diag slice. The lock-free SPSC primitive lives
+in `drm-core::trace` (runtime layer) because codebase.md §2.2 confines `unsafe`
+to `drm-core`/`drm-ffi`; the `drm-trace` crate composes it safely and lands with
+the trace reader/merge. `drm-diag` (ops) aggregates counters, observed rate,
+per-consumer deadline state, and the epoch sandwich, and provides the read-only
+`Observer` used by `drm echo`/`hz`/`log`.
+
+| Element | Location | Test |
+|---|---|---|
+| `TraceRingSet`/`TraceLane`/`TraceEvent`, `trace_emit`, `trace_register_thread` | `crates/drm-core/src/trace/mod.rs` | `trace_never_blocks`, `trace_lane_exhaustion`, `trace_drop_counter` |
+| `TraceDict` + `dict_version` | `crates/drm-core/src/trace/mod.rs` | `trace_dict_roundtrip` |
+| `diag_sample` (epoch sandwich), `deadline_tick`, `RateWindow`, `Observer` | `crates/drm-diag/src/lib.rs` | `diag_no_overhead`, `diag_epoch_sandwich`, `diag_observed_rate`, `diag_deadline_matrix`, `introspect_no_pin` |
+| `drm echo`/`hz`/`log` | `crates/drm-cli/src/{echo,hz,log}.rs` | `echo_copies_and_reports_empty`, `hz_tolerance`, `render_and_filter` |
+
+Live SHM attach for the tools is deferred to the diag session; the tools resolve
+deployment metadata and report `NotFound` without a running publisher
+(namespace scoping, Edge Cases). No invariant changed.
+
+REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-014, REQ-OPS-015,
+REQ-OPS-016, REQ-OPS-017, REQ-CORE-093, REQ-CORE-094.
+
 ## Edge Cases & Errors
 
 | Case | Result |

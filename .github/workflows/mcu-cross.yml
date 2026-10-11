@@ -1,0 +1,34 @@
+# MCU cross-compile + zero-forbidden-heap audit (work-plan M15W1-E3-T1/T2;
+# docs/spec/mcu-bring-up.md §4/§5; serial-mcu.md I-SR5).
+# REQ: REQ-CORE-087, REQ-OPS-004.
+name: mcu-cross
+
+on:
+  pull_request:
+    paths:
+      - "bindings/c/**"
+      - "crates/drm-router/src/transport/serial.rs"
+      - ".github/workflows/mcu-cross.yml"
+  workflow_dispatch:
+
+jobs:
+  cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Arm toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: "13.3.Rel1"
+      - name: Cross-compile hello-world firmware (both targets)
+        run: make -C bindings/c/mcu all
+      - name: Zero-forbidden-heap symbol audit
+        run: |
+          set -euo pipefail
+          for obj in bindings/c/mcu/hello/*.o; do
+            if arm-none-eabi-nm "$obj" | grep -E ' (malloc|calloc|realloc|free)$'; then
+              echo "forbidden allocator symbol reachable from $obj"
+              exit 1
+            fi
+          done
+          echo "mcu-cross: zero forbidden allocator symbols"
