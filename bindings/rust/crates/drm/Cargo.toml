@@ -1,0 +1,18 @@
+[package]
+name = "drm"
+description = "Safe Rust SDK over the drm-ffi C ABI; borrow guards tied to the consumer lifetime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+drm-ffi = { path = "../../../../crates/drm-ffi" }
+drm-types = { path = "../../../../crates/drm-types" }
+
+[dev-dependencies]
+# Compile-fail set (codebase.md 4.1). Pinned for reproducible diagnostics.
+trybuild = "=1.0.122"
+
+[lints]
+workspace = true

@@ -8,6 +8,7 @@ members = [
     "crates/drm-router",
     "crates/drm-cli",
     "crates/drm-ffi",
+    "bindings/rust/crates/drm",
     "xtask",
 ]
 exclude = ["tests/fuzz"]

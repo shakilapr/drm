@@ -1,0 +1,10 @@
+error[E0382]: borrow of moved value: `guard`
+ --> tests/ui/moved_from_guard.rs:8:13
+  |
+5 | fn use_after_move(guard: BorrowGuard<'_>) {
+  |                   ----- move occurs because `guard` has type `BorrowGuard<'_>`, which does not implement the `Copy` trait
+6 |     let moved = guard;
+  |                 ----- value moved here
+7 |     let _ = moved.payload();
+8 |     let _ = guard.payload();
+  |             ^^^^^ value borrowed here after move

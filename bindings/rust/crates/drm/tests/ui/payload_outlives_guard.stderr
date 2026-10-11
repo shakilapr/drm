@@ -1,0 +1,8 @@
+error[E0515]: cannot return value referencing function parameter `guard`
+ --> tests/ui/payload_outlives_guard.rs:8:5
+  |
+8 |     guard.payload()
+  |     -----^^^^^^^^^^
+  |     |
+  |     returns a value referencing data owned by the current function
+  |     `guard` is borrowed here
