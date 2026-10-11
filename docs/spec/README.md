@@ -11,7 +11,7 @@ Owned by E2 unless noted. Written by the weekly plan named in each file's header
 |---|---|---|
 | `schema-grammar.md` | 2 | `docs/algorithms/toolchain/schema-parser.md` §Grammar |
 | `DIAGNOSTICS.md` | 2 | `docs/algorithms/toolchain/schema-parser.md` §Diagnostics Vocabulary |
-| `routing-derivation.md` | 28 (draft M01) | `docs/algorithms/toolchain/route-derivation.md` |
+| `routing-derivation.md` | 28 (pointer only; absorbed M09W3) | `docs/algorithms/toolchain/route-derivation.md` |
 | `transport-capabilities.md` | 29 (draft M01) | `docs/algorithms/router/router-core.md`, `lanes-shaping.md`, `serial-mcu.md` |
 | `metadata-layout.md` | 5 | `docs/architecture.md` §No Universal Envelope, `docs/algorithms/canon-codec.md` |
 | `abi-policy.md` | 7 | `docs/algorithms/bindings/c-abi-surface.md`; ADR 0002 |

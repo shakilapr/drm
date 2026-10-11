@@ -89,3 +89,37 @@ Notes:
   `V-RT` facts.
 - Full Phase 26 gate (all `V-*` families incl. `V-SPAT`/`V-RPC`/`V-REC`) lands at
   M09W3.
+
+## M09W3 — Phase 25 Gate, Verify Negatives v2, Route Doc Absorption
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 25)` | PASS | PASS — [phase-25.md](../gates/phase-25.md) (I-BO1..I-BO4 + I-BO5..I-BO8 supporting; adapter matrix; dev smoke) |
+| `VERIFY_NEGATIVES_V2` | framing/reliability/budget/compatibility negatives green | `cargo test -p drm-workspace --test verify_negatives_v2`: 7/7 green — `V-RT` (framing overflow, ambiguous route, no route), `V-REL` (reliable over UDP + serial), `V-MEM` (budget/lockable/pool invariant), `V-CMP` (reject without a required sequential consumer), collect-all, route integration |
+| `ROUTE_DOC` | route-derivation.md merged; old spec absorbed | [route-derivation.md](../algorithms/toolchain/route-derivation.md) normative; [routing-derivation.md](../spec/routing-derivation.md) is now a pointer (M09W3-E3-T0) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Verify negatives v2 `crates/drm-workspace/tests/verify_negatives_v2.rs`:
+  multiple negative fixtures per `V-RT`/`V-REL`/`V-MEM`/`V-CMP` check, each
+  rejected with its check ID and a REQ-cited message; valid equivalents pass;
+  `I-V5` collect-all across the four families; route integration proves `V-RT`
+  consumes the single `topology::derive` output (an ambiguous diamond surfaces
+  as a `V-RT` fact naming the topic).
+- Dev-mode smoke `crates/drm-cli/tests/dev_smoke.rs`: `drm dev --once` green
+  and successive dev cycles after scripted declaration + application-source
+  edits on a scratch `examples/mixed_robot` (never the committed tree).
+- Phase 25 gate evidence ([phase-25.md](../gates/phase-25.md)).
+- Route-derivation absorption: [routing-derivation.md](../spec/routing-derivation.md)
+  replaced by a pointer to the normative algorithm doc.
+- CI job `toolchain` extended with `verify_negatives_v2` and `dev_smoke` steps.
+
+Notes:
+
+- `V-RT` rejects at two levels, both from the single derivation source: route
+  derivation errors (`Ambiguous`, `NoRoute`, `ConflictingRouteOverride`) and the
+  encoded-frame fit against `max_datagram_payload`.
+- The dev smoke is deterministic by design (build cycles, not a live watcher):
+  the poller and debounce core is covered independently by `watch_dispatch.rs`.
+

@@ -50,16 +50,21 @@ jobs:
         run: cargo test -p drm-workspace --test fixtures_valid --test parser_corpus -- --nocapture
 
   toolchain:
-    # Static verify engine v1 + dev watch suite (work-plan M09W2-E2-T1/T2,
-    # E4-T1): verify negatives v1 and I-BO2..I-BO4 stay green.
+    # Static verify engine + dev watch suite (work-plan M09W2-E2-T1/T2,
+    # M09W3-E2-T2/T3, E4-T2): verify negatives v1/v2, I-BO2..I-BO4, and the
+    # scripted dev-mode smoke stay green blocking.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: verify engine
         run: cargo test -p drm-workspace --test verify_engine
+      - name: verify negatives v2
+        run: cargo test -p drm-workspace --test verify_negatives_v2
       - name: dev watch suite
         run: cargo test -p drm-workspace --test watch_dispatch
+      - name: dev-mode smoke
+        run: cargo test -p drm-cli --test dev_smoke
 
   conformance:
     # Golden primitive parity across decoders (tests/conformance/README.md).
