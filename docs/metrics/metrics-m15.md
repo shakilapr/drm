@@ -68,3 +68,63 @@ cargo test -p drm-workspace --features spatial-grammar spatial
 cargo xtask audit-traceability
 cargo xtask check-layering
 ```
+
+## M15W2 — Diag Daemon, Record Core Start
+
+| Variable | Target | Measured |
+|---|---|---|
+| `DIAG_RATE_GREEN` | observed rate matches injected knowns (I-OB3) | 1 — `drm-diag` `RateWindow` `diag_observed_rate` matches 10/100/1000 Hz injected sequences within 1%, and a burst window reports its own high rate then decays to idle |
+| `DIAG_DEADLINES` | injected deadline-miss matrix detected (I-OB4) | 1 — `diag_deadline_matrix` (burst vs even traffic, multi-deadline consumers, startup silence, publisher death, recover-between-polls) + `diag_condition_matrix` (missed deadline, gap, pool exhaustion, epoch change, link down) |
+| `DIAG_NO_OVERHEAD` | with/without diag latency unchanged (I-OB2) | 1 — `diag_sample` reads a `ChannelView` only; `diag_no_overhead` shows counters bit-identical before/after, `diag_epoch_sandwich` discards torn reads |
+| `RECORDER_INGRESS` | borrow-copy-release loop green (I-RC1) | 1 — `drm-record` `record_borrow_scope`: 0 borrows held during disk-stage drains, peak ≤ 1 across 200 samples |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Diag aggregation** (`crates/drm-diag`): `Aggregator` + `DiagReport::render`
+  (channel counters, per-consumer deadline states, link stats), `ChannelView`
+  decoupling the sampler from the runtime type. Tests `diag_aggregate_report`,
+  `fresh_channel_stats`.
+- **Deadline matrix** (`crates/drm-diag`): `DeadlineState`
+  (`WaitingFirst/Current/Late`), `ConsumerStats`, `deadline_tick` (one
+  `miss_count` per `Current → Late`), `Condition`/`DiagSignals::detect` for the
+  five architecture-defined conditions. Tests `diag_deadline_matrix`,
+  `diag_condition_matrix`.
+- **Record core** (`crates/drm-record`, ops): `Recorder::ingress_step`
+  (borrow → copy into a per-topic slab slot → release, I-RC1), per-topic
+  `TopicSlab` sized to each topic's bound (I-RC2), `OnFull {Drop,Stop,
+  Backpressure}` (I-RC3), `GapLedger` coalesced ranges + `gap_detail_lost`
+  (I-RC5), global-order `DescEntry` ring. `#![forbid(unsafe_code)]`. Tests
+  `record_borrow_scope`, `record_bounded`, `record_policies`,
+  `record_gap_ledger`, `desc_fields`.
+- **MCU zero-heap data path** (`bindings/c/mcu`): `drm_node.{h,c}` static SPSC
+  topic ring (I-SR5, `REQ-CORE-087`); `drm_serial.{h,c}` COBS + CRC32C bounded
+  framing (I-SR2..I-SR4, `REQ-OPS-004`); `selftest.c` host parity over the golden
+  COBS/CRC vectors. `make host-test`, `make host-audit`; `mcu-cross.yml` runs
+  parity + zero-forbidden-heap symbol audit on both locked targets.
+
+Notes:
+
+- No architecture divergence: pinned invariants only (observability-plane
+  I-OB2/3/4/5/7, record-replay I-RC1/2/3/5, serial-mcu I-SR2..I-SR6); no ADR.
+- `drm-record` is projected in codebase.md §2.1 as an ops crate; disk threads,
+  MCAP framing, and replay are carried to M15W3/M15W4.
+- MCU parity/audit legs run with the host compiler locally; the Arm cross-build
+  executes in CI (`mcu-cross.yml`).
+
+### Weekly gate checklist (chaired by E1, Friday)
+
+- [x] `DIAG_RATE_GREEN = 1`; `DIAG_DEADLINES = 1`; `DIAG_NO_OVERHEAD = 1`; `RECORDER_INGRESS = 1`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M15W2) = PASS`**
+
+### How to reproduce
+
+```text
+cargo test -p drm-diag
+cargo test -p drm-record
+make -C bindings/c/mcu host-test
+make -C bindings/c/mcu host-audit
+cargo xtask audit-traceability
+cargo xtask check-layering
+```

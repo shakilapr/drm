@@ -16,12 +16,14 @@ Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
 |---|---|---|
 | Trace lanes never block producers; best-effort drop counted | [m15w1.md](m15w1.md); `drm-core` `trace_never_blocks`/`trace_lane_exhaustion`/`trace_drop_counter` (I-OB1/I-OB6) | PASS |
 | Compiled numeric IDs + build-time dictionary | `TraceDict`/`DictVersion`; `trace_dict_roundtrip` (I-OB2, REQ-OPS-014) | PASS |
-| Diagnostics out-of-band; observed rate vs declared; deadline state | `drm-diag` `diag_no_overhead`/`diag_observed_rate`/`diag_deadline_matrix`/`diag_epoch_sandwich` (I-OB2/3/4/7) | PASS |
+| Diagnostics out-of-band; observed rate vs declared; deadline state | `drm-diag` `diag_no_overhead`/`diag_observed_rate`/`diag_deadline_matrix`/`diag_epoch_sandwich` (I-OB2/3/4/7); aggregation + condition matrix [m15w2.md](m15w2.md) | PASS |
 | Introspection read-only; cannot pin bulk samples | `introspect_no_pin`; `drm echo`/`hz`/`log` (I-OB5, REQ-OPS-003) | PASS |
 | Spatial parser groundwork (non-breaking) | `parser/spatial.rs` feature `spatial-grammar`; corpus unaffected (M15W1-E2-T1) | PASS |
-| MCU toolchain + hello-world bring-up | `bindings/c/mcu/`; `mcu-cross.yml` (M15W1-E3-T1/T2) | skeleton |
-| Serial framing interop byte-for-byte | existing `drm-router::transport::serial` COBS/CRC32C + cross-OS host-loopback (REQ-OPS-004) | PASS (host) |
-| Record/replay, RPC/actions, full diag daemon | scheduled M16–M18 | pending |
+| MCU toolchain + hello-world bring-up | `bindings/c/mcu/`; `mcu-cross.yml` (M15W1-E3-T1/T2) | PASS |
+| MCU zero-heap data path + serial framing parity | `drm_node.{h,c}` static SPSC ring (I-SR5, REQ-CORE-087); `drm_serial.{h,c}` COBS/CRC32C (I-SR2..I-SR4); `make host-test`/`host-audit`; [m15w2.md](m15w2.md) | PASS (host + CI) |
+| Serial framing interop byte-for-byte | `drm-router::transport::serial` COBS/CRC32C + cross-OS host-loopback; MCU host parity (REQ-OPS-004) | PASS (host) |
+| Record-core ingress (borrow-copy-release, bounded slabs, policies) | `crates/drm-record`; `record_borrow_scope`/`record_bounded`/`record_policies`/`record_gap_ledger` (I-RC1/2/3/5); [m15w2.md](m15w2.md) | PASS |
+| Record/replay disk stage + MCAP, RPC/actions, full diag daemon | scheduled M16–M18 | pending |
 
 ## Notes
 
@@ -29,6 +31,7 @@ Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
 - Remaining Phase 32 output (`drm record`, replay, `drm diag`, RPC/actions,
   constrained-device data path) is tracked in the M16–M19 weekly plans.
 
-REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004, REQ-OPS-014,
-REQ-OPS-015, REQ-OPS-016, REQ-OPS-017, REQ-CORE-087, REQ-CORE-093,
-REQ-CORE-094, REQ-QAL-006.
+REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004, REQ-OPS-005,
+REQ-OPS-007, REQ-OPS-008, REQ-OPS-014, REQ-OPS-015, REQ-OPS-016,
+REQ-OPS-017, REQ-OPS-018, REQ-OPS-019, REQ-CORE-087, REQ-CORE-093,
+REQ-CORE-094, REQ-ROUTE-025, REQ-ROUTE-026, REQ-QAL-006.

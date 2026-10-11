@@ -265,6 +265,205 @@ pub struct LinkStats {
     pub lane_realtime_starve_events: u64,
 }
 
+/// One channel's aggregated diagnostics view: cumulative counters plus the
+/// per-`(topic, consumer endpoint)` deadline states (`observability-plane.md`
+/// §Data Structures).
+/// REQ: REQ-OPS-001.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChannelAgg {
+    /// Human topic/channel name.
+    pub name: String,
+    /// Channel facts read out-of-band.
+    pub stats: ChannelStats,
+    /// Per-consumer deadline tracking for this channel's topic.
+    pub consumers: Vec<ConsumerStats>,
+}
+
+/// Full out-of-band report: channel stats + consumer deadlines + link stats.
+/// Read-only projection (`I-OB2`); rendering never touches a data path.
+/// REQ: REQ-OPS-001.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DiagReport {
+    /// Per-channel aggregated views.
+    pub channels: Vec<ChannelAgg>,
+    /// Per-link stats (router plane).
+    pub links: Vec<LinkStats>,
+}
+
+impl DiagReport {
+    /// Renders a terse human report for `drm echo`/`hz`/`log`-style output.
+    /// REQ: REQ-OPS-001.
+    #[must_use]
+    pub fn render(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        let _ = writeln!(out, "channels: {}", self.channels.len());
+        for c in &self.channels {
+            let _ = writeln!(
+                out,
+                "  {}: seq={} drop={} overrun={} pool_exhausted={} epoch={} rate={:.3}Hz commit={}",
+                c.name,
+                c.stats.last_sequence,
+                c.stats.drop_count,
+                c.stats.overrun_count,
+                c.stats.pool_exhausted,
+                c.stats.publisher_epoch,
+                c.stats.observed_rate_hz,
+                c.stats
+                    .last_commit_mono_ns
+                    .map_or_else(|| "-".to_string(), |t| t.to_string()),
+            );
+            for consumer in &c.consumers {
+                let _ = writeln!(
+                    out,
+                    "    consumer {} topic {}: deadline={}ns state={:?} misses={}",
+                    consumer.consumer_endpoint_id,
+                    consumer.topic_id,
+                    consumer.deadline_ns,
+                    consumer.state,
+                    consumer.miss_count,
+                );
+            }
+        }
+        let _ = writeln!(out, "links: {}", self.links.len());
+        for l in &self.links {
+            let _ = writeln!(
+                out,
+                "  nominal_bps={} observed_bps={} bucket_drops={} lane_starve={}",
+                l.nominal_bps, l.observed_bps, l.bucket_drops, l.lane_realtime_starve_events,
+            );
+        }
+        out
+    }
+}
+
+/// Out-of-band aggregation over channels and links (`I-OB2`): `sample` reads a
+/// [`ChannelView`] through [`diag_sample`] and stores the snapshot; `report`
+/// freezes a read-only [`DiagReport`]. Aggregation never runs on the data path.
+/// REQ: REQ-OPS-001, REQ-OPS-002.
+#[derive(Debug, Default)]
+pub struct Aggregator {
+    channels: Vec<ChannelAgg>,
+    links: Vec<LinkStats>,
+}
+
+impl Aggregator {
+    /// Empty aggregator.
+    /// REQ: REQ-OPS-001.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Samples one channel (epoch sandwich) and records its stats plus the
+    /// supplied per-consumer deadline states, replacing any prior snapshot for
+    /// `name`. Returns the freshly sampled stats.
+    /// REQ: REQ-OPS-001, REQ-OPS-002.
+    pub fn sample<V: ChannelView>(
+        &mut self,
+        name: &str,
+        consumers: Vec<ConsumerStats>,
+        view: &V,
+    ) -> ChannelStats {
+        let stats = diag_sample(view);
+        if let Some(existing) = self.channels.iter_mut().find(|c| c.name == name) {
+            existing.stats = stats;
+            existing.consumers = consumers;
+        } else {
+            self.channels.push(ChannelAgg {
+                name: name.to_string(),
+                stats,
+                consumers,
+            });
+        }
+        stats
+    }
+
+    /// Records one link's reported stats.
+    /// REQ: REQ-OPS-001.
+    pub fn add_link(&mut self, link: LinkStats) {
+        self.links.push(link);
+    }
+
+    /// Freezes the current aggregation into a read-only report.
+    /// REQ: REQ-OPS-001.
+    #[must_use]
+    pub fn report(&self) -> DiagReport {
+        DiagReport {
+            channels: self.channels.clone(),
+            links: self.links.clone(),
+        }
+    }
+
+    /// Number of sampled channels.
+    /// REQ: REQ-OPS-001.
+    #[must_use]
+    pub fn channel_count(&self) -> usize {
+        self.channels.len()
+    }
+}
+
+/// Architecture-defined condition detected out-of-band by diag
+/// (`observability-plane.md` §Invariants I-OB4, §Test Matrix
+/// `diag_deadline_matrix`).
+/// REQ: REQ-OPS-001, REQ-OPS-016.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Condition {
+    /// A consumer's latest commit age met or exceeded its deadline.
+    MissedDeadline,
+    /// A history lap was reported by a consumer `Gap` outcome.
+    Gap,
+    /// The channel's payload pool reported exhaustion.
+    PoolExhausted,
+    /// The publisher epoch changed between polls (restart).
+    EpochChange,
+    /// A monitored link is down.
+    LinkDown,
+}
+
+/// Injected signals for one diag poll, mapped to [`Condition`]s by
+/// [`DiagSignals::detect`]. This is the detection surface the deadline matrix
+/// exercises (`I-OB4`).
+/// REQ: REQ-OPS-001, REQ-OPS-016.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DiagSignals {
+    /// Publisher epoch observed at the previous poll.
+    pub prev_epoch: u32,
+    /// Current channel stats snapshot.
+    pub stats: ChannelStats,
+    /// Current per-consumer deadline state.
+    pub deadline: DeadlineState,
+    /// Whether the monitored link is down.
+    pub link_down: bool,
+}
+
+impl DiagSignals {
+    /// Detects every active condition, in the fixed order
+    /// `MissedDeadline, Gap, PoolExhausted, EpochChange, LinkDown`. `expected_rate`
+    /// alone never enables timing; detection is observational (`I-OB4`).
+    /// REQ: REQ-OPS-001, REQ-OPS-016.
+    #[must_use]
+    pub fn detect(&self) -> Vec<Condition> {
+        let mut out = Vec::new();
+        if self.deadline == DeadlineState::Late {
+            out.push(Condition::MissedDeadline);
+        }
+        if self.stats.overrun_count > 0 {
+            out.push(Condition::Gap);
+        }
+        if self.stats.pool_exhausted > 0 {
+            out.push(Condition::PoolExhausted);
+        }
+        if self.stats.publisher_epoch != self.prev_epoch {
+            out.push(Condition::EpochChange);
+        }
+        if self.link_down {
+            out.push(Condition::LinkDown);
+        }
+        out
+    }
+}
+
 /// Non-publishing introspection observer (`I-OB5`): owns a reader cursor and a
 /// private copy buffer; every read is a momentary borrow copied out and
 /// released immediately. Holds zero hazard slots between calls.

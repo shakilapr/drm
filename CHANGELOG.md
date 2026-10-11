@@ -11,6 +11,24 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M15 W2 tranche: diag aggregation/deadline matrix, record-core start,
+  MCU zero-heap data path. `drm-diag` gains the out-of-band `Aggregator` +
+  `DiagReport` (channel counters, per-consumer deadline states, link stats;
+  I-OB2), the `DeadlineState` machine + `deadline_tick` (I-OB4), and the
+  `Condition`/`DiagSignals::detect` matrix for missed deadline, gap, pool
+  exhaustion, epoch change, and link down. NEW [drm-record](crates/drm-record)
+  ops crate: `Recorder::ingress_step` borrow-copy-release (`I-RC1`,
+  REQ-OPS-005/007), per-topic `TopicSlab` pools with an exact byte budget
+  (`I-RC2`, REQ-OPS-019), `OnFull {Drop,Stop,Backpressure}` (`I-RC3`,
+  REQ-OPS-008), and the coalesced `GapLedger` (`I-RC5`, REQ-OPS-018). MCU
+  freestanding subset gains the zero-heap static SPSC ring
+  ([drm_node.c](bindings/c/mcu/drm_node.c); `I-SR5`, REQ-CORE-087) and bounded
+  COBS/CRC32C serial framing ([drm_serial.c](bindings/c/mcu/drm_serial.c);
+  I-SR2..I-SR4, REQ-OPS-004) with a host parity self-test and zero-forbidden-heap
+  symbol audit wired into [mcu-cross.yml](.github/workflows/mcu-cross.yml). Gate
+  evidence [m15w2.md](docs/gates/m15w2.md); [metrics-m15.md](docs/metrics/metrics-m15.md)
+  records `DIAG_RATE_GREEN = 1`, `DIAG_DEADLINES = 1`, `DIAG_NO_OVERHEAD = 1`,
+  `RECORDER_INGRESS = 1`.
 - Week M15 W1 tranche: introspection tools (echo/hz/log) + diag daemon start.
   NEW [drm-diag](crates/drm-diag) ops crate: `diag_sample` epoch sandwich
   (I-OB7), `deadline_tick` state machine (I-OB4), sliding-window `RateWindow`

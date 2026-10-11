@@ -22,13 +22,10 @@ jobs:
           release: "13.3.Rel1"
       - name: Cross-compile hello-world firmware (both targets)
         run: make -C bindings/c/mcu all
+      - name: Host parity self-test (golden COBS/CRC vectors)
+        run: make -C bindings/c/mcu host-test
       - name: Zero-forbidden-heap symbol audit
         run: |
           set -euo pipefail
-          for obj in bindings/c/mcu/hello/*.o; do
-            if arm-none-eabi-nm "$obj" | grep -E ' (malloc|calloc|realloc|free)$'; then
-              echo "forbidden allocator symbol reachable from $obj"
-              exit 1
-            fi
-          done
-          echo "mcu-cross: zero forbidden allocator symbols"
+          make -C bindings/c/mcu audit
+          make -C bindings/c/mcu host-audit

@@ -8,8 +8,8 @@ use std::cell::Cell;
 use std::sync::atomic::Ordering;
 
 use super::{
-    ChannelStats, ChannelView, ConsumerStats, DeadlineState, LogCatalog, LogLevel, Observer,
-    RateWindow, deadline_tick, diag_sample,
+    Aggregator, ChannelStats, ChannelView, Condition, ConsumerStats, DeadlineState, DiagSignals,
+    LinkStats, LogCatalog, LogLevel, Observer, RateWindow, deadline_tick, diag_sample,
 };
 use drm_core::channel::ccb::ChannelCounters;
 use drm_core::channel::{Channel, OverflowPolicy, ReadOutcome};
@@ -263,4 +263,125 @@ fn fresh_channel_stats() {
     assert_eq!(stats.last_sequence, 0);
     assert_eq!(stats.drop_count, 0);
     assert!(stats.observed_rate_hz.abs() < f64::EPSILON);
+}
+
+/// REQ: REQ-OPS-001, REQ-OPS-002 — the aggregator samples multiple channels
+/// out-of-band and renders a complete read-only report with channel, consumer,
+/// and link facts (`I-OB2`).
+#[test]
+fn diag_aggregate_report() {
+    let c1 = ch();
+    let c2 = ch();
+    assert!(c1.publish(&[1_u8; 16]).is_ok());
+    let mut agg = Aggregator::new();
+    let consumers = vec![ConsumerStats::new(1, 7, 1_000)];
+    let stats = agg.sample("camera/front", consumers, &c1);
+    assert_eq!(stats.last_sequence, 0, "one publish ⇒ last_sequence 0");
+    agg.sample("imu", Vec::new(), &c2);
+    agg.add_link(LinkStats {
+        nominal_bps: 1_000_000,
+        observed_bps: 900_000,
+        bucket_drops: 2,
+        lane_realtime_starve_events: 0,
+    });
+    assert_eq!(agg.channel_count(), 2);
+
+    let report = agg.report();
+    assert_eq!(report.channels.len(), 2);
+    assert_eq!(report.links.len(), 1);
+    let text = report.render();
+    assert!(text.contains("channels: 2"), "{text}");
+    assert!(text.contains("camera/front"), "{text}");
+    assert!(text.contains("consumer 1 topic 7"), "{text}");
+    assert!(text.contains("links: 1"), "{text}");
+    assert!(text.contains("bucket_drops=2"), "{text}");
+
+    // Resampling replaces the stored snapshot (no duplicate channel rows).
+    let _ = agg.sample("camera/front", Vec::new(), &c1);
+    assert_eq!(agg.channel_count(), 2);
+    assert_eq!(agg.report().channels[0].consumers.len(), 0);
+}
+
+/// REQ: REQ-OPS-001, REQ-OPS-016 — I-OB4: the diag condition matrix detects
+/// every architecture-defined condition — missed deadline, gap, pool
+/// exhaustion, epoch change, link down — individually and together.
+#[test]
+fn diag_condition_matrix() {
+    let base = ChannelStats {
+        last_sequence: 0,
+        drop_count: 0,
+        overrun_count: 0,
+        publisher_epoch: 0,
+        pool_exhausted: 0,
+        observed_rate_hz: 0.0,
+        last_commit_mono_ns: None,
+    };
+    let clean = DiagSignals {
+        prev_epoch: 0,
+        stats: base,
+        deadline: DeadlineState::WaitingFirst,
+        link_down: false,
+    };
+    assert!(clean.detect().is_empty(), "no condition on a quiet channel");
+
+    let missed = DiagSignals {
+        deadline: DeadlineState::Late,
+        ..clean
+    };
+    assert_eq!(missed.detect(), vec![Condition::MissedDeadline]);
+
+    let gap = DiagSignals {
+        stats: ChannelStats {
+            overrun_count: 3,
+            ..base
+        },
+        ..clean
+    };
+    assert_eq!(gap.detect(), vec![Condition::Gap]);
+
+    let pool = DiagSignals {
+        stats: ChannelStats {
+            pool_exhausted: 1,
+            ..base
+        },
+        ..clean
+    };
+    assert_eq!(pool.detect(), vec![Condition::PoolExhausted]);
+
+    let epoch = DiagSignals {
+        stats: ChannelStats {
+            publisher_epoch: 4,
+            ..base
+        },
+        ..clean
+    };
+    assert_eq!(epoch.detect(), vec![Condition::EpochChange]);
+
+    let link = DiagSignals {
+        link_down: true,
+        ..clean
+    };
+    assert_eq!(link.detect(), vec![Condition::LinkDown]);
+
+    let all = DiagSignals {
+        prev_epoch: 0,
+        stats: ChannelStats {
+            overrun_count: 1,
+            pool_exhausted: 1,
+            publisher_epoch: 1,
+            ..base
+        },
+        deadline: DeadlineState::Late,
+        link_down: true,
+    };
+    assert_eq!(
+        all.detect(),
+        vec![
+            Condition::MissedDeadline,
+            Condition::Gap,
+            Condition::PoolExhausted,
+            Condition::EpochChange,
+            Condition::LinkDown,
+        ]
+    );
 }
