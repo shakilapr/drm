@@ -171,6 +171,21 @@ fn flush(&mut self, topic: &EventTopic) {
 1. Entry created when a cancel arrives before its request (or while the request is queued); consumed when that request is admitted.
 2. Evicted when its cid counter window passes or on session/epoch change; bounded capacity; oldest-entry eviction + counter — never unbounded growth.
 
+## Design Confirmation (M14W4)
+
+RPC design seeded against architecture.md §drm-rpc and this doc's I-RPC1..I-RPC11; the
+seed is recorded in [rpc-design-seed.md](../../spec/rpc-design-seed.md). No invariant changed.
+
+- [x] Correlated topic pairs: each client owns `request/<client_id>` + `cancel/<client_id>` and consumes `event/<client_id>`; one publisher per canonical topic; server fan-in is an explicit deterministic round-robin multiplexer (I-RPC1, I-RPC5, `REQ-OPS-012`/`REQ-OPS-013`).
+- [x] `CorrelationId {client_id, session_nonce, counter}`: `counter` is a `u64` per client session, never reused and never wrapped; exhaustion closes the session with `SequenceExhausted` (I-RPC1, I-RPC10, `REQ-OPS-025`).
+- [x] Deterministic cancel at phase boundaries: the reactor polls cancel topics every loop iteration, sets `cancel_requested` before dispatching new work, and commits `CancelAccepted` for non-terminal operations; no new phase starts after token observation, then `Terminal(Cancelled)` (I-RPC2, I-RPC8, `REQ-OPS-010`/`REQ-OPS-011`).
+- [x] Deadline semantics: the wire carries relative `remaining_budget_ns`; the server derives `server_deadline = now + budget` in its own clock domain; late terminals are dropped stale by cid; a client timeout emits `RpcTimeout` plus a best-effort `Cancel` (I-RPC3, `REQ-OPS-023`).
+- [x] Core-untouched (architecture I-R4 / I-RPC4): rpc adds zero new channel semantics — only the declared generated topics; codegen injects `reliability = reliable` (I-RPC11, `REQ-OPS-024`).
+
+Seeds [§Functions](#functions): `call`, `pump_events`, `serve`, `poll_requests`, `run_action`,
+and the outbox `commit`/`flush`. Deltas: none — this section records the review; the
+implementation lands in Phase 32 (M15W1).
+
 ## Edge Cases & Errors
 
 | Case | Result |

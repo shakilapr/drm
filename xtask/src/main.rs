@@ -512,4 +512,102 @@ mod design_lock {
             );
         }
     }
+
+    /// REQ: REQ-OPS-012, REQ-OPS-013, REQ-OPS-020, REQ-OPS-021, REQ-OPS-023,
+    /// REQ-OPS-025 — M14W4 RPC design seed: the algorithm doc must keep the
+    /// correlated-topic layout, cid bookkeeping, cancel, and deadline semantics.
+    #[test]
+    fn rpc_design_confirmed() {
+        let doc = repo_doc("docs/algorithms/ops/rpc-actions.md");
+        for item in [
+            "CorrelationId",
+            "client_id",
+            "session_nonce",
+            "server_session",
+            "CancelAccepted",
+            "CancelRejected",
+            "remaining_budget_ns",
+            "SequenceExhausted",
+        ] {
+            assert!(
+                doc.contains(item),
+                "rpc-actions.md lost cid/deadline item {item}"
+            );
+        }
+        for topic in [
+            "request/<client_id>",
+            "cancel/<client_id>",
+            "event/<client_id>",
+        ] {
+            assert!(doc.contains(topic), "rpc-actions.md lost topic {topic}");
+        }
+        assert!(
+            doc.contains("Design Confirmation (M14W4)"),
+            "rpc-actions.md lost the M14W4 design confirmation"
+        );
+    }
+
+    /// REQ: REQ-STUDIO-001, REQ-STUDIO-006, REQ-STUDIO-007, REQ-STUDIO-011,
+    /// REQ-STUDIO-013 — M14W4 Studio prep survey: the protocol doc must keep the
+    /// stdio host shape, generated-protocol rule, handshake, and plane split.
+    #[test]
+    fn studio_design_confirmed() {
+        let doc = repo_doc("docs/algorithms/studio/studio-protocol.md");
+        for item in [
+            "serve_stdio",
+            "Hello",
+            "HelloAck",
+            "Capability",
+            "base_revision",
+            "ChangeSet",
+            "parse_bounded",
+        ] {
+            assert!(
+                doc.contains(item),
+                "studio-protocol.md lost protocol item {item}"
+            );
+        }
+        for rule in [
+            "studio-protocol",
+            "gen-check",
+            "engine calls only",
+            "binary frames",
+        ] {
+            assert!(doc.contains(rule), "studio-protocol.md lost rule {rule}");
+        }
+        assert!(
+            doc.contains("Design Confirmation (M14W4)"),
+            "studio-protocol.md lost the M14W4 design confirmation"
+        );
+    }
+
+    /// REQ: REQ-OPS-004, REQ-OPS-015, REQ-OPS-019, REQ-ROUTE-025,
+    /// REQ-ROUTE-040, REQ-CORE-087, REQ-STUDIO-011 — M14W4 tooling design lock:
+    /// the consolidated lock record must name every Phase 32 sub-design and its
+    /// owner signature.
+    #[test]
+    fn tooling_design_lock_confirmed() {
+        let doc = repo_doc("docs/spec/tooling-design-lock.md");
+        for sub in [
+            "echo",
+            "hz",
+            "diag",
+            "record",
+            "trace",
+            "serial/MCU",
+            "RPC/actions",
+            "Studio bridge",
+        ] {
+            assert!(
+                doc.contains(sub),
+                "tooling-design-lock.md lost sub-design {sub}"
+            );
+        }
+        for owner in ["E1", "E2", "E3", "E4"] {
+            assert!(
+                doc.contains(owner),
+                "tooling-design-lock.md lost owner {owner}"
+            );
+        }
+    }
 }

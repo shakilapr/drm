@@ -93,6 +93,19 @@ Decision finalized M14W1 (Phase 32): COBS is the binding choice (wire diagrams a
 3. Build prevents allocation: no heap implementation linked; malloc-family calls fail to link/trap; RTOS dynamic allocation off (e.g. `configSUPPORT_DYNAMIC_ALLOCATION=0`); system heap zero-sized by default where applicable.
 4. Linker-section audit + allocator hooks in target CI are secondary assertions: no `malloc/free/calloc/realloc/new` reachable from the publish/read call graph; stack high-water recorded and gated against the declared per-profile margin (I-SR5).
 
+## MCU Plan Final (M14W4)
+
+Bring-up steps and CI integration are frozen; the concrete target/toolchain/audit mechanics
+live in [mcu-bring-up.md](../../spec/mcu-bring-up.md). No invariant changed.
+
+- [x] Reference target locked: STM32H743 (Cortex-M7, FreeRTOS static-only) with STM32F407 fallback and a bare-metal Cortex-M4F check; a third MCU family requires an ADR (I-SR5).
+- [x] Toolchain pinned: `arm-none-eabi-gcc` 13.3.rel1, `-std=c11 -ffreestanding`, `-Werror`; host codec is `drm-router::transport::serial` (COBS/CRC32C) sharing the canonical covered-byte sequence with the MCU subset (I-SR3/I-SR6).
+- [x] Bring-up steps frozen: opaque `bytes[<=N]` echo firmware → `[route."motor/command".serial]` best-effort bounded CRC link → streaming O(1) decode → standard ingress deposit → byte-for-byte cross-decode + COBS boundary + corruption campaign (I-SR1..I-SR6, `REQ-OPS-004`).
+- [x] CI integration: `mcu-cross` (every PR touching `bindings/c` or the serial codec), `mcu-zero-heap` (linker-section + symbol audit), `mcu-stack` (nightly min-free-stack vs declared margin); missing board falls back to QEMU, never "not run" (I-SR5, `REQ-CORE-087`).
+- [x] Blocking bound reported: `blocking_max = wire_time(max lower-priority frame)` verified against declared deadlines (I-SR7, `REQ-ROUTE-040`).
+
+Deltas: none — this section records the final plan; implementation lands in Phase 32 (M15W1).
+
 ## Edge Cases & Errors
 
 | Case | Result |

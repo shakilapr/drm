@@ -11,6 +11,25 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M14 W4 tranche: tooling-wave design lock + month-14 review. NEW
+  [rpc-design-seed.md](docs/spec/rpc-design-seed.md) seeds `drm-rpc`
+  (correlated topic pairs, `u64` cid per client session never reused,
+  deterministic phase-boundary cancel, relative-budget deadlines, core-untouched
+  rule I-R4); NEW [studio-prep-survey.md](docs/spec/studio-prep-survey.md) locks
+  the `drm studio --stdio` JSON-RPC host shape, the generated TS types pipeline,
+  the engine-only mutation flow, the capability model, and the deferred scope;
+  NEW [tooling-design-lock.md](docs/spec/tooling-design-lock.md) consolidates
+  every Phase 32 sub-design (`echo`/`hz`/`log`, `diag`, `record`, `trace`,
+  RPC/actions, serial/MCU, Studio bridge) with sub-owner signatures.
+  [rpc-actions.md](docs/algorithms/ops/rpc-actions.md),
+  [studio-protocol.md](docs/algorithms/studio/studio-protocol.md), and
+  [serial-mcu.md](docs/algorithms/router/serial-mcu.md) gain M14W4 design
+  confirmation / MCU-plan-final sections; [phase-31.md](docs/gates/phase-31.md)
+  status → PASS (M14W2 chair verdict). Executable design-lock tests in
+  [main.rs](xtask/src/main.rs) (`design_lock`) make the locks a permanent gate.
+  Gate evidence in [m14w4.md](docs/gates/m14w4.md) and
+  [month-14.md](docs/gates/month-14.md); [metrics-m14.md](docs/metrics/metrics-m14.md)
+  records `TOOLING_DESIGN_LOCK = 1`, `MONTH14_REVIEW = ON_TRACK`.
 - Week M14 W3 tranche: spatial types/clocks + record core design confirmations.
   NEW [spatial-types-design.md](docs/spec/spatial-types-design.md) confirms the
   six typed quantities, compile-time `Point3<CameraFront>` vs dynamic

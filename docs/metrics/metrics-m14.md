@@ -70,6 +70,44 @@ cargo xtask audit-traceability
 REQ: REQ-QAL-008, REQ-OPS-004, REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026,
 REQ-ROUTE-029, REQ-ROUTE-032, REQ-ROUTE-040, REQ-CORE-086, REQ-CORE-087.
 
+## M14W2 — Phase 31 Gate PASS, Spatial Grammar Design
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 31)` | PASS | PASS — [phase-31.md](../gates/phase-31.md) M14W2 chair verdict: all four work-plan #31 criteria green (Windows conformance, golden bytes/API semantics, crash recovery, full interop matrix); physical dual-VM rows measured-not-guaranteed per the runbook |
+| `SPATIAL_DESIGN` | spatial grammar extensions design merged | merged — [spatial-types-design.md](../spec/spatial-types-design.md) (grammar-extension EBNF, `space:` binding attribute, compile-time vs dynamic `SpatialID` inference) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Phase 31 gate chaired by E1 (E3 presents, E4 archives evidence); verdict PASS
+  ([phase-31.md](../gates/phase-31.md)).
+- Spatial grammar design merged into [spatial-types-design.md](../spec/spatial-types-design.md)
+  (carried forward and locked at M14W3).
+
+Notes:
+
+- No architecture divergence: the gate closes pinned Windows-backend invariants
+  (windows-backends.md I-W1..I-W8, publisher-lifecycle.md I-L2/I-L3/I-L4/I-L6,
+  exhaustion-reclamation.md I-E5, router-core.md I-RT1/I-RT4/I-RT5/I-RT6), so no
+  ADR landed.
+
+### Weekly gate checklist (chaired by E1, Friday)
+
+- [x] `GATE_STATUS(Phase 31) = PASS`; `SPATIAL_DESIGN = merged`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M14W2) = PASS`**
+
+### How to reproduce
+
+```text
+cargo xtask test --cross-os --full
+cargo xtask audit-traceability
+```
+
+REQ: REQ-QAL-008, REQ-CORE-101, REQ-ROUTE-007, REQ-ROUTE-024, REQ-ROUTE-025,
+REQ-ROUTE-026, REQ-ROUTE-040.
+
 ## M14W3 — Spatial Types/Clocks + Record Core Design Confirmations
 
 | Variable | Target | Measured |
@@ -130,4 +168,67 @@ REQ-SPATIAL-041, REQ-SPATIAL-051, REQ-OPS-005, REQ-OPS-006, REQ-OPS-007,
 REQ-OPS-008, REQ-OPS-009, REQ-OPS-014, REQ-OPS-015, REQ-OPS-017, REQ-OPS-018,
 REQ-OPS-019, REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026, REQ-ROUTE-040,
 REQ-CORE-086, REQ-CORE-087, REQ-QAL-008.
+
+## M14W4 — Tooling Wave Design Lock, Month-14 Review
+
+| Variable | Target | Measured |
+|---|---|---|
+| `TOOLING_DESIGN_LOCK` | all Phase 32 sub-designs reviewed and locked | 1 — [tooling-design-lock.md](../spec/tooling-design-lock.md) §1 consolidates `echo`/`hz`/`log`, `diag`, `record`/replay, `trace`, RPC/actions, serial/MCU, and the Studio bridge; each sub-owner signed; locked by `design_lock::tooling_design_lock_confirmed` |
+| `MONTH14_REVIEW` | ON_TRACK | ON_TRACK — [month-14.md](../gates/month-14.md): Phase 31 gate PASS, all M14 variables met, M15 tooling wave A committed |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- NEW [rpc-design-seed.md](../spec/rpc-design-seed.md): E1 RPC design seed —
+  correlated topic pairs, `u64` cid per client session (never reused), deterministic
+  phase-boundary cancel, relative-budget deadlines, core-untouched rule (I-R4).
+- NEW [studio-prep-survey.md](../spec/studio-prep-survey.md): E2 Studio prep survey —
+  `drm studio --stdio` JSON-RPC host, generated TS types pipeline, engine-only mutation
+  flow, capability model, deferred-scope list.
+- NEW [tooling-design-lock.md](../spec/tooling-design-lock.md): E4 consolidated Phase 32
+  lock record (all sub-designs, each sub-owner signed).
+- [rpc-actions.md](../algorithms/ops/rpc-actions.md),
+  [studio-protocol.md](../algorithms/studio/studio-protocol.md),
+  [serial-mcu.md](../algorithms/router/serial-mcu.md): design-confirmation / MCU-plan-final
+  sections; [phase-31.md](../gates/phase-31.md) status → PASS (M14W2 chair).
+- Executable design-lock tests (`xtask/src/main.rs` `design_lock`) —
+  `rpc_design_confirmed`, `studio_design_confirmed`, `tooling_design_lock_confirmed`.
+- Gate evidence: [m14w4.md](../gates/m14w4.md), [month-14.md](../gates/month-14.md);
+  spec index ([docs/spec/README.md](../spec/README.md)); [CHANGELOG.md](../../CHANGELOG.md).
+
+Notes:
+
+- Design-only tranche: the plan's test suite is review sign-offs; no runtime code is
+  required (Phase 32 implementation starts M15W1). The design-lock tests convert the
+  sign-offs into a permanent gate.
+- No architecture divergence and no new REQ IDs: the locks restate pinned invariants,
+  so no ADR landed and the registry is unchanged.
+
+### Weekly gate checklist (chaired by E3, Friday)
+
+- [x] `TOOLING_DESIGN_LOCK = 1`; `MONTH14_REVIEW = ON_TRACK`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M14W4) = PASS`**
+
+### How to reproduce
+
+```text
+cargo test -p xtask design_lock
+cargo xtask audit-traceability
+cargo xtask check-layering
+cargo xtask fmt --check
+cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask test
+```
+
+REQ: REQ-QAL-008, REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004,
+REQ-OPS-005, REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-009, REQ-OPS-010,
+REQ-OPS-011, REQ-OPS-012, REQ-OPS-013, REQ-OPS-014, REQ-OPS-015, REQ-OPS-016,
+REQ-OPS-017, REQ-OPS-018, REQ-OPS-019, REQ-OPS-020, REQ-OPS-021, REQ-OPS-022,
+REQ-OPS-023, REQ-OPS-024, REQ-OPS-025, REQ-ROUTE-024, REQ-ROUTE-025,
+REQ-ROUTE-026, REQ-ROUTE-040, REQ-CORE-086, REQ-CORE-087, REQ-STUDIO-001,
+REQ-STUDIO-002, REQ-STUDIO-003, REQ-STUDIO-004, REQ-STUDIO-005, REQ-STUDIO-006,
+REQ-STUDIO-007, REQ-STUDIO-008, REQ-STUDIO-009, REQ-STUDIO-010, REQ-STUDIO-011,
+REQ-STUDIO-012, REQ-STUDIO-013, REQ-STUDIO-014.
 

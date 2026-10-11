@@ -17,6 +17,9 @@ Owned by E2 unless noted. Written by the weekly plan named in each file's header
 | `abi-policy.md` | 7 | `docs/algorithms/bindings/c-abi-surface.md`; ADR 0002 |
 | `spatial-types-design.md` | 33 prep (M14W3) | `docs/spatial_architecture.md`; `docs/algorithms/spatial/spatial-core.md`; `docs/algorithms/toolchain/workspace-model.md` |
 | `mcu-bring-up.md` | 32 prep (M14W3) | `docs/algorithms/router/serial-mcu.md`; `codebase.md` §3.3 |
+| `rpc-design-seed.md` | 32 prep (M14W4) | `docs/algorithms/ops/rpc-actions.md`; `docs/architecture.md` §drm-rpc |
+| `studio-prep-survey.md` | 32 prep (M14W4) | `docs/algorithms/studio/studio-protocol.md`; `docs/ui-architecture.md` |
+| `tooling-design-lock.md` | 32 prep (M14W4) | `docs/algorithms/ops/*`, `docs/algorithms/router/serial-mcu.md`, `docs/algorithms/studio/studio-protocol.md` |
 
 Specs here may not introduce requirements beyond the architecture; each lands with a `source_ref`
 back to the owning architecture/algorithm section.
