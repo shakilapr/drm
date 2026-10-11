@@ -6,7 +6,7 @@
 //!
 //! REQ: REQ-SPATIAL-036, REQ-SPATIAL-038, REQ-SPATIAL-049.
 
-use crate::types::{Direction3, Point3, Transform3, Vector3};
+use crate::types::{Direction3, Point3, Transform3, UnitQuat, Vector3};
 
 /// Transforms a point: rotation then translation (`I-S1`).
 ///
@@ -66,9 +66,36 @@ pub fn compose(a: &Transform3, b: &Transform3) -> Transform3 {
     }
 }
 
+/// The rigid inverse: `inverse(a) ∘ a = a ∘ inverse(a) = identity` (`I-S1`).
+/// `R⁻¹ = Rᵀ` (conjugate quaternion), `t⁻¹ = −Rᵀt`.
+///
+/// REQ: REQ-SPATIAL-038.
+#[must_use]
+pub fn invert(a: &Transform3) -> Transform3 {
+    let q = a.quat();
+    let inv = UnitQuat {
+        x: -q.x,
+        y: -q.y,
+        z: -q.z,
+        w: q.w,
+    };
+    let t = Vector3 {
+        x: a.translation[0],
+        y: a.translation[1],
+        z: a.translation[2],
+    };
+    let rt = inv.rotate(t);
+    Transform3 {
+        translation: [-rt.x, -rt.y, -rt.z],
+        rotation: inv.into_components(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::transform::{compose, transform_direction, transform_point, transform_vector};
+    use crate::transform::{
+        compose, invert, transform_direction, transform_point, transform_vector,
+    };
     use crate::types::{Direction3, Point3, Transform3, UnitQuat, Vector3};
 
     /// REQ: REQ-SPATIAL-036 — a point transform applies rotation then
@@ -129,5 +156,23 @@ mod tests {
         assert!((stepwise.x - folded.x).abs() < 1e-12);
         assert!((stepwise.y - folded.y).abs() < 1e-12);
         assert!((stepwise.z - folded.z).abs() < 1e-12);
+    }
+
+    /// REQ: REQ-SPATIAL-038 — the rigid inverse composed with the original is
+    /// the identity.
+    #[test]
+    fn invert_roundtrip() {
+        let t = Transform3::new(
+            [1.0, -2.0, 3.0],
+            UnitQuat::from_axis_angle(Direction3::Y, 0.9)
+                .unwrap_or(UnitQuat::IDENTITY)
+                .into_components(),
+        )
+        .unwrap_or(Transform3::IDENTITY);
+        let identity = compose(&invert(&t), &t);
+        assert!(identity.translation[0].abs() < 1e-12);
+        assert!(identity.translation[1].abs() < 1e-12);
+        assert!(identity.translation[2].abs() < 1e-12);
+        assert!(identity.rotation[3].abs() - 1.0 < 1e-12);
     }
 }

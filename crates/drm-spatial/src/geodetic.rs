@@ -14,6 +14,14 @@ const WGS84_F: f64 = 1.0 / 298.257_223_563;
 /// WGS84 first eccentricity squared.
 const WGS84_E2: f64 = WGS84_F * (2.0 - WGS84_F);
 
+/// Documented local-precision bound for the geodetic chain (`I-S5`): a point at
+/// a small metric offset from its anchor must land within this many meters of
+/// the analytic tangent-plane projection. The chain computes `ECEF` deltas
+/// (millions of meters) once at the anchor and keeps all downstream operations
+/// local, so this bound holds without catastrophic cancellation.
+/// REQ: REQ-SPATIAL-012.
+pub const GEODETIC_LOCAL_BOUND_M: f64 = 1.0e-3;
+
 /// Geodetic latitude/longitude/altitude (`WGS84`); radians and meters.
 /// REQ: REQ-SPATIAL-012.
 #[derive(Debug, Clone, Copy, PartialEq)]

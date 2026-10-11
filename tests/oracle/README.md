@@ -15,18 +15,26 @@ code with the Rust implementation.
 - `clock_oracle.py` — affine clock-domain mapping (`t_to = to_ref +
   rate_ratio·(t_from − from_ref)`) with bounded uncertainty growth, plus
   unresolved/out-of-validity rejection (work-plan M19W2-E4-T1).
+- `conventions_oracle.py` — boundary axis conversions for NED, OpenCV optical,
+  Unity, and Unreal, applied to points and rigid transforms
+  (work-plan M19W3-E4-T1). `spatial_oracle.py` additionally carries a
+  `geodetic_precision` section (small local offsets from an anchor, I-S5).
 - `../fixtures/spatial/oracle_vectors.json`,
-  `../fixtures/spatial/clock_vectors.json` — committed vectors the Rust tests
-  compare against. Regenerate with:
+  `../fixtures/spatial/clock_vectors.json`,
+  `../fixtures/spatial/convention_vectors.json` — committed vectors the Rust
+  tests compare against. Regenerate with:
 
 ```text
 python3 tests/oracle/spatial_oracle.py
 python3 tests/oracle/clock_oracle.py
+python3 tests/oracle/conventions_oracle.py
 ```
 
 The Rust consumers are `crates/drm-spatial/tests/math.rs` (`cargo test -p
-drm-spatial math`) and `crates/drm-spatial/tests/clocks.rs` (`cargo test -p
-drm-spatial clocks`), which read the committed JSON — CI does not need Python.
+drm-spatial math`), `crates/drm-spatial/tests/clocks.rs` (`cargo test -p
+drm-spatial clocks`), and `crates/drm-spatial/tests/conventions.rs` (`cargo test
+-p drm-spatial conventions`), which read the committed JSON — CI does not need
+Python.
 
 ## Quaternion convention
 
@@ -36,5 +44,5 @@ Quaternions are `X, Y, Z, W`; rotations are right-handed with `+X` forward,
 implementation defect, not a convention difference. SLERP results are compared
 up to sign (`q` and `-q` are the same rotation).
 
-REQ: REQ-SPATIAL-036, REQ-SPATIAL-038, REQ-SPATIAL-012, REQ-SPATIAL-004,
-REQ-SPATIAL-041, REQ-SPATIAL-051.
+REQ: REQ-SPATIAL-036, REQ-SPATIAL-038, REQ-SPATIAL-012, REQ-SPATIAL-007,
+REQ-SPATIAL-040, REQ-SPATIAL-004, REQ-SPATIAL-041, REQ-SPATIAL-051.

@@ -182,6 +182,47 @@ def build_geodetic() -> list[dict]:
     return out
 
 
+def build_geodetic_precision() -> list[dict]:
+    """Small local offsets from an anchor — the I-S5 local-precision boundary."""
+    anchors = [
+        (0.0, 0.0, 0.0),
+        (0.5, 0.2, 100.0),
+        (-0.3, 1.1, 42.0),
+        (1.2, -2.0, 1500.0),
+    ]
+    offsets = [(4.2, 0.0, 0.0), (0.0, -7.5, 0.0), (0.0, 0.0, 12.0), (3.0, 4.0, -1.5)]
+    out = []
+    for anchor in anchors:
+        for east, north, up in offsets:
+            m = meridional_radius(anchor[0]) + anchor[2]
+            n = prime_vertical_radius(anchor[0]) + anchor[2]
+            lat = anchor[0] + north / m
+            lon = anchor[1] + east / (n * math.cos(anchor[0]))
+            alt = anchor[2] + up
+            ecef = wgs84_to_ecef(lat, lon, alt)
+            enu = tangent_plane_enu(ecef, *anchor)
+            out.append(
+                {
+                    "anchor": list(anchor),
+                    "target": [lat, lon, alt],
+                    "offset": [east, north, up],
+                    "enu": enu.tolist(),
+                }
+            )
+    return out
+
+
+def meridional_radius(lat: float) -> float:
+    s = math.sin(lat)
+    return WGS84_A * (1.0 - WGS84_E2) / (1.0 - WGS84_E2 * s * s) ** 1.5
+
+
+def prime_vertical_radius(lat: float) -> float:
+    s = math.sin(lat)
+    return WGS84_A / math.sqrt(1.0 - WGS84_E2 * s * s)
+
+
+
 def main() -> int:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else (
         Path(__file__).resolve().parents[1] / "fixtures" / "spatial" / "oracle_vectors.json"
@@ -191,6 +232,7 @@ def main() -> int:
         "generated_by": "tests/oracle/spatial_oracle.py",
         "vectors": build_vectors(),
         "geodetic": build_geodetic(),
+        "geodetic_precision": build_geodetic_precision(),
     }
     out.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"wrote {out} ({len(payload['vectors'])} vectors, {len(payload['geodetic'])} geodetic)")
