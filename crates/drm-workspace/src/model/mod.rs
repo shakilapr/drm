@@ -16,6 +16,7 @@ use crate::parser::{self, TopicFile};
 pub mod fingerprint;
 pub mod handles;
 pub mod nodes;
+pub mod runtime;
 pub mod topology;
 
 pub use fingerprint::{
@@ -23,6 +24,7 @@ pub use fingerprint::{
     layout_hash,
 };
 pub use nodes::{NodeManifest, parse_node_manifest};
+pub use runtime::{RuntimeOverflow, RuntimePlan, TopicRuntime, runtime_plan, topic_runtime};
 pub use topology::{ComputeEntry, LinkEntry, TopologyManifest, parse_topology_manifest};
 
 /// Canonical topic path: `package/stem`, lowercase ASCII (REQ-TOOL-056).

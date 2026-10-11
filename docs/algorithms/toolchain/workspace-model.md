@@ -19,6 +19,7 @@ Scope: construction of the in-memory `WorkspaceModel` from manifests and `.drm` 
 | `REQ-TOOL-model-typed-rates` | dimensioned values parsed once into checked rational rates | `REQ-TOOL-068` |
 | `REQ-TOOL-model-contract-meta` | consumer read mode, required flag, reliability requirement in model | `REQ-TOOL-069` |
 | `REQ-TOOL-model-layering` | model = structural integrity; policy = verify | `REQ-TOOL-070` |
+| `REQ-TOOL-model-runtime-hook` | model derives runtime descriptor expectations + pool sizing consumed at activation | `REQ-CORE-045`, `REQ-CORE-015` |
 
 ## Data Structures
 
@@ -162,6 +163,27 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
 }
 ```
 
+## Runtime Hooks
+
+`runtime_plan(model)` derives the runtime activation expectations the runtime
+consumes; the runtime never parses `.drm` schemas itself, so a topic edit and the
+channel configuration cannot drift (architecture.md §Channel Metadata):
+
+```rust
+pub struct TopicRuntime {
+ schema_hash: [u8; 16], layout_hash: [u8; 16], // descriptor expectations (REQ-CORE-015)
+ payload_capacity: u64, slot_align: u64, // StructLayout::sample_max / struct_align
+ history_depth: u64, // @history: latest ⇒ 1
+ pool_size: u64, // explicit @pool_size or the R + 1 activation floor (REQ-CORE-045)
+ overflow: RuntimeOverflow, // @overflow: reject | overwrite (default)
+}
+pub fn runtime_plan(model: &WorkspaceModel) -> RuntimePlan // BTreeMap<topic, TopicRuntime>
+```
+
+Sizing here is **structural**: the hook emits declared values and the `R + 1`
+floor. The policy check `pool_size >= R + H + 1` and drop-free validation stay in
+`drm verify` (I-D12). `Channel::activate` rejects a pool below the `R + 1` floor.
+
 ## Protocols
 
 *Model render → reparse round-trip (I-D5):*
@@ -169,6 +191,10 @@ fn contract_fingerprint(node: &NodeEntry, m: &WorkspaceModel) -> ContractFingerp
 1. `text = render_model(m)` (canonical TOML ordering: topics, nodes, computes, links).
 2. `m2 = build(parse_tree(text))`.
 3. Assert `render_model(m2) == text`.
+
+*Runtime plan consumption:* `runtime_plan(model)` → per-topic `Channel::activate`
+parameters (depth, pool size, sample max, policy) and attach-time descriptor
+expectations (`schema_hash`/`layout_hash`).
 
 *Consumer of fingerprints:* `deployment-identity.md` embeds `contract_fingerprint` into deployment startup guard and per-segment validation.
 

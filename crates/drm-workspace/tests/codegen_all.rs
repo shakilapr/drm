@@ -474,4 +474,61 @@ mod codegen_all {
         }
         let _ = fs::remove_dir_all(&root);
     }
+
+    /// REQ: REQ-TOOL-028, REQ-BIND-012 — the generated Python node facade imports
+    /// and exposes only its declared endpoint operations (node-scoped surface).
+    #[test]
+    fn gen_python_node_module_imports() {
+        let mut t = tree(&[("target", "a: u8\n"), ("state", "x: f32\n")]);
+        t.nodes.push((
+            "controller".to_string(),
+            b"name = \"controller\"\npublishes = [\"control/target\"]\nconsumes = [\"control/state\"]\n"
+                .to_vec(),
+        ));
+        let root = generate(&t, "py-node");
+        let node_module = out_path(&root, Lang::Python, GenKind::NodeApi, "controller");
+        assert!(node_module.is_file(), "Python node API unit rendered");
+        if !tool_found("python3") {
+            eprintln!("python3 not installed; skipping Python node assertion");
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        let driver = format!(
+            "import sys\n\
+             sys.path.insert(0, {gen:?})\n\
+             from nodes import controller\n\
+             assert hasattr(controller, \"publish_control_target\"), dir(controller)\n\
+             assert hasattr(controller, \"read_control_state\"), dir(controller)\n",
+            gen = root.join(".drm/gen/python").to_string_lossy()
+        );
+        let driver_path = root.join("driver.py");
+        fs::write(&driver_path, driver).unwrap_or_else(|e| unreachable!("write driver: {e}"));
+        let status = Command::new("python3")
+            .arg(&driver_path)
+            .status()
+            .unwrap_or_else(|e| unreachable!("python3 spawn: {e}"));
+        assert!(status.success(), "Python node facade imports");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// REQ: REQ-TOOL-028, REQ-TOOL-065 — the generated Rust node facade renders
+    /// one endpoint operation per declared capability and embeds no runtime
+    /// handle (node-scoped surface, I-G9).
+    #[test]
+    fn gen_rust_node_surface() {
+        let mut t = tree(&[("target", "a: u8\n"), ("state", "x: f32\n")]);
+        t.nodes.push((
+            "controller".to_string(),
+            b"name = \"controller\"\npublishes = [\"control/target\"]\nconsumes = [\"control/state\"]\n"
+                .to_vec(),
+        ));
+        let root = generate(&t, "rust-node");
+        let node_module = out_path(&root, Lang::Rust, GenKind::NodeApi, "controller");
+        let text = fs::read_to_string(&node_module)
+            .unwrap_or_else(|e| unreachable!("read node module: {e}"));
+        assert!(text.contains("pub fn publish_control_target"), "{text}");
+        assert!(text.contains("pub fn read_control_state"), "{text}");
+        assert!(!text.contains("424242"), "no runtime handle numeral (I-G9)");
+        let _ = fs::remove_dir_all(&root);
+    }
 }

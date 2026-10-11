@@ -157,3 +157,54 @@ fn nodes_multi_publisher_is_query_not_error() {
     assert_eq!(conflicts[0].0, "pkg/front");
     assert_eq!(conflicts[0].1, vec!["a", "b"]);
 }
+
+/// REQ: REQ-TOOL-050 — I-D3: a communication loop (A publishes what B consumes
+/// and vice versa) builds fine; communication edges are not build edges.
+#[test]
+fn communication_loop() {
+    let t = tree_with(&[
+        ("a", manifest("a", &["pkg/front"], &["pkg/telemetry"])),
+        ("b", manifest("b", &["pkg/telemetry"], &["pkg/front"])),
+    ]);
+    let m = fixture(build(&t), "loop must build");
+    assert_eq!(m.nodes.len(), 2, "both nodes present");
+    assert!(m.nodes["a"].publishes.contains("pkg/front"));
+    assert!(m.nodes["b"].consumes.contains("pkg/front"));
+}
+
+/// REQ: REQ-TOOL-045 — I-D2: every duplicate site is reported, not just the
+/// first (three nodes claiming one identity ⇒ two duplicate errors; a
+/// duplicated topic stem is reported alongside).
+#[test]
+fn model_all_duplicates_reported() {
+    let dup = manifest("dup", &[], &[]);
+    let t = TreeInput {
+        packages: vec![PackageInput {
+            name: "pkg".to_string(),
+            topics: vec![
+                ("front".to_string(), b"v: u32\n".to_vec()),
+                ("front".to_string(), b"v: u32\n".to_vec()),
+            ],
+        }],
+        nodes: vec![
+            ("one".to_string(), dup.clone().into_bytes()),
+            ("two".to_string(), dup.clone().into_bytes()),
+            ("three".to_string(), dup.into_bytes()),
+        ],
+        topology: None,
+    };
+    let errs = fixture_errs("all duplicates", build(&t));
+    let dup_nodes = errs
+        .iter()
+        .filter(|e| matches!(e, ModelError::DuplicateNode { .. }))
+        .count();
+    assert_eq!(
+        dup_nodes, 2,
+        "both extra duplicate sites reported: {errs:?}"
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e, ModelError::DuplicateTopic { topic, .. } if topic == "pkg/front")),
+        "duplicate topic stem reported: {errs:?}"
+    );
+}

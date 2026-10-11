@@ -587,6 +587,8 @@ Instead of maintaining complex persistent binary caches, DRM parses lightweight 
 
 Because DRM manifests are small, parsing the entire workspace model takes milliseconds. During development watch sessions (`drm dev`), the `WorkspaceModel` remains alive in memory, eliminating cache versioning bugs, cache corruption, and stale file invalidation issues.
 
+The model is the single source for runtime activation expectations: per-topic descriptor expectations (schema/layout hashes), payload capacity, history depth, and payload-pool sizing are derived from the model and consumed by the runtime when it activates a channel. The runtime never parses `.drm` schemas itself, so a topic declaration change and the channel configuration cannot drift.
+
 ### Primary Domain Relationships
 DRM discards artificial compilation edges (`BUILD_REQUIRES`, `USES_SCHEMA`, `USES_BINDING`). It maintains only core domain relationships:
 - `Node --publishes--> Topic`

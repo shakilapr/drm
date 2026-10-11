@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod gencheck;
 mod golden;
 mod layering;
 mod workplan;
@@ -30,7 +31,7 @@ fn main() -> std::process::ExitCode {
 fn run(args: &[String]) -> Result<()> {
     let Some(cmd) = args.first() else {
         bail!(
-            "usage: cargo xtask <fmt [--check] | lint | test [--stress] | check-layering | audit-traceability | soak --duration <h> | golden-gen | workplan [status|next|watch|mark-done <week>]>"
+            "usage: cargo xtask <fmt [--check] | lint | test [--stress] | check-layering | audit-traceability | soak --duration <h> | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
         );
     };
     let flags = &args[1..];
@@ -42,6 +43,7 @@ fn run(args: &[String]) -> Result<()> {
         "audit-traceability" => audit_traceability(flags),
         "soak" => soak(flags),
         "golden-gen" => golden::generate(flags),
+        "gen-check" => gencheck::run(flags),
         "workplan" => workplan::run(flags),
         other => bail!("unknown command `{other}`; see xtask/README.md"),
     }

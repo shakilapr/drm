@@ -70,3 +70,41 @@ Notes:
 - The Python pytest suites (I-B5 scope, NumPy bytes, interop cells) need the
   maturin/PyO3 runtime that the local gate environment does not provide; the
   native surface they exercise is compiled and clippy-clean.
+
+## M08W4 — Phase 23 Gate (Workspace Model), Codegen Gate Prep, `drm dev` Design
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 23)` | PASS | PASS — [phase-23.md](../gates/phase-23.md) (I-D1..I-D5 + placement/links + runtime hook) |
+| `PHASE24_EVIDENCE` | work-plan #24 criteria fully evidenced (gate M09W1) | [phase-24-evidence.md](../gates/phase-24-evidence.md): I-G1..I-G6, I-G8, I-G9, R6 green; I-G7 POSIX green, Windows backend deferred |
+| `GEN_CHECK_CI` | `xtask gen-check` blocking (R6) | `xtask gen-check` wired (regen-diff over the committed `.drm/gen`); self-test `xtask::gencheck::detects_hand_edited_generated_file` |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Phase 23 gate doc ([phase-23.md](../gates/phase-23.md)); model tests
+  `communication_loop` (I-D3) and `model_all_duplicates_reported` (I-D2).
+- Codegen invariant suite `crates/drm-workspace/tests/codegen_invariants.rs`:
+  `gen_atomicity` kill harness (I-G4, ×20), `gen_fingerprint_prune` (I-G5),
+  `node_api_invalidation` (I-G6), `atomic_replace_overwrites_existing` (I-G7),
+  `gen_direction_swap` + `gen_direction_metamorphic` (I-G8),
+  `gen_bindings_handle_free` (I-G9), `gen_check_detects_hand_edit` (R6).
+- `xtask gen-check` (R6) — `crates/drm-workspace::codegen::regen_diff` plus the
+  command and its self-test.
+- Model runtime hook (`drm-workspace::model::runtime_plan`) and the
+  composition-root e2e `crates/drm-cli/tests/runtime_hooks.rs` (model → codegen →
+  live `Channel`).
+- Phase 24 evidence pack ([phase-24-evidence.md](../gates/phase-24-evidence.md)).
+
+Notes:
+
+- `build-orchestration.md` (Phase 25 design seed) was already present and is in
+  force; the `drm build`/`drm dev` orchestration implementation lands in M09.
+- Phase 23 gate scope is the structural model slice; spatial (I-D6/I-D7),
+  external endpoints (I-D8), and timing/routing overrides (I-D9/I-D13) remain
+  phase-gated (Phase 28/33/27).
+- Perf regression (E3-T1): this week changes only the toolchain (model/codegen)
+  and its tests — no runtime data-path code — so router throughput is unchanged.
+  Reference run: `cargo run --release -p drm-router --example udp_pair` →
+  10 000 exchanges clean in 42.3 ms (4.23 µs/exchange), within the M08W1
+  reference band (41.5–51.9 ms).

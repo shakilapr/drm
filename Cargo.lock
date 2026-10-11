@@ -54,6 +54,7 @@ dependencies = [
 name = "drm-cli"
 version = "0.1.0"
 dependencies = [
+ "drm-core",
  "drm-types",
  "drm-workspace",
  "serde_json",
@@ -710,6 +711,7 @@ dependencies = [
  "anyhow",
  "drm-core",
  "drm-types",
+ "drm-workspace",
  "serde",
  "serde_json",
 ]

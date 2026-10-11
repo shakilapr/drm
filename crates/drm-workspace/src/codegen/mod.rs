@@ -541,6 +541,100 @@ fn atomic_replace(tmp: &Path, dest: &Path) -> Result<(), Status> {
     fs::rename(tmp, dest).map_err(|_| Status::LockFailed)
 }
 
+/// Regeneration comparison result (R6 hand-edit detection): the committed
+/// generated tree under `root` versus a fresh render of `model`.
+/// REQ: REQ-TOOL-024, REQ-TOOL-025.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RegenDiff {
+    /// Expected outputs whose committed bytes differ from the fresh render.
+    pub mismatched: Vec<PathBuf>,
+    /// Expected outputs absent from the committed tree.
+    pub missing: Vec<PathBuf>,
+    /// Committed generated files the model no longer expects.
+    pub orphaned: Vec<PathBuf>,
+}
+
+impl RegenDiff {
+    /// Whether the committed tree exactly matches the fresh render.
+    /// REQ: REQ-TOOL-024.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.mismatched.is_empty() && self.missing.is_empty() && self.orphaned.is_empty()
+    }
+
+    /// Every offending path, sorted and deduplicated.
+    /// REQ: REQ-TOOL-024.
+    #[must_use]
+    pub fn offenders(&self) -> Vec<PathBuf> {
+        let mut all: Vec<PathBuf> = self
+            .mismatched
+            .iter()
+            .chain(&self.missing)
+            .chain(&self.orphaned)
+            .cloned()
+            .collect();
+        all.sort();
+        all.dedup();
+        all
+    }
+}
+
+/// Renders `model` into a scratch tree and compares it against the committed
+/// `.drm/gen` under `root` (R6): a hand-edited, missing, or stale generated file
+/// is reported. The fingerprint database is not compared (it is metadata).
+/// REQ: REQ-TOOL-024, REQ-TOOL-025, REQ-TOOL-030.
+///
+/// # Errors
+/// [`Status::InvalidConfig`] when the scratch tree cannot be created or walked.
+pub fn regen_diff(model: &WorkspaceModel, root: &Path) -> Result<RegenDiff, Status> {
+    static SCRATCH: AtomicU64 = AtomicU64::new(0);
+    let n = SCRATCH.fetch_add(1, Ordering::Relaxed);
+    let scratch = std::env::temp_dir().join(format!("drm-gen-check-{}-{n}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).map_err(|_| Status::InvalidConfig)?;
+
+    let mut db = FingerprintDb::default();
+    let fresh_plan = plan(model, &db, &scratch);
+    let result = execute(&fresh_plan, &mut db, &scratch);
+
+    let mut diff = RegenDiff::default();
+    if result.is_ok() {
+        let fresh = relative_generated(&scratch)?;
+        let committed = relative_generated(root)?;
+        for (rel, fresh_path) in &fresh {
+            match committed.get(rel) {
+                None => diff.missing.push(rel.clone()),
+                Some(committed_path) => {
+                    if !file_equals(committed_path, fresh_path) {
+                        diff.mismatched.push(rel.clone());
+                    }
+                }
+            }
+        }
+        for rel in committed.keys() {
+            if !fresh.contains_key(rel) {
+                diff.orphaned.push(rel.clone());
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&scratch);
+    result?;
+    Ok(diff)
+}
+
+/// Generated files under `root/.drm/gen` keyed by their path relative to that
+/// directory. REQ: REQ-TOOL-025.
+fn relative_generated(root: &Path) -> Result<BTreeMap<PathBuf, PathBuf>, Status> {
+    let base = root.join(GEN_DIR);
+    let mut out = BTreeMap::new();
+    for path in existing_generated(root)? {
+        if let Ok(rel) = path.strip_prefix(&base) {
+            out.insert(rel.to_path_buf(), path);
+        }
+    }
+    Ok(out)
+}
+
 /// Length-prefixed UTF-8 field in a fingerprint buffer.
 /// REQ: REQ-TOOL-027.
 fn push_str(buf: &mut Vec<u8>, s: &str) {

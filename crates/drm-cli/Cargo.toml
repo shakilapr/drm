@@ -16,5 +16,8 @@ drm-workspace = { path = "../drm-workspace" }
 serde_json.workspace = true
 toml.workspace = true
 
+[dev-dependencies]
+drm-core = { path = "../drm-core" }
+
 [lints]
 workspace = true
