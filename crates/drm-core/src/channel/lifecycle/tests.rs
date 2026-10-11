@@ -34,9 +34,25 @@ fn unique(tag: &str) -> String {
 /// Lease-backed heap segment registry; memory is intentionally leaked for
 /// the process lifetime (tests are short-lived; open mappings must survive
 /// `unlink`, mirroring POSIX).
+///
+/// A slot's backing memory is OWNED by this registry, not leaked. The previous version
+/// stored a `Vec`'s heap address and then `std::mem::forget`'d the `Vec`, which does NOT
+/// keep the allocation alive: the pointer was the only owner and it was dropped, so glibc
+/// was free to reuse (and did return, via `trim`) those pages. A later `open_existing`
+/// then aliased a dead address and `prefix_state` segfaulted —
+/// `copy_nonoverlapping(src=0x7ffff0004008)` into unmapped memory, deterministic under
+/// `--test-threads=1`. Holding the `Box<[u8]>` here keeps the mapping valid for the
+/// registry's lifetime, which is exactly the "owned for process lifetime" contract the
+/// old comment claimed.
 #[derive(Default)]
 struct MemShm {
-    slots: Mutex<HashMap<String, (usize, usize)>>,
+    slots: Mutex<HashMap<String, Slot>>,
+}
+
+/// One live slot: the owned backing bytes plus the size last created.
+struct Slot {
+    mem: Box<[u8]>,
+    size: usize,
 }
 
 impl MemShm {
@@ -45,7 +61,16 @@ impl MemShm {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(name.as_str())
-            .copied()
+            .map(|s| (s.mem.as_ptr() as usize, s.size))
+    }
+
+    /// The owned base address of a live slot, for `open_existing` to alias.
+    fn base_of(&self, name: &SegmentName) -> Option<(*mut u8, usize, usize)> {
+        self.slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name.as_str())
+            .map(|s| (s.mem.as_ptr().cast_mut(), s.size, s.mem.len()))
     }
 }
 
@@ -58,13 +83,11 @@ impl ShmBackend for MemShm {
         if slots.contains_key(name.as_str()) {
             return Err(ShmError::AlreadyExists);
         }
-        let mut v = vec![0_u8; size];
-        let ptr = v.as_mut_ptr();
-        let addr = ptr as usize;
-        std::mem::forget(v);
-        slots.insert(name.as_str().to_string(), (addr, size));
-        // `ptr` was just allocated with `size` writable bytes and is
-        // intentionally leaked (registry-owned for the process lifetime).
+        // Owned by the slot: kept alive for as long as the registry holds it.
+        let mem = vec![0_u8; size].into_boxed_slice();
+        let ptr = mem.as_ptr().cast_mut();
+        debug_assert!(mem.len() == size);
+        slots.insert(name.as_str().to_string(), Slot { mem, size });
         Ok(Mapping::from_raw_parts(
             std::ptr::NonNull::new(ptr)
                 .unwrap_or_else(|| unreachable!("non-null fresh allocation")),
@@ -73,7 +96,7 @@ impl ShmBackend for MemShm {
     }
 
     fn open_existing(&self, name: &SegmentName, expect_size: usize) -> Result<Mapping, ShmError> {
-        let Some((addr, size)) = self.lookup(name) else {
+        let Some((addr, size, _len)) = self.base_of(name) else {
             return Err(ShmError::NotFound);
         };
         if size < 16 {
@@ -82,10 +105,10 @@ impl ShmBackend for MemShm {
         if size != expect_size {
             return Err(ShmError::SizeMismatch);
         }
-        // Registry addresses are valid leaked allocations of `size` bytes;
-        // aliasing mirrors POSIX shared mappings.
+        // The slot owns these bytes for as long as the registry holds it; aliasing the base
+        // mirrors POSIX shared mappings (a live mapping outlives `unlink`).
         Ok(Mapping::from_raw_parts(
-            std::ptr::NonNull::new(addr as *mut u8)
+            std::ptr::NonNull::new(addr)
                 .unwrap_or_else(|| unreachable!("registry stores non-null")),
             size,
         ))
