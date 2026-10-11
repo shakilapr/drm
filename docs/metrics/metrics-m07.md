@@ -36,3 +36,21 @@ Deliverables: header-only `bindings/cpp/include/drm/drm.hpp` (move-only RAII
 test, compile-fail fixtures, and `bindings/cpp/tests/run.sh` (g++ + clang++).
 E3 lane work was already delivered (M03W3/M04W3/M05W1: `PeerLanes`,
 `LaneSocket`, `PeerEgress`, saturation/mixed-class tests).
+
+## M07W3 — Rust Binding (Phase 21), C++ Gate Prep
+
+| Variable | Target | Measured |
+|---|---|---|
+| `RUST_SAFE_GREEN` | borrow lifetimes prevent use-after-release in safe code (I-B3) | `drm` SDK (`bindings/rust/crates/drm`): `BorrowGuard<'chan>` with `payload(&self) -> &[u8]` bound to the guard, `!Send + !Sync` via `PhantomData<*mut ()>`, RAII `Drop` release; `cargo test -p drm sdk` 4 tests |
+| `COMPILE_FAIL_SET` | forbidden lifetime/contract cases rejected at compile time | trybuild 3 fixtures: payload outliving guard (E0515), moved-from guard (E0382), `!Send`/`!Sync` violation (E0277) |
+| `GOLDEN_MATCH` | Rust SDK layouts match golden bytes | SDK defines no `#[repr(C)]` type (ABI layout lives in `drm-ffi`); the `sdk_defines_no_repr_c_structs` test enforces this so a stray layout type fails the suite |
+| `LANES_E2E` | two-peer lanes under load + reconnect green | delivered earlier (`drm-router` `lane`/`lane_egress`/`lane_mixed_class`/`transport::session`) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `bindings/rust/crates/drm` safe SDK (new workspace member, layer
+`bindings`); `xtask` layering map extended so the crate is **enforced** (not
+skipped); Phase 20 gate draft.
+**Fixed:** the `platform::cleanup` flock flake (same class as the lib flake) —
+`spawn_child` now serializes against the flock assertions via a process-wide
+guard; 0/30 failures after (was intermittent), and stale `/dev/shm` segments
+cleared.
