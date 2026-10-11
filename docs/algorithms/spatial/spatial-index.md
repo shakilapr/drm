@@ -216,3 +216,52 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 | `spatial_numeric_grid` (±ULP boundaries, NaN, huge values) | I-X14 |
 | code audit | I-X10 |
 | perf: candidate factor vs brute force | documented |
+
+## Implementation Status (M21W1)
+
+Phase 33 grid + BVH groundwork. The runtime `HashGrid`
+(`crates/drm-spatial/src/grid.rs`) activates from a declared `GridConfig`
+(`index.drm` analogue), sizes the cell table to `⌈M/α_max⌉` (`α_max = 0.70`)
+rounded to a power of two for mask probing, and uses backward-shift deletion
+with no tombstones. `on_sample` is dependency-gated: an unchanged
+anchor-pose dependency vector touches nothing; a sub-slack move updates only
+recorded versions (`rebucket_count` unchanged, `keep_count` advances); an
+envelope exit performs `remove ∪ add` edits under an odd grid epoch restored
+even on every exit path. `nearby`/`region` compute the prospective cell count
+with checked arithmetic before enumeration and fall back to the fixed
+object-table scan above `max_query_cells`; the epoch is re-read after the scan
+so a racing move yields `WriterConflict` (`CONCURRENT_UPDATE`), never a partial
+set. Candidate overflow is an explicit `ProximityOutcome::overflow` carrying the
+required capacity. Steady-state indexing and querying are verified
+allocation-free by a counting-allocator harness. The build-time compiler
+(`crates/drm-workspace/src/spatial/bvh.rs`) emits a deterministic SAH-split
+fixed-layout tree whose internal boxes are the union of their children, with
+two-bank live calibration slots. `drm verify` (`V-SPAT`) rejects a declared
+slack envelope whose span exceeds `max_cells_per_object`, and the memory-budget
+math adds `spatial_index_cost` under `I-MB9`.
+
+| Element | Location | Test |
+|---|---|---|
+| fixed-capacity incremental grid | `crates/drm-spatial/src/grid.rs` | `grid`, `insert_query_remove`, `capacity_refused` |
+| motion slack (zero re-bucket) | `crates/drm-spatial/src/grid.rs`; `tests/grid.rs` | `spatial_motion_slack`, `motion_slack_zero_rebucket` |
+| dependency-vector invalidation | `crates/drm-spatial/tests/grid.rs` | `spatial_index_dependency` |
+| generation guards | `crates/drm-spatial/tests/grid.rs` | `spatial_grid_generation` |
+| epoch handshake | `crates/drm-spatial/tests/grid.rs` | `spatial_query_concurrent` |
+| candidate completeness vs brute force | `crates/drm-spatial/tests/grid.rs` | `spatial_proximity_complete` |
+| saturation ⇒ `OutputTooSmall{required}` | `crates/drm-spatial/tests/grid.rs`; `src/grid.rs` | `candidate_saturation` |
+| bounded fallback | `crates/drm-spatial/tests/grid.rs` | `spatial_huge_radius` |
+| numeric cell bounds | `crates/drm-spatial/tests/grid.rs` | `spatial_numeric_grid` |
+| zero-alloc steady state + rebucket scaling | `crates/drm-spatial/tests/grid_zero_alloc.rs` | `spatial_grid_zero_alloc`, `spatial_rebucket_scaling` |
+| SAH compile + AABB correctness + determinism | `crates/drm-workspace/src/spatial/bvh.rs`; `tests/bvh.rs` | `bvh_aabb_reference`, `bvh_deterministic_compile` |
+| live calibration slots | `crates/drm-workspace/src/spatial/bvh.rs` | `live_calibration_swap` |
+| slack-span verify rejection | `crates/drm-workspace/src/verify/engine.rs` | `verify_spatial_index_slack_span` |
+| index memory in the budget | `crates/drm-workspace/src/budget.rs` | `spatial_index_cost` |
+
+REQ: REQ-SPATIAL-013, REQ-SPATIAL-014, REQ-SPATIAL-019, REQ-SPATIAL-006,
+REQ-SPATIAL-042, REQ-SPATIAL-043, REQ-SPATIAL-045, REQ-SPATIAL-046,
+REQ-SPATIAL-020, REQ-SPATIAL-018, REQ-SPATIAL-052.
+
+**Carry-over**: the multi-round probe occupancy campaign
+(`spatial_hash_occupancy`, I-X2), explicit crash/fault injection
+(`spatial_update_atomic`, I-X12), and the I-X5/I-X10 API/code audits land in
+M21W2 (completeness property) per the work-plan.

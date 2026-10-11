@@ -241,6 +241,45 @@ impl fmt::Display for BudgetWarning {
     }
 }
 
+/// Declared fixed capacity of one runtime spatial index per compute unit
+/// ([spatial-index.md](../../docs/algorithms/spatial/spatial-index.md) `I-X9`,
+/// memory-budget.md `I-MB9`). Every term is declared capacity; the index never
+/// grows. REQ: REQ-SPATIAL-018.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpatialIndexCost {
+    /// Open-addressing cell-hash slots `S = ⌈M/α_max⌉` (`I-X2`).
+    pub cell_hash_slots: u64,
+    /// Membership nodes `M = max_objects × max_cells_per_object` (`I-X2`).
+    pub membership_pool: u64,
+    /// Per-object record count at `max_objects`.
+    pub object_records: u64,
+    /// Nodes across every guarded compiled/calibration BVH bank.
+    pub bvh_nodes: u64,
+    /// Fixed per-declared-query scratch handles.
+    pub query_scratch: u64,
+}
+
+/// Fixed spatial-index memory for one compute: the declared slot, membership,
+/// object-record, BVH-node, and query-scratch counts multiplied by their fixed
+/// element sizes, summed with checked arithmetic (`I-MB6`/`I-MB9`). `None` on
+/// overflow. REQ: REQ-SPATIAL-018, REQ-TOOL-003.
+#[must_use]
+pub fn spatial_index_cost(cost: &SpatialIndexCost) -> Option<u64> {
+    // Fixed element sizes (64-bit target): cell slot, membership node,
+    // object record, BVH node, candidate handle.
+    const CELL_SLOT_BYTES: u64 = 32;
+    const MEMBERSHIP_NODE_BYTES: u64 = 8;
+    const OBJECT_RECORD_BYTES: u64 = 256;
+    const BVH_NODE_BYTES: u64 = 48;
+    const QUERY_HANDLE_BYTES: u64 = 8;
+    cost.cell_hash_slots
+        .checked_mul(CELL_SLOT_BYTES)?
+        .checked_add(cost.membership_pool.checked_mul(MEMBERSHIP_NODE_BYTES)?)?
+        .checked_add(cost.object_records.checked_mul(OBJECT_RECORD_BYTES)?)?
+        .checked_add(cost.bvh_nodes.checked_mul(BVH_NODE_BYTES)?)?
+        .checked_add(cost.query_scratch.checked_mul(QUERY_HANDLE_BYTES)?)
+}
+
 /// Σ over channels of `pool_slots × slot_bytes + control_block` — the fixed
 /// capacity contribution of one compute's active channels/topics (I-MB1). Every
 /// product and sum is checked (I-MB6); `None` ⇒ the sum overflowed `u64`.

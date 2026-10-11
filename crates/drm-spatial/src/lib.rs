@@ -33,6 +33,7 @@ pub mod clock;
 pub mod conventions;
 pub mod forest;
 pub mod geodetic;
+pub mod grid;
 pub mod handle;
 pub mod historical;
 pub mod history;
@@ -53,6 +54,11 @@ pub use conventions::BoundaryConvention;
 pub use forest::{FrameEdge, FrameId, PathEdge, SpaceForest, TreeTxn};
 pub use geodetic::{
     Ecef, Enu, GEODETIC_LOCAL_BOUND_M, Lla, geodetic_to_enu, tangent_plane_enu, wgs84_to_ecef,
+};
+pub use grid::{
+    ALPHA_MAX, CandidateSet, CellKey, GridConfig, GridDeps, HashGrid, MAX_OCCUPIED,
+    ProximityOutcome, QueryPath, TypedAabb, TypedPoint, cell_hash_slots, cell_of,
+    membership_capacity,
 };
 pub use handle::HandleRegistry;
 pub use historical::{HistoricalForest, TopologyEvent};

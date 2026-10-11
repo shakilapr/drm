@@ -916,7 +916,9 @@ fn map_error(e: SpatialError) -> TransformError {
         | SpatialError::InvalidConfig
         | SpatialError::NonUnitQuaternion
         | SpatialError::InvalidDirection
-        | SpatialError::NonFinite => TransformError::OutOfHistory,
+        | SpatialError::NonFinite
+        | SpatialError::InvalidArg
+        | SpatialError::IndexFull => TransformError::OutOfHistory,
     }
 }
 

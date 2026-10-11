@@ -37,6 +37,12 @@ pub enum SpatialError {
     InvalidConfig,
     /// A second node attempted to claim an already-owned dynamic edge (`I-S11`).
     WriterConflict,
+    /// An argument was non-finite, out of range, or otherwise invalid
+    /// (`I-X14`).
+    InvalidArg,
+    /// An insert would exceed the index's declared fixed capacity (`I-X2`);
+    /// the index never grows.
+    IndexFull,
 }
 
 impl SpatialError {
@@ -47,12 +53,15 @@ impl SpatialError {
     pub const fn status(self) -> drm_types::Status {
         match self {
             Self::NonUnitQuaternion | Self::DiscontinuityNearby => drm_types::Status::InvalidData,
-            Self::InvalidDirection | Self::NonFinite => drm_types::Status::InvalidArg,
+            Self::InvalidDirection | Self::NonFinite | Self::InvalidArg => {
+                drm_types::Status::InvalidArg
+            }
             Self::ClockUnresolved | Self::InvalidConfig => drm_types::Status::InvalidConfig,
             Self::PathNotFound => drm_types::Status::NotFound,
             Self::OutOfHistory => drm_types::Status::NoSample,
             Self::InvalidHandle => drm_types::Status::Stale,
             Self::WriterConflict => drm_types::Status::Busy,
+            Self::IndexFull => drm_types::Status::QueueFull,
         }
     }
 }
@@ -70,6 +79,8 @@ impl fmt::Display for SpatialError {
             Self::InvalidHandle => "invalid handle",
             Self::InvalidConfig => "invalid configuration",
             Self::WriterConflict => "writer conflict",
+            Self::InvalidArg => "invalid argument",
+            Self::IndexFull => "index full",
         };
         f.write_str(s)
     }

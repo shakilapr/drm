@@ -18,3 +18,7 @@ workspace = true
 [[test]]
 name = "query_zero_alloc"
 harness = false
+
+[[test]]
+name = "grid_zero_alloc"
+harness = false

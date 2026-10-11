@@ -258,6 +258,7 @@ fn neg_spatial() -> VerifyReport {
     deploy.spatial.index = Some(SpatialIndexDecl {
         index_bytes: 1 << 20,
         budget_bytes: 1 << 10,
+        ..SpatialIndexDecl::default()
     });
     verify(&workspace(), &deploy)
 }
@@ -521,6 +522,36 @@ fn verify_spatial_history_bound() {
     }];
     let report = verify(&workspace(), &ok);
     assert!(!has_fail(&report, V_SPAT), "bound met: {report:?}");
+}
+
+/// REQ: REQ-SPATIAL-052 — a declared slack envelope spanning more cells than
+/// `max_cells_per_object` fails `V-SPAT`; one that fits passes.
+#[test]
+fn verify_spatial_index_slack_span() {
+    let mut bad = config();
+    bad.spatial.index = Some(SpatialIndexDecl {
+        index_bytes: 1,
+        budget_bytes: 1 << 20,
+        max_objects: 4096,
+        max_cells_per_object: 8,
+        cell_size_mm: 500,
+        slack_mm: 1_000,
+    });
+    let report = verify(&workspace(), &bad);
+    assert!(has_fail(&report, V_SPAT), "span > cells bound: {report:?}");
+    assert_failures_cited(&report);
+
+    let mut ok = config();
+    ok.spatial.index = Some(SpatialIndexDecl {
+        index_bytes: 1,
+        budget_bytes: 1 << 20,
+        max_objects: 4096,
+        max_cells_per_object: 27,
+        cell_size_mm: 500,
+        slack_mm: 500,
+    });
+    let report = verify(&workspace(), &ok);
+    assert!(!has_fail(&report, V_SPAT), "span fits: {report:?}");
 }
 
 /// REQ: REQ-OPS-024 — an RPC topic declared best-effort-only fails `V-RPC`; a

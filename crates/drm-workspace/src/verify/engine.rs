@@ -310,6 +310,14 @@ pub struct SpatialIndexDecl {
     pub index_bytes: u64,
     /// Memory budget available to the index in bytes.
     pub budget_bytes: u64,
+    /// Declared maximum tracked objects (`max_objects`, `I-X2`).
+    pub max_objects: u32,
+    /// Declared cells a single object's envelope may span.
+    pub max_cells_per_object: u32,
+    /// Declared cell edge in millimeters (`0` when unspecified).
+    pub cell_size_mm: u32,
+    /// Declared motion-slack half-edge in millimeters.
+    pub slack_mm: u32,
 }
 
 /// Declared transform-history requirement (V-SPAT structural bound).
@@ -761,18 +769,27 @@ fn check_spatial(deploy: &DeploymentConfig, report: &mut VerifyReport) {
             failed = true;
         }
     }
-    if let Some(index) = &deploy.spatial.index
-        && index.index_bytes > index.budget_bytes
-    {
-        report.fail(
-            V_SPAT,
-            format!(
-                "spatial index capacity {} B exceeds the memory budget {} B (I-MB9)",
-                index.index_bytes, index.budget_bytes
-            ),
-            &["REQ-SPATIAL-018"],
-        );
-        failed = true;
+    if let Some(index) = &deploy.spatial.index {
+        if index.index_bytes > index.budget_bytes {
+            report.fail(
+                V_SPAT,
+                format!(
+                    "spatial index capacity {} B exceeds the memory budget {} B (I-MB9)",
+                    index.index_bytes, index.budget_bytes
+                ),
+                &["REQ-SPATIAL-018"],
+            );
+            failed = true;
+        }
+        // I-X2/I-X14: the declared slack envelope must fit the declared cells
+        // bound, and the membership capacity must fit the object bound.
+        if index.cell_size_mm > 0
+            && index.max_cells_per_object > 0
+            && let Err(message) = check_index_fit(index)
+        {
+            report.fail(V_SPAT, message, &["REQ-SPATIAL-052"]);
+            failed = true;
+        }
     }
     for history in &deploy.spatial.histories {
         let period = history.min_sample_period_ns.max(1);
@@ -802,6 +819,35 @@ fn check_spatial(deploy: &DeploymentConfig, report: &mut VerifyReport) {
     if !failed {
         report.pass(V_SPAT);
     }
+}
+
+/// `V-SPAT` index-fit check (`I-X2`): the declared slack envelope's cell span
+/// must not exceed `max_cells_per_object`, and the membership capacity product
+/// must not overflow. Returns an error message on failure.
+/// REQ: REQ-SPATIAL-052.
+fn check_index_fit(index: &SpatialIndexDecl) -> Result<(), String> {
+    let cell = f64::from(index.cell_size_mm);
+    let slack = f64::from(index.slack_mm);
+    let per_axis = 2.0 * (slack / cell).ceil() + 1.0;
+    let span = per_axis * per_axis * per_axis;
+    if span > f64::from(index.max_cells_per_object) {
+        return Err(format!(
+            "spatial index slack envelope spans {span} cells > declared \
+             max_cells_per_object {} (I-X2)",
+            index.max_cells_per_object
+        ));
+    }
+    if u64::from(index.max_objects)
+        .checked_mul(u64::from(index.max_cells_per_object))
+        .is_none()
+    {
+        return Err(
+            "spatial index membership capacity overflows (max_objects × \
+             max_cells_per_object, I-X2)"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// `V-RPC`: generated request/event topics must be declared `reliable`, the

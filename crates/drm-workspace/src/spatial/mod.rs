@@ -14,6 +14,12 @@
 //! REQ: REQ-SPATIAL-047, REQ-SPATIAL-048, REQ-SPATIAL-049, REQ-SPATIAL-031,
 //! REQ-SPATIAL-017.
 
+pub mod bvh;
+
+pub use bvh::{
+    Aabb, BvhError, BvhNode, CompiledBvh, LEAF, StaticPrimitive, SubtreeSlot, compile_bvh,
+};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::Write as _;
