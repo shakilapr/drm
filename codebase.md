@@ -306,5 +306,5 @@ Required checks: all `ci.yml` jobs. `audit.yml` runs nightly and on release; fai
 Rotating test lead per wave owns the exit gate (work-plan). Two approvals required for `drm-core` and `drm-workspace` changes.
 
 ### 7.2 Licensing and Security
-- Dual license: `MIT OR Apache-2.0`, matching the Rust ecosystem convention; `deny.toml` allow-list enforces third-party compatibility (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0) — keep `deny.toml` and this list in lockstep.
+- Dual license: `MIT OR Apache-2.0`, matching the Rust ecosystem convention; `deny.toml` allow-list enforces third-party compatibility (MIT, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0) — keep `deny.toml` and this list in lockstep.
 - Vulnerability reports follow `SECURITY.md`; advisory scanning runs within `audit.yml` (nightly + release).

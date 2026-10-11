@@ -11,6 +11,23 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M22 W4 tranche: Studio extension E2E, spatial regression gates, and the
+  month-22 review. The WASM extension host lands in `crates/drm-extension-host`
+  (facade layer): one `wasmtime` engine with fuel metering plus a `StoreLimits`
+  memory cap per session (`ExtensionBudget`), a `drm_studio_api.call` host
+  import backing the `packages/studio-extension-api` surface, and a
+  `load` → `call` → `teardown` lifecycle. Fuel exhaustion and memory-cap
+  breaches are deterministic stops that leave the engine reusable (`I-ST5`;
+  REQ-STUDIO-004/020). The E2E suite drives the sample extension
+  `fixtures/sample_extension.wat` (`EXT_E2E_GREEN`; REQ-STUDIO-021), and the
+  chaos EXP kills a runaway extension mid-call under a live concurrent session —
+  deterministic stop, engine unaffected, supervisor isolation — recording
+  supervisor-restart over fail-closed teardown (REQ-STUDIO-022). The Phase 33
+  spatial suites migrate into required CI gates (`SPATIAL_REGRESSION`), and the
+  extension suite joins them. Gate evidence
+  ([m22w4.md](docs/gates/m22w4.md)); month-22 review
+  ([month-22.md](docs/gates/month-22.md)); metrics
+  [metrics-m22.md](docs/metrics/metrics-m22.md).
 - Week M22 W2 tranche: Phase 33 final gate (DRM Spatial). The final gate closes
   with `GATE_STATUS(Phase 33) = PASS`: every work-plan #33 criterion and every
   entry of the three spatial algorithm-doc §Test Matrices

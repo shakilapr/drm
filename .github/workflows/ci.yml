@@ -135,6 +135,42 @@ jobs:
       - name: dev-mode smoke
         run: cargo test -p drm-cli --test dev_smoke
 
+  spatial:
+    # Regression permanence (AGENTS #14; work-plan M22W4-E1-T1/E2-T1): every
+    # spatial runtime and toolchain suite that went green during Phase 33 is now
+    # a required, blocking CI gate — once green, always gating. The M22W2 gate
+    # ran these together; this job makes them permanent (`SPATIAL_REGRESSION`).
+    # REQ: REQ-SPATIAL-020, REQ-SPATIAL-042, REQ-SPATIAL-043, REQ-SPATIAL-053.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: spatial runtime suites (caches/clocks/queries/index)
+        run: cargo test -p drm-spatial
+      - name: zero-allocation index/query
+        run: cargo test -p drm-spatial --test grid_zero_alloc --test query_zero_alloc
+      - name: float determinism band
+        run: cargo test -p drm-spatial --test float_determinism
+      - name: spatial-under-router soak
+        run: cargo test -p drm-spatial --test soak_regression
+      - name: spatial toolchain suites
+        run: >-
+          cargo test -p drm-workspace
+          --test mcu --test spatial_collapse --test bvh --test spatial_memory
+
+  extension:
+    # Extension platform E2E (work-plan M22W4-E3-T1, `EXT_E2E_GREEN`): the
+    # sample extension loads, calls the studio-extension-api host surface, and
+    # tears down deterministically under the fuel + memory budget; the chaos
+    # EXP proves a mid-call stop leaves the engine unaffected (I-ST5, I-ST10).
+    # REQ: REQ-STUDIO-004, REQ-STUDIO-021, REQ-STUDIO-022.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: extension host suites (budget + E2E + chaos)
+        run: cargo test -p drm-extension-host
+
   mcu:
     # MCU host parity + zero-forbidden-heap audit, wired as a permanent blocking
     # gate on every PR/push (regression permanence, AGENTS #14; work-plan

@@ -59,12 +59,68 @@ cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D w
 cargo xtask test && cargo xtask check-layering && cargo xtask audit-traceability
 ```
 
+## M22W4 — Studio Extension E2E, Spatial Regression Gates, Month-22 Review
+
+| Variable | Target | Measured |
+|---|---|---|
+| `EXT_E2E_GREEN` | sample extension load + call + teardown green | 1 — `cargo test -p drm-extension-host` (`tests/e2e.rs`) |
+| `SPATIAL_REGRESSION` | all spatial suites permanent required CI gates | 1 — [ci.yml](../../.github/workflows/ci.yml) `spatial` job |
+| `MONTH22_REVIEW` | ON_TRACK | ON_TRACK — [month-22.md](../gates/month-22.md) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | 5 |
+
+Deliverables:
+
+- **Extension host** (`crates/drm-extension-host`, facade layer): one `wasmtime`
+  engine with fuel metering and a per-session `StoreLimits` memory cap; the
+  `drm_studio_api.call` import backs the `packages/studio-extension-api` surface.
+  Fuel exhaustion (`ExtensionError::FuelExhausted`) and memory-cap breaches
+  (`ExtensionError::MemoryLimit`) are deterministic stops that leave the engine
+  reusable (`I-ST5`, REQ-STUDIO-004). The preemption SPIKE records fuel metering
+  over epoch interruption (`PreemptionStrategy::CHOSEN = Fuel`,
+  REQ-STUDIO-020).
+- **Extension E2E** (`tests/e2e.rs`): `fixtures/sample_extension.wat` loads,
+  calls the host API once, and tears down deterministically within budget; the
+  lifecycle is repeatable (`EXT_E2E_GREEN`, REQ-STUDIO-021).
+- **Chaos EXP** (`tests/chaos.rs`): a runaway extension is killed mid-call under
+  a live concurrent session — deterministic stop, engine unaffected, supervisor
+  isolation (`I-ST5`/`I-ST10`, REQ-STUDIO-022); restart vs fail-closed recovery
+  compared and supervisor-restart recorded.
+- **Spatial regression gates** ([ci.yml](../../.github/workflows/ci.yml)
+  `spatial` job): the Phase 33 runtime and toolchain suites are required
+  blocking jobs (regression permanence, AGENTS #14; `SPATIAL_REGRESSION`).
+- **Gate evidence** ([m22w4.md](../gates/m22w4.md)); **month-22 review**
+  ([month-22.md](../gates/month-22.md)): `ON_TRACK`.
+
+### Weekly gate checklist (chaired by E3, Friday)
+
+- [x] `EXT_E2E_GREEN = 1`; `SPATIAL_REGRESSION = 1`
+- [x] **Month-22 review**: `ON_TRACK`; M23 commitment — qualification drive
+  (traceability 100%, soak, deterministic builds per
+  [qualification.md](../algorithms/program/qualification.md))
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M22W4) = PASS`**, **`MONTH22_REVIEW = ON_TRACK`**
+
+### How to reproduce
+
+```text
+cargo test -p drm-extension-host
+cargo test -p drm-spatial
+cargo test -p drm-spatial --test grid_zero_alloc --test query_zero_alloc
+cargo test -p drm-spatial --test float_determinism
+cargo test -p drm-spatial --test soak_regression
+cargo test -p drm-workspace --test mcu --test spatial_collapse --test bvh --test spatial_memory
+cargo xtask fmt --check && cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask test && cargo xtask check-layering && cargo xtask audit-traceability
+```
+
 ## Carry-over
 
-- **M22W3/M22W4**: Studio extension host API + E2E, and the migration of the
-  spatial suites into required CI gates (`SPATIAL_REGRESSION`), per
-  [work-plan-m22-w3.md](../work-plan/work-plan-m22-w3.md) and
-  [work-plan-m22-w4.md](../work-plan/work-plan-m22-w4.md).
+- **M23 qualification drive**: Phase 34 per
+  [qualification.md](../algorithms/program/qualification.md) — traceability to
+  100% (`REQ-QAL-003`/`REQ-QAL-006`), soak gates
+  (`REQ-QAL-005`/`REQ-QAL-013`/`REQ-QAL-014`), and deterministic builds
+  (`REQ-QAL-001`).
 - **W8 spike plan**: the M22W2 ranked falsifiers seed the Phase 34 qualification
   spike plan; a spatial red line would open the M23W1 fix window (none found).
 
