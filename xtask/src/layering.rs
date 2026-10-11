@@ -13,6 +13,7 @@ enum Layer {
     Runtime,
     Toolchain,
     Ops,
+    Bindings,
     Facade,
 }
 
@@ -23,6 +24,7 @@ fn layer_of(crate_name: &str) -> Option<Layer> {
         "drm-core" | "drm-ffi" | "drm-router" | "drm-spatial" => Some(Layer::Runtime),
         "drm-workspace" => Some(Layer::Toolchain),
         "drm-record" | "drm-diag" | "drm-trace" | "drm-rpc" => Some(Layer::Ops),
+        "drm" => Some(Layer::Bindings),
         "drm-cli" | "drm-extension-host" | "xtask" => Some(Layer::Facade),
         _ => None,
     }
@@ -32,7 +34,7 @@ fn layer_of(crate_name: &str) -> Option<Layer> {
 fn allowed(from: Layer) -> &'static [Layer] {
     match from {
         Layer::Types => &[],
-        Layer::Runtime | Layer::Ops => &[Layer::Types, Layer::Runtime],
+        Layer::Runtime | Layer::Ops | Layer::Bindings => &[Layer::Types, Layer::Runtime],
         Layer::Toolchain => &[Layer::Types],
         Layer::Facade => &[Layer::Types, Layer::Runtime, Layer::Toolchain, Layer::Ops],
     }
@@ -69,6 +71,7 @@ pub fn check(_flags: &[String]) -> Result<()> {
         "drm-router",
         "drm-cli",
         "drm-ffi",
+        "drm",
         "xtask",
     ];
     let mut violations: Vec<String> = Vec::new();
