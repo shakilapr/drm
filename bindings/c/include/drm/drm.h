@@ -31,7 +31,10 @@ typedef struct drm_consumer drm_consumer;   /* opaque consumer endpoint */
  *   caller contract violation; only NULL is checked (non-null dangling stays
  *   caller UB and is never claimed detectable).
  * - A handle is valid from a successful open until its matching close call.
- *   Close is never concurrent with other calls on the same handle.
+ *   Close is never concurrent with other calls on the same handle. A second
+ *   close of an already-closed handle (double close) is caller UB — only NULL
+ *   is checked; there is no handle-generation table and it is never claimed
+ *   detectable.
  * - drm_context must be closed only after all endpoints derived from it.
  * - Views (drm_borrow_view / drm_write_view) are caller-owned structs whose
  *   data pointer validity is bounded by the matching release/commit/abort.

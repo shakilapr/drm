@@ -19,10 +19,10 @@ use core::ptr;
 use core::ptr::NonNull;
 
 use drm_ffi::{
-    ENDPOINT_BORROWERS, ENDPOINT_SAMPLE_MAX, drm_borrow_latest, drm_borrow_release,
-    drm_borrow_view, drm_consumer, drm_consumer_close, drm_consumer_open, drm_context,
-    drm_context_close, drm_context_open, drm_publish_copy, drm_publisher, drm_publisher_close,
-    drm_publisher_open, drm_read_latest, drm_read_next,
+    ENDPOINT_BORROWERS, ENDPOINT_SAMPLE_MAX, ENDPOINT_TOPIC_ID, drm_abi_version, drm_borrow_latest,
+    drm_borrow_release, drm_borrow_view, drm_consumer, drm_consumer_close, drm_consumer_open,
+    drm_context, drm_context_close, drm_context_open, drm_publish_copy, drm_publisher,
+    drm_publisher_close, drm_publisher_open, drm_read_latest, drm_read_next,
 };
 use drm_types::Status;
 
@@ -546,5 +546,180 @@ fn ffi_negative_consumer_lease_exhausted() {
     for slot in consumers {
         assert_eq!(unsafe { drm_consumer_close(slot) }, Status::Ok.code());
     }
+    assert_eq!(unsafe { drm_context_close(ctx) }, Status::Ok.code());
+}
+
+/// REQ: REQ-BIND-001, REQ-BIND-005 — borrow/copy of an empty channel is
+/// `NoSample` (c-abi-surface.md §Edge Cases "borrow/copy of empty channel"). No
+/// publish has happened, so the borrow view stays zeroed and no token is issued;
+/// the copy reads report `NoSample` and leave their out-params zeroed (I-A2).
+#[test]
+fn ffi_negative_empty_channel_borrow_is_no_sample() {
+    let (ctx, publisher, consumer) = open_all();
+
+    let sentinel = [1_u8; 4];
+    let mut view = drm_borrow_view {
+        data: sentinel.as_ptr().cast(),
+        len: 9,
+        sequence: 7,
+        token: 0xABCD,
+    };
+    assert_eq!(
+        unsafe { drm_borrow_latest(consumer, &raw mut view) },
+        Status::NoSample.code()
+    );
+    assert!(
+        view.data.is_null() && view.len == 0 && view.sequence == 0 && view.token == 0,
+        "empty-channel borrow leaves the view zeroed (I-A2)"
+    );
+
+    let mut buf = [0_u8; ENDPOINT_SAMPLE_MAX];
+    let mut out_len = 3_usize;
+    assert_eq!(
+        unsafe { drm_read_latest(consumer, buf.as_mut_ptr(), buf.len(), &raw mut out_len) },
+        Status::NoSample.code()
+    );
+    assert_eq!(out_len, 0, "NoSample leaves out_len zeroed");
+
+    let mut missed = 5_u64;
+    assert_eq!(
+        unsafe {
+            drm_read_next(
+                consumer,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &raw mut out_len,
+                &raw mut missed,
+            )
+        },
+        Status::NoSample.code()
+    );
+    assert_eq!(missed, 0, "NoSample leaves out_missed zeroed");
+
+    close_all(ctx, publisher, consumer);
+}
+
+/// REQ: REQ-BIND-008 — an undeclared topic id at endpoint open is `Permission`
+/// (c-abi-surface.md §Edge Cases "Undeclared topic at open ⇒ Permission"). The
+/// in-process backing declares exactly one topic (`ENDPOINT_TOPIC_ID`); a failed
+/// open writes no handle and leaves the out-param zeroed (I-A2).
+#[test]
+fn ffi_negative_undeclared_topic_is_permission() {
+    let mut ctx: *mut drm_context = dangling();
+    assert_eq!(
+        unsafe { drm_context_open(ptr::null(), &raw mut ctx) },
+        Status::Ok.code()
+    );
+
+    let undeclared = ENDPOINT_TOPIC_ID.wrapping_add(1);
+    let mut publisher: *mut drm_publisher = dangling();
+    assert_eq!(
+        unsafe { drm_publisher_open(ctx, undeclared, &raw mut publisher) },
+        Status::Permission.code()
+    );
+    assert!(publisher.is_null(), "failed open must not write a handle");
+
+    let mut consumer: *mut drm_consumer = dangling();
+    assert_eq!(
+        unsafe { drm_consumer_open(ctx, undeclared, &raw mut consumer) },
+        Status::Permission.code()
+    );
+    assert!(consumer.is_null(), "failed open must not write a handle");
+
+    // The declared topic still opens cleanly.
+    let mut ok_pub: *mut drm_publisher = dangling();
+    assert_eq!(
+        unsafe { drm_publisher_open(ctx, ENDPOINT_TOPIC_ID, &raw mut ok_pub) },
+        Status::Ok.code()
+    );
+    assert!(!ok_pub.is_null());
+    assert_eq!(unsafe { drm_publisher_close(ok_pub) }, Status::Ok.code());
+    assert_eq!(unsafe { drm_context_close(ctx) }, Status::Ok.code());
+}
+
+/// REQ: REQ-BIND-018, REQ-BIND-009 — wrong-ABI at open is `WrongAbi` via the
+/// deployment fingerprint guard (c-abi-surface.md §Edge Cases "Wrong-ABI binary
+/// vs deployment ⇒ `WrongAbi` at open"). The in-process backing has **no**
+/// deployment manifest and no fingerprint input (see the crate module docs), so
+/// this phase cannot yet produce `WrongAbi`; the ABI probe is the only
+/// ABI-version surface. This pins the contract and the phase gap rather than
+/// faking a mismatch.
+#[test]
+fn ffi_negative_wrong_abi_is_documented_gap() {
+    const HEADER: &str = include_str!("../../../bindings/c/include/drm/drm.h");
+    const DOC: &str = include_str!("../../../docs/algorithms/bindings/c-abi-surface.md");
+    assert!(
+        HEADER.contains("DRM_ABI_VERSION"),
+        "drm.h must keep the ABI-version macro"
+    );
+    assert!(
+        DOC.contains("Wrong-ABI binary vs deployment"),
+        "c-abi-surface.md must keep the wrong-ABI edge case"
+    );
+    assert!(
+        DOC.contains("No `catch_unwind`"),
+        "c-abi-surface.md I-A6 must keep the fail-stop policy"
+    );
+
+    // Gap: the ABI probe reports the compiled constant, and no export takes a
+    // fingerprint argument, so no wrong-ABI can be observed in this phase.
+    assert_eq!(drm_abi_version(), drm_types::ABI_VERSION);
+    let mut ctx: *mut drm_context = dangling();
+    assert_eq!(
+        unsafe { drm_context_open(ptr::null(), &raw mut ctx) },
+        Status::Ok.code()
+    );
+    assert!(!ctx.is_null());
+    assert_eq!(unsafe { drm_context_close(ctx) }, Status::Ok.code());
+}
+
+/// REQ: REQ-BIND-002, REQ-BIND-004 — close symmetry and double-close. Every open
+/// has a matching close; all three closes are symmetric (null ⇒ `InvalidArg`,
+/// live ⇒ `Ok`). A second close of the same handle — a *double close* — is caller
+/// UB exactly like any other non-null dangling handle: only NULL is checked and
+/// there is **no** handle-generation table (drm.h §Handle validity;
+/// c-abi-surface.md §Edge Cases "Non-null invalid/dangling pointer"). This test
+/// pins that contract and exercises only the *defined* close paths; it never
+/// dereferences a closed handle (doing so would itself be UB).
+#[test]
+fn ffi_negative_double_close_is_caller_ub() {
+    const HEADER: &str = include_str!("../../../bindings/c/include/drm/drm.h");
+    const DOC: &str = include_str!("../../../docs/algorithms/bindings/c-abi-surface.md");
+    assert!(
+        HEADER.contains("A handle is valid from a successful open until its matching close"),
+        "drm.h must keep the handle-lifetime statement"
+    );
+    assert!(
+        HEADER.contains("only NULL is checked"),
+        "drm.h must keep the NULL-only handle check"
+    );
+    assert!(
+        HEADER.contains("never claimed detectable"),
+        "drm.h must keep the undetectable-dangling contract"
+    );
+    assert!(
+        DOC.contains("Non-null invalid/dangling pointer"),
+        "c-abi-surface.md must keep the dangling-pointer edge case"
+    );
+
+    // Symmetric defined close paths: null ⇒ InvalidArg for all three.
+    assert_eq!(
+        unsafe { drm_context_close(ptr::null_mut()) },
+        Status::InvalidArg.code()
+    );
+    assert_eq!(
+        unsafe { drm_publisher_close(ptr::null_mut()) },
+        Status::InvalidArg.code()
+    );
+    assert_eq!(
+        unsafe { drm_consumer_close(ptr::null_mut()) },
+        Status::InvalidArg.code()
+    );
+
+    // Each live handle closes exactly once (Ok). A second close is UB and is
+    // intentionally NOT exercised: there is no generation table to detect it.
+    let (ctx, publisher, consumer) = open_all();
+    assert_eq!(unsafe { drm_publisher_close(publisher) }, Status::Ok.code());
+    assert_eq!(unsafe { drm_consumer_close(consumer) }, Status::Ok.code());
     assert_eq!(unsafe { drm_context_close(ctx) }, Status::Ok.code());
 }

@@ -22,18 +22,30 @@
 //! endpoints are a later phase (c-abi-surface.md, section *Protocols*); nothing
 //! here should be read as claiming cross-process behaviour. The backing topic
 //! is fixed-size (`ENDPOINT_SAMPLE_MAX` bytes): a shorter source publish is
-//! zero-padded, and every read delivers the full fixed sample.
+//! zero-padded, and every read delivers the full fixed sample. The backing
+//! declares exactly one topic (`ENDPOINT_TOPIC_ID`); any other `topic_id` is
+//! undeclared ⇒ `Permission` at open (no deployment manifest exists in this
+//! phase, so the declared set is that single topic).
 //!
 //! Validation runs **once** at endpoint open (I-A1, REQ-BIND-008) and is
 //! accounted per context; the steady-state copy operations run zero per-message
 //! permission/schema checks. Unsafe is permitted here (codebase.md 3.2).
+//!
+//! # Close semantics (REQ-BIND-002)
+//!
+//! Every open has a matching close, and the three closes are symmetric: a null
+//! handle ⇒ `InvalidArg`, a live handle ⇒ `Ok` (drop). A second close of the
+//! same handle — a *double close* — is caller UB, exactly like any other
+//! non-null dangling handle: only NULL is checked, there is **no**
+//! handle-generation table, and it is never claimed detectable (drm.h §Handle
+//! validity; c-abi-surface.md §Edge Cases "Non-null invalid/dangling pointer").
 
 // ABI identifiers mirror `drm.h`/c-abi-surface.md verbatim (`drm_status`,
 // `drm_context`, `drm_borrow_view`, ...) and are intentionally not camel-cased.
 // REQ: REQ-BIND-004, REQ-BIND-007.
 #![allow(non_camel_case_types)]
 
-use core::cell::{Cell, UnsafeCell};
+use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_void};
 use core::ptr;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -76,6 +88,12 @@ pub struct drm_borrow_view {
 /// Fixed canonical sample size of the in-process backing topic, in bytes.
 /// REQ: REQ-BIND-005, REQ-BIND-019.
 pub const ENDPOINT_SAMPLE_MAX: usize = 64;
+
+/// The one topic the in-process backing declares. Any other `topic_id` is
+/// undeclared ⇒ `Permission` at endpoint open (c-abi-surface.md §Edge Cases:
+/// "Undeclared topic at open ⇒ Permission"). The backing serves a single shared
+/// channel, so exactly one topic is declared. REQ: REQ-BIND-008.
+pub const ENDPOINT_TOPIC_ID: u32 = 0;
 
 /// Maximum number of concurrently open consumer endpoints (borrower records)
 /// the in-process context can lease. REQ: REQ-BIND-010.
@@ -121,26 +139,6 @@ struct ConsumerBox {
     reader: UnsafeCell<ReaderState>,
     outstanding: UnsafeCell<Option<(u32, Borrow)>>,
     next_token: AtomicU32,
-}
-
-thread_local! {
-    /// Borrows leaked on this thread (an outstanding borrow dropped by close
-    /// instead of released); debug/diagnostic accounting only.
-    /// REQ: REQ-BIND-001, REQ-BIND-006.
-    static LEAKED_BORROWS: Cell<u64> = const { Cell::new(0) };
-}
-
-/// Record one leaked borrow (outstanding at consumer close). REQ: REQ-BIND-001.
-fn note_leaked_borrow() {
-    LEAKED_BORROWS.with(|c| c.set(c.get().saturating_add(1)));
-}
-
-/// Count of borrows leaked on the calling thread (debug/diagnostic). A caller
-/// that releases every borrow keeps this at zero; a close with an outstanding
-/// borrow counts one. REQ: REQ-BIND-001, REQ-BIND-006.
-#[must_use]
-pub fn drm_ffi_leaked_borrows() -> u64 {
-    LEAKED_BORROWS.with(Cell::get)
 }
 
 /// Zero an out-parameter before any fallible step (I-A2): a null out-param is
@@ -217,7 +215,8 @@ pub unsafe extern "C" fn drm_context_open(
 ///
 /// Null `ctx` ⇒ `InvalidArg`. The caller must have closed every endpoint
 /// derived from the context first (I-A7); a non-null dangling handle is caller
-/// UB (I-A2).
+/// UB (I-A2) — this includes a second close of the same handle (double close);
+/// no handle-generation table, never claimed detectable.
 ///
 /// # Safety
 /// `ctx` is null or a live handle returned by `drm_context_open`.
@@ -235,8 +234,9 @@ pub unsafe extern "C" fn drm_context_close(ctx: *mut drm_context) -> drm_status 
 /// Open a publisher endpoint on `topic_id`. REQ: REQ-BIND-002, REQ-BIND-008.
 ///
 /// `out` is zeroed first (null `out` ⇒ `InvalidArg`); a null `ctx` ⇒
-/// `InvalidArg`. Validation runs exactly once here (I-A1); the topic id is
-/// recorded by the caller but the in-process backing serves one shared topic.
+/// `InvalidArg`. An undeclared `topic_id` ⇒ `Permission` (c-abi-surface.md
+/// §Edge Cases); validation runs exactly once here (I-A1); the in-process
+/// backing declares only `ENDPOINT_TOPIC_ID`.
 ///
 /// # Safety
 /// `ctx` is null or a live context handle; `out` is null or points to a
@@ -245,7 +245,7 @@ pub unsafe extern "C" fn drm_context_close(ctx: *mut drm_context) -> drm_status 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn drm_publisher_open(
     ctx: *mut drm_context,
-    _topic_id: u32,
+    topic_id: u32,
     out: *mut *mut drm_publisher,
 ) -> drm_status {
     if let Err(status) = unsafe { zero_out(out) } {
@@ -253,6 +253,11 @@ pub unsafe extern "C" fn drm_publisher_open(
     }
     if ctx.is_null() {
         return Status::InvalidArg.code();
+    }
+    // Undeclared topic ⇒ Permission, before the validate-once accounting
+    // (c-abi-surface.md §Protocols "Undeclared topic at open ⇒ Permission").
+    if topic_id != ENDPOINT_TOPIC_ID {
+        return Status::Permission.code();
     }
     // SAFETY: caller contract — `ctx` is a live handle.
     let ctx = unsafe { &*ctx.cast::<ContextBox>() };
@@ -269,7 +274,9 @@ pub unsafe extern "C" fn drm_publisher_open(
 
 /// Close a publisher endpoint. REQ: REQ-BIND-002.
 ///
-/// Null `publisher` ⇒ `InvalidArg`; otherwise the handle is reclaimed.
+/// Null `publisher` ⇒ `InvalidArg`; otherwise the handle is reclaimed. A second
+/// close of the same handle (double close) is caller UB (I-A2); no
+/// handle-generation table.
 ///
 /// # Safety
 /// `publisher` is null or a handle returned by `drm_publisher_open`.
@@ -334,7 +341,8 @@ pub unsafe extern "C" fn drm_publish_copy(
 /// Open a consumer endpoint on `topic_id`. REQ: REQ-BIND-002, REQ-BIND-010.
 ///
 /// `out` is zeroed first (null `out` ⇒ `InvalidArg`); a null `ctx` ⇒
-/// `InvalidArg`. The open claims one borrower record; when the
+/// `InvalidArg`. An undeclared `topic_id` ⇒ `Permission` (c-abi-surface.md
+/// §Edge Cases). The open claims one borrower record; when the
 /// `ENDPOINT_BORROWERS` lease is exhausted it returns `Busy` (I-A7). Validation
 /// runs exactly once here (I-A1).
 ///
@@ -345,7 +353,7 @@ pub unsafe extern "C" fn drm_publish_copy(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn drm_consumer_open(
     ctx: *mut drm_context,
-    _topic_id: u32,
+    topic_id: u32,
     out: *mut *mut drm_consumer,
 ) -> drm_status {
     if let Err(status) = unsafe { zero_out(out) } {
@@ -353,6 +361,11 @@ pub unsafe extern "C" fn drm_consumer_open(
     }
     if ctx.is_null() {
         return Status::InvalidArg.code();
+    }
+    // Undeclared topic ⇒ Permission (c-abi-surface.md §Edge Cases), before the
+    // borrower-record lease is claimed.
+    if topic_id != ENDPOINT_TOPIC_ID {
+        return Status::Permission.code();
     }
     // SAFETY: caller contract — `ctx` is a live handle.
     let ctx = unsafe { &*ctx.cast::<ContextBox>() };
@@ -377,9 +390,11 @@ pub unsafe extern "C" fn drm_consumer_open(
 
 /// Close a consumer endpoint. REQ: REQ-BIND-002, REQ-BIND-001.
 ///
-/// Null `consumer` ⇒ `InvalidArg`. An outstanding borrow at close is a caller
-/// leak: it is released (the hazard slot is cleared) and counted in the debug
-/// leak counter (see [`drm_ffi_leaked_borrows`]).
+/// Null `consumer` ⇒ `InvalidArg`. An outstanding borrow at close ⇒ `Busy`
+/// (consumer-registration I-CR4): the endpoint stays claimed and the handle is
+/// returned intact so the caller can `drm_borrow_release`, then close. A second
+/// close of the same handle (double close) is caller UB (I-A2); no
+/// handle-generation table.
 ///
 /// # Safety
 /// `consumer` is null or a handle returned by `drm_consumer_open`.
@@ -392,10 +407,10 @@ pub unsafe extern "C" fn drm_consumer_close(consumer: *mut drm_consumer) -> drm_
     // SAFETY: caller contract — handle from `drm_consumer_open`.
     let mut boxed = unsafe { Box::from_raw(consumer.cast::<ConsumerBox>()) };
     if boxed.outstanding.get_mut().is_some() {
-        // Debug leak accounting: explicit release was skipped. Dropping the
-        // guard releases the hazard slot so the pool is not wedged.
-        note_leaked_borrow();
-        *boxed.outstanding.get_mut() = None;
+        // Outstanding borrow: refuse (I-CR4) and hand the handle back intact so
+        // the caller can release, then close. Never drop a live borrow here.
+        let _ = Box::into_raw(boxed);
+        return Status::Busy.code();
     }
     drop(boxed);
     Status::Ok.code()

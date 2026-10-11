@@ -12,8 +12,8 @@ use drm_ffi::{
     ENDPOINT_SAMPLE_MAX, drm_borrow_latest, drm_borrow_release, drm_borrow_view, drm_consumer,
     drm_consumer_close, drm_consumer_open, drm_context, drm_context_channel, drm_context_close,
     drm_context_open, drm_context_per_message_checks, drm_context_validation_checks,
-    drm_ffi_leaked_borrows, drm_publish_copy, drm_publisher, drm_publisher_close,
-    drm_publisher_open, drm_read_latest, drm_read_next,
+    drm_publish_copy, drm_publisher, drm_publisher_close, drm_publisher_open, drm_read_latest,
+    drm_read_next,
 };
 use drm_types::Status;
 
@@ -150,10 +150,14 @@ fn borrow_double_release_is_invalid_arg() {
         Status::Ok.code()
     );
 
-    // Close with an outstanding borrow is a leak: counted exactly once.
-    let before = drm_ffi_leaked_borrows();
+    // Close with an outstanding borrow is refused (I-CR4): the endpoint stays
+    // claimed; release first, then close succeeds.
+    assert_eq!(unsafe { drm_consumer_close(consumer) }, Status::Busy.code());
+    assert_eq!(
+        unsafe { drm_borrow_release(consumer, second.token) },
+        Status::Ok.code()
+    );
     assert_eq!(unsafe { drm_consumer_close(consumer) }, Status::Ok.code());
-    assert_eq!(drm_ffi_leaked_borrows(), before + 1);
 
     assert_eq!(unsafe { drm_publisher_close(publisher) }, Status::Ok.code());
     assert_eq!(unsafe { drm_context_close(ctx) }, Status::Ok.code());
