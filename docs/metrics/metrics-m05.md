@@ -31,3 +31,18 @@ Deliverables: `docs/gates/phase-14.md` (finalized); dead-reader reclamation
 slow path (`drm-core::channel::reclaim`, `identity_alive` start-ticks guard,
 per-consumer registration lock + under-lock re-read). The multi-hour storm
 wall-time run is the CI/nightly lane.
+
+## M05W3 — Phase 15 Gate Prep, Publisher Lifecycle, Serial Adapter
+
+| Variable | Target | Measured |
+|---|---|---|
+| `EXHAUSTION_E2E` | exhaustion under real borrow patterns sustained | exhaustion suites + hazard-protected channel tests green |
+| `LIFECYCLE_UNITS` | authority race + epoch tests green (I-L1..L5) | `cargo test -p drm-core lifecycle`: 16 passed |
+| `RESTART_100` | restart ×100 epoch exact | `publisher_restart_loop_100` (in-memory lifecycle path; epoch +1 exactly, floor preserved) |
+| `FRESHNESS_FIXTURES` | state transitions per timing contracts | `consumer_observes_epoch_reset`, publisher reset tests; full consumer freshness subsystem remains Phase 17 scope |
+| `SERIAL_LOOPBACK` | bounded frame round-trip ×10k | `drm-router::transport::serial` (7 tests, deterministic 10k escape/loopback coverage) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: lifecycle coverage (`drm-core::channel::lifecycle`); bounded
+COBS+CRC32C best-effort serial codec (`drm-router::transport::serial`);
+`docs/gates/phase-15.md` draft.
