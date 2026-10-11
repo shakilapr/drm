@@ -11,6 +11,23 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M12 W4 tranche: Windows conformance subset + month-12 review — the
+  cross-OS subset manifest `xtask/src/cross_os.rs` (`SUBSET`,
+  `covers_required_invariants`, `cargo xtask test --cross-os`; registered in
+  `xtask/README.md`/ADR 0003) that lists every Linux suite row which must run on
+  Windows, each green or scheduled with a port note (`PORT_GAPS_CLOSED = 1`);
+  Windows platform lifecycle parity
+  ([platform_windows.rs](crates/drm-core/tests/platform_windows.rs),
+  `I-W4b`/`I-W6`/`I-W7`) and guarded cleanup
+  (`shm::windows::tests::win_cleanup`, `I-W4`); the month-12 review packet
+  ([month-12.md](docs/gates/month-12.md), verdict ON_TRACK); `windows-nightly.yml`
+  and the `windows-smoke` CI job now run the one subset (nightly ×3); new
+  requirements `REQ-CORE-101` (Windows lifecycle suite parity) and
+  `REQ-QAL-008` (cross-OS conformance subset).
+- Week M12 W3 tranche: Windows reclamation + precommit exercised through the
+  kill/PID-reuse (`win_lock_release_on_death` `I-W3`, `win_pid_reuse` `I-W5`)
+  and `VirtualLock` (`win_precommit_roundtrip` `I-W6`) fixtures; the cross-OS
+  matrix harness carried into M12W4.
 - Week M12 W2 tranche: Phase 26 gate ([docs/gates/phase-26.md](docs/gates/phase-26.md),
   the eleven work-plan #26 rejection classes ⇄ executable verify-engine fixtures
   with `I-V1`..`I-V6` supporting evidence) and the Windows identity + locks

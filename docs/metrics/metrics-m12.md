@@ -96,3 +96,64 @@ Notes:
   [verify-engine.md](../algorithms/toolchain/verify-engine.md) and
   [windows-backends.md](../algorithms/runtime/windows-backends.md), so no ADR or
   algorithm-doc change landed.
+
+## M12W3 — Windows Reclamation + Precommit, Cross-OS Matrix Design
+
+| Variable | Target | Measured |
+|---|---|---|
+| `WIN_RECLAIM_GREEN` | kill matrix + PID-reuse green on Windows | `cargo test -p drm-core --lib win_` — `win_lock_release_on_death` (`I-W3`), `win_pid_reuse` (`I-W5`), `win_identity_child`, plus `win_active_hold_lifecycle` (`I-W8`); the registration lock is reclamation authority, identity is diagnostic only |
+| `WIN_PRECOMMIT` | refusal + success paths green on Windows | `cargo test -p drm-core --lib win_precommit_roundtrip` (`I-W6`): `VirtualLock` success is the proof, failure ⇒ `QuotaExceeded` ⇒ refuse activation |
+| `MATRIX_HARNESS` | OS×language×transport cells enumerated + harness running | cell enumeration in [tests/conformance/README.md](../../tests/conformance/README.md); executable subset harness carried into M12W4 (`xtask/src/cross_os.rs`) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Notes:
+
+- The Windows reclamation/precommit primitives (`identity_alive`,
+  `is_alive`, `precommit_and_prove`) landed with the M12W1–M12W2 backend; M12W3
+  exercised them through the kill/PID-reuse and `VirtualLock` fixtures.
+- The matrix harness (E4) slipped to M12W4 Day 1 as the week's risk register
+  allows; Phase 31 gate M14W2 is unaffected.
+
+## M12W4 — Windows Conformance Subset, Month-12 Review
+
+| Variable | Target | Measured |
+|---|---|---|
+| `WIN_CONFORMANCE_SUBSET` | defined Linux-suite subset green on Windows nightly | `xtask/src/cross_os.rs` `SUBSET` (8 green rows + 2 scheduled) executed by `cargo xtask test --cross-os`; `.github/workflows/windows-nightly.yml` runs it ×3 consecutive |
+| `PORT_GAPS_CLOSED` | all subset port gaps fixed or explicitly scheduled | 1 — every row is green or `Scheduled(note)` (`win-race-create`, `win-init-reinit` ⇒ M13W1 E1); no row silently missing |
+| `MONTH12_REVIEW` | ON_TRACK verdict recorded | ON_TRACK — [month-12.md](../gates/month-12.md); gate ledger 17–26/29/30 PASS; go for M13 |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Cross-OS conformance subset `xtask/src/cross_os.rs` (`SubsetRow`, `SUBSET`,
+  `covers_required_invariants`, `cargo xtask test --cross-os`): the single
+  manifest of Linux suite rows that must run on Windows, each green or carrying
+  an explicit port note. Registered command in `xtask/README.md` (ADR 0003).
+- Windows platform lifecycle parity `crates/drm-core/tests/platform_windows.rs`
+  (`I-W4b`/`I-W6`/`I-W7`): kill-during-lifecycle releases the last view,
+  10 000 create/unmap cycles leave the Win32 handle count stable, and a
+  beyond-commit-limit create fails explicitly with a clean namespace.
+- Windows guarded cleanup `shm::windows::tests::win_cleanup` (`I-W4`): the
+  exclusive active lock refuses cleanup while a node holds a shared hold and
+  reports `Cleaned` once all holds drop.
+- CI: `windows-nightly.yml` runs `cargo xtask test --cross-os` on the
+  `windows-latest` runner (three consecutive green runs recorded in the job
+  log); `ci.yml` `windows-smoke` runs the same subset so PRs and nightly share
+  one list.
+- Month-12 review packet [month-12.md](../gates/month-12.md): variables M09–M12,
+  gate ledger, carry-over/quarantine, risk deltas, registry health, and the M13
+  commitment.
+- Registry: `REQ-CORE-101` (Windows lifecycle suite parity), `REQ-QAL-008`
+  (cross-OS conformance subset).
+
+Notes:
+
+- Windows-only rows cannot run on the Linux authoring host; they are
+  cross-compiled (`cargo check -p drm-core --tests --target
+  x86_64-pc-windows-msvc`) and gated by the `windows-latest` jobs. `cargo xtask
+  test --cross-os` on Linux runs the platform-neutral rows and no-ops the
+  `cfg`-gated Windows rows.
+- No architecture divergence: the subset mirrors
+  [windows-backends.md](../algorithms/runtime/windows-backends.md) §Test Matrix
+  and [shm-backend.md](../algorithms/runtime/shm-backend.md) suite parity, so no
+  ADR or algorithm-doc change landed.

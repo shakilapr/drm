@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod cross_os;
 mod gencheck;
 mod golden;
 mod layering;
@@ -31,7 +32,7 @@ fn main() -> std::process::ExitCode {
 fn run(args: &[String]) -> Result<()> {
     let Some(cmd) = args.first() else {
         bail!(
-            "usage: cargo xtask <fmt [--check] | lint | test [--stress] | check-layering | audit-traceability | soak --duration <h> | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
+            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--cross-os] | check-layering | audit-traceability | soak --duration <h> | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
         );
     };
     let flags = &args[1..];
@@ -136,7 +137,10 @@ fn test(flags: &[String]) -> Result<()> {
             )
             .context("xtask test --stress")?;
         }
-        other => bail!("test flags: {other:?} (expected none or --stress)"),
+        ["--cross-os"] => {
+            cross_os::run().context("xtask test --cross-os")?;
+        }
+        other => bail!("test flags: {other:?} (expected none, --stress, or --cross-os)"),
     }
     Ok(())
 }

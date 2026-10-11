@@ -211,7 +211,7 @@ Artifact rules:
 | Compile-fail | binding crates, schema fixtures | trybuild | forbidden borrow lifetimes, contract violations | every PR |
 | Fuzz | `tests/fuzz` | cargo-fuzz | schema parser, framing, hazard protocol | PR smoke + nightly |
 | Sanitizer | core crates | ASan/TSan/Miri | memory and races; Miri on lock-free modules (OS SHM excluded) | PR (core) + nightly |
-| Conformance | `tests/conformance` | matrix harness | 4-language ABI + interop | every PR |
+| Conformance | `tests/conformance` | matrix harness (`xtask test --cross-os`) | 4-language ABI + interop; cross-OS subset (green or scheduled) | every PR |
 | Stress/chaos | `tests/stress` | harness | kill -9 at every borrow stage, PID reuse, pool exhaustion | nightly |
 | Soak | `tests/soak` | harness | long-duration zero corruption/deadlock | weekly + W8 gate |
 | Golden vectors | `tests/fixtures/golden/` | all bindings | byte-identical layouts C/C++/Rust/Python | every PR |
@@ -249,7 +249,7 @@ Extension commands are registered in `xtask/README.md` and covered by ADR 0003: 
 |---|---|---|
 | `ci.yml` | every PR / push | Matrix: Linux x86_64 + aarch64, Windows x86_64. `xtask lint`, `xtask test`, conformance, `check-layering`, semver-checks, frontend lint/build |
 | `sanitizers.yml` | PR (core paths) + nightly | ASan/TSan full matrix; Miri where applicable; scheduled Windows MSVC ASan |
-| `windows-nightly.yml` | nightly | Windows platform subset: SHM/identity/`LockFileEx` locks + socket transports |
+| `windows-nightly.yml` | nightly | Windows conformance subset (`cargo xtask test --cross-os`, green ×3): SHM/identity/`LockFileEx` locks, lifecycle parity, socket transports, router framing/lanes/shaping, verify |
 | `audit.yml` | nightly + release | cargo-deny, advisories, `audit-zero-alloc`, `audit-traceability`, `gen-check`, docs/examples execution, benchmark regression report |
 | `release.yml` | tag `v*` | crates.io publish, Python wheels (maturin), Studio artifacts, SBOM, ABI compatibility check vs previous release |
 

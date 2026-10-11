@@ -1,9 +1,11 @@
-# Nightly Windows platform subset (work-plan M12W2-E4-T2): SHM sections,
-# process identity, `LockFileEx` locks, and the socket transports run nightly on
-# a Windows host so platform facts (release-on-death lag, handler limits) surface
-# ahead of the weekly gates. Results feed docs/metrics/metrics-m12.md.
-# REQ: REQ-CORE-074, REQ-CORE-075, REQ-CORE-076, REQ-CORE-077, REQ-CORE-078,
-# REQ-ROUTE-029, REQ-ROUTE-032.
+# Nightly Windows conformance subset (work-plan M12W2-E4-T2, M12W4-E4-T1):
+# the cross-OS subset defined in xtask/src/cross_os.rs — SHM sections, process
+# identity, `LockFileEx` locks, socket transports, router framing/lanes/shaping,
+# and the verify engine. Runs three consecutive times so runner flakiness
+# surfaces (work-plan M12W4 Tests: green ×3 consecutive). Results feed
+# docs/metrics/metrics-m12.md and docs/gates/month-12.md.
+# REQ: REQ-QAL-008, REQ-CORE-074, REQ-CORE-075, REQ-CORE-076, REQ-CORE-077,
+# REQ-CORE-078, REQ-CORE-101, REQ-ROUTE-029, REQ-ROUTE-032.
 name: windows-nightly
 
 on:
@@ -19,7 +21,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable # honors rust-toolchain.toml
-      - name: windows shm + locks + identity
-        run: cargo test -p drm-core --lib win_ -- --nocapture
-      - name: windows transport subset (UDP/TCP loopback + error mapping)
-        run: cargo test -p drm-router --lib transport -- --nocapture
+      - name: cross-OS conformance subset (green ×3 consecutive)
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            echo "::group::subset run $i"
+            cargo xtask test --cross-os
+            echo "::endgroup::"
+          done

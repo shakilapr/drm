@@ -40,20 +40,22 @@ jobs:
         run: cargo xtask audit-traceability --registry
 
   windows-smoke:
-    # Windows SHM + LockFileEx backend smoke (work-plan M12W1-E4-T2/M12W2-E1-T1,
-    # windows-backends.md §Test Matrix): section create/map round-trip,
-    # precommit, lock acquire/release, kernel release-on-death, incarnation
-    # guard, and active-hold lifecycle. Platform-only suites are cfg(unix);
-    # the win_ suite is the blocking Windows platform gate.
-    # REQ: REQ-CORE-074, REQ-CORE-075, REQ-CORE-076, REQ-CORE-077, REQ-CORE-078.
+    # Windows conformance subset (work-plan M12W4-E4-T3; windows-backends.md
+    # §Test Matrix): the same manifest the nightly job runs — section
+    # create/map round-trip, precommit, lock acquire/release, kernel
+    # release-on-death, incarnation guard, active-hold lifecycle, guarded
+    # cleanup, platform lifecycle parity, socket transports, router
+    # framing/lanes/shaping, and the verify engine. Platform-only suites are
+    # cfg(unix); the subset is the blocking Windows platform gate. One list,
+    # never a fork (xtask/src/cross_os.rs).
+    # REQ: REQ-QAL-008, REQ-CORE-074, REQ-CORE-075, REQ-CORE-076, REQ-CORE-077,
+    # REQ-CORE-078, REQ-CORE-101.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable # honors rust-toolchain.toml
-      - name: windows shm + locks + identity
-        run: cargo test -p drm-core --lib win_
-      - name: windows transport smoke (UDP/TCP loopback + error mapping)
-        run: cargo test -p drm-router --lib transport
+      - name: cross-OS conformance subset
+        run: cargo xtask test --cross-os
 
   corpus:
     # Blocking parser-corpus matrix (work-plan M01W3-E4-T1): counts must print

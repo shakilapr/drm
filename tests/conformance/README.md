@@ -45,3 +45,27 @@ eventually cross a real link. Status: `R` runner present; `-` not yet wired.
 - Rust UDP: `cargo test -p drm-router --lib udp`; `cargo run -p drm-router --example udp_pair` (10k loopback exchanges).
 - C++ cells land with the C++17/20 bindings work package (Phase 20, REQ-BIND-013).
 - TCP/serial transports land in later phases (`router-core.md`, `serial-mcu.md`).
+
+## Windows conformance subset (defined M12W4)
+
+The Linux conformance suite rows that must run green on the Windows runner, or
+carry an explicit port note while a platform fixture is scheduled. The manifest
+is the single source of truth in `xtask/src/cross_os.rs`; `cargo xtask test
+--cross-os` executes every green row on the current host (Windows-only rows are
+`cfg`-gated and no-op elsewhere), so the nightly Windows job and the local smoke
+never diverge. `PORT_GAPS_CLOSED = 1` iff no row is silently missing.
+
+| Row | Invariants | Vehicle | Windows |
+|---|---|---|---|
+| `win-shm-locks-identity` | I-W1/I-W2/I-W3/I-W5/I-W6/I-W7/I-W8 | `cargo test -p drm-core --lib win_` | green |
+| `win-cleanup` | I-W4 | `cargo test -p drm-core --lib win_cleanup` | green |
+| `win-lifecycle-parity` | I-W4b/I-W6/I-W7 | `cargo test -p drm-core --test platform_windows` | green |
+| `router-transport` | I-RT5 | `cargo test -p drm-router --lib transport` | green |
+| `router-framing` | I-RT9 | `cargo test -p drm-router --test framing_record` | green |
+| `router-lanes` | I-LS1/I-LS2 | `cargo test -p drm-router --test lane` | green |
+| `router-shaping` | I-LS3/I-LS4 | `cargo test -p drm-router shaping` | green |
+| `verify-engine` | I-V1/I-V6 | `cargo test -p drm-workspace --test verify_engine` | green |
+| `win-race-create` | I-W1 | `cargo test -p drm-core --lib win_race_create` | scheduled (M13W1 E1) |
+| `win-init-reinit` | I-W1/I-L8 | `cargo test -p drm-core --lib win_init_reinit` | scheduled (M13W1 E1) |
+
+REQ: REQ-QAL-008, REQ-CORE-101.

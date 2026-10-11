@@ -411,7 +411,8 @@ mod tests {
 
     use super::{WinLockBackend, WinShm, current_identity, identity_alive, is_alive};
     use crate::shm::{
-        LockBackend, LockPaths, SegmentName, ShmBackend, ShmError, windows_section_name,
+        CleanReport, LockBackend, LockPaths, SegmentName, ShmBackend, ShmError,
+        windows_section_name,
     };
 
     /// Test helper: unwrap-or-abort without `unwrap`/`expect` (workspace deny).
@@ -584,6 +585,38 @@ mod tests {
         locks.release(node_a);
         let clean = ok(locks.try_exclusive(&active), "clean exclusive");
         locks.release(clean);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// REQ: REQ-CORE-080, REQ-CORE-075 — I-W4: guarded cleanup refuses while a
+    /// node holds the shared active lock (`ActiveUntouched`) and reports
+    /// `Cleaned` once every hold is gone; pagefile sections have no unlink, so
+    /// the section lives until its last view closes.
+    #[test]
+    fn win_cleanup() {
+        let _serial = crate::test_guard::acquire();
+        let shm = WinShm;
+        let locks = WinLockBackend;
+        let dir = lock_dir("cleanup");
+        ok(std::fs::create_dir_all(&dir), "dir");
+        let paths = LockPaths::new(&dir);
+        let n = name("cleanup-seg");
+        let m = ok(shm.create_exclusive(&n, 64), "create");
+        let names = [n.clone()];
+        let hold = ok(locks.try_shared(&paths.active()), "node hold");
+        assert!(matches!(
+            crate::deploy::clean(&shm, &locks, &paths, &names),
+            Ok(CleanReport::ActiveUntouched)
+        ));
+        let reopen = ok(shm.open_existing(&n, 64), "untouched");
+        shm.unmap(reopen);
+        locks.release(hold);
+        assert!(matches!(
+            crate::deploy::clean(&shm, &locks, &paths, &names),
+            Ok(CleanReport::Cleaned)
+        ));
+        shm.unmap(m);
+        assert!(matches!(shm.open_existing(&n, 64), Err(ShmError::NotFound)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

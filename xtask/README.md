@@ -24,7 +24,7 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 | `xtask soak` | long-duration stability suite (`tests/soak`) |
 | `xtask test --stress` | chaos/stress suites (`tests/stress`) |
 | `xtask test --two-host` | two-host router/transport matrix |
-| `xtask test --cross-os` | cross-OS parity matrix (Linux/Windows) |
+| `xtask test --cross-os` | cross-OS conformance subset (`xtask/src/cross_os.rs`); every Linux suite row green on Windows or scheduled with a port note |
 | `xtask bench --report-regressions` | benchmark regression report (audit.yml) |
 | `xtask abi-check --against <ref>` | ABI/layout compatibility vs a previous release (release.yml) |
 | `xtask publish` | lockstep crates.io publishing (release.yml) |
