@@ -112,6 +112,24 @@ fn deadline_tick(c: &mut ConsumerStats, ch: &ChannelView, now_mono: u64) {
 2. Runtime: numeric IDs + fixed-size args only; `trace_register_thread` for RT threads before hot loops (lane pre-faulted); lazy claim otherwise.
 3. Diag/reader: k-way merge by `(ts_ns, lane_id, lane_seq)`; dictionary lookup renders human text; unknown ID ⇒ raw hex (version skew visible, not silent). Cross-thread causality uses explicit correlation IDs, not a global counter.
 
+*Dictionary versioning (pinned M14W3):*
+
+1. The metadata dictionary is a build artifact carrying a `dict_version` = `(dictionary_format_version, BLAKE3(dict bytes) truncated to 16 bytes)`; the version is emitted into the deployment artifact set and the `TraceRingSet` header at activation.
+2. The numeric `id → (name, format)` mapping is **append-only within a deployment**: compaction (`drm ids compact`) may renumber and emits a new `dict_version`; a reader holding an older version renders unknown IDs as raw hex plus a version-mismatch warning — never a wrong name (I-OB6, Edge Cases: trace dict version mismatch).
+3. The runtime stores no strings; arg encodings are checked against the record class at build (oversize ⇒ build error or a generated larger record class). `dict_version` participates in the deployment identity so a mismatched reader is detectable before attach.
+
+## Design Confirmation (M14W3)
+
+Design reviewed against architecture §Two-Plane Architecture (Observability Plane),
+§What drm-diag Measures, §Tooling and Introspection; no invariant changed.
+
+- [x] Trace ring: wait-free per-producer SPSC lanes (`TraceRingSet`/`TraceLane`), fixed `N_LANES` at activation, no shared producer state (I-OB1, `REQ-OPS-015`/`REQ-OPS-017`).
+- [x] `TraceEvent { id, args: [u8; 16], ts_ns }`; numeric IDs + build-time metadata dictionary (I-OB2, `REQ-OPS-014`).
+- [x] Dictionary versioning pinned (above) — append-only per deployment; compaction renumbers under a new `dict_version`; version skew renders raw IDs, never wrong text.
+- [x] Diag sampler epoch sandwich `epoch → counters → epoch`; counters cumulative; deltas computed by diag (I-OB7).
+- [x] Deadline state machine `WaitingFirst → Current ⇄ Late`; one `miss_count` increment per `Current → Late`; non-`exact` channels report no deadline state (I-OB4, `REQ-OPS-016`).
+- [x] Introspection tools never publish and release borrows immediately (I-OB5, `REQ-OPS-003`).
+
 ## Edge Cases & Errors
 
 | Case | Result |

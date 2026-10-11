@@ -424,3 +424,92 @@ mod soak_tests {
         }
     }
 }
+
+/// REQ: REQ-SPATIAL-036, REQ-SPATIAL-004, REQ-OPS-008, REQ-OPS-009, REQ-OPS-014 —
+/// M14W3 design-confirmation lock: the normative algorithm docs must keep the
+/// confirmed spatial quantities, clock domains, recorder `on_full` policies, and
+/// trace dictionary versioning. A design edit that drops one turns this red
+/// (regression permanence, AGENTS #14).
+#[cfg(test)]
+mod design_lock {
+    use std::path::Path;
+
+    /// Reads a repository doc relative to the workspace root.
+    fn repo_doc(rel: &str) -> String {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| unreachable!("read {rel}: {e}"))
+    }
+
+    #[test]
+    fn spatial_types_confirmed() {
+        let doc = repo_doc("docs/algorithms/spatial/spatial-core.md");
+        for ty in [
+            "Point3",
+            "Direction3",
+            "Vector3",
+            "Pose3",
+            "Transform3",
+            "Twist3",
+        ] {
+            assert!(doc.contains(ty), "spatial-core.md lost typed quantity {ty}");
+        }
+        for item in ["Stamped", "SpatialId"] {
+            assert!(doc.contains(item), "spatial-core.md lost binding {item}");
+        }
+    }
+
+    #[test]
+    fn clock_domains_confirmed() {
+        let doc = repo_doc("docs/algorithms/spatial/spatial-core.md");
+        for domain in ["HostMonotonic", "Device", "Global", "SimReplay"] {
+            assert!(
+                doc.contains(domain),
+                "spatial-core.md lost clock domain {domain}"
+            );
+        }
+        for item in [
+            "ClockIdentity",
+            "ClockMapping",
+            "rate_ratio",
+            "map_timestamp",
+        ] {
+            assert!(doc.contains(item), "spatial-core.md lost clock item {item}");
+        }
+    }
+
+    #[test]
+    fn record_policies_confirmed() {
+        let doc = repo_doc("docs/algorithms/ops/record-replay.md");
+        for policy in ["Drop", "Stop", "Backpressure"] {
+            assert!(
+                doc.contains(policy),
+                "record-replay.md lost on_full policy {policy}"
+            );
+        }
+        for item in ["GapLedger", "ingress_loop", "chunk_target"] {
+            assert!(
+                doc.contains(item),
+                "record-replay.md lost record item {item}"
+            );
+        }
+    }
+
+    #[test]
+    fn trace_dictionary_confirmed() {
+        let doc = repo_doc("docs/algorithms/ops/observability-plane.md");
+        for item in ["TraceRingSet", "TraceLane", "TraceEvent", "dict_version"] {
+            assert!(
+                doc.contains(item),
+                "observability-plane.md lost trace item {item}"
+            );
+        }
+        for item in ["diag_sample", "deadline_tick"] {
+            assert!(
+                doc.contains(item),
+                "observability-plane.md lost diag item {item}"
+            );
+        }
+    }
+}

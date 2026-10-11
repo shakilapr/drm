@@ -119,6 +119,21 @@ fn disk_thread(rec: &Recorder) {
 3. Republish under a replay deployment namespace (deployment-identity.md); source timestamps replayed exactly as recorded; receive time = replay time.
 4. Consumers observe tiered fidelity (I-RC4): payload bytes, per-topic order, and recorder-observed global order.
 
+## Design Confirmation (M14W3)
+
+Recorder pipeline reviewed against architecture §Memory Ownership (record lifecycle),
+§drm-record and this doc's I-RC1..I-RC6; implementation plan confirmed, no invariant changed.
+
+- [x] Borrow-copy-release: ingress holds a DRM borrow only for the copy into a per-topic slab slot; disk threads observe recorder memory exclusively (I-RC1, `REQ-OPS-005`/`REQ-OPS-007`).
+- [x] Bounded buffer: recorder memory never exceeds `buffer_bytes`; per-topic slabs make accounting exact — a 128-byte IMU sample never pays an 8 MiB camera slot (I-RC2, `REQ-OPS-019`).
+- [x] `on_full` policies exact: `Drop` coalesces the sequence into the topic `GapLedger`; `Stop` aborts `RECORDING_FAILED reason: BUFFER_EXHAUSTED`; `Backpressure` pauses ingress with the slot retained (I-RC3, `REQ-OPS-008`). The recorder is never an implicit required sequential consumer.
+- [x] Gap ledger is a separate exhaustion domain from payload slabs; overflow ⇒ conservative range merge + `gap_detail_lost = true` (I-RC5, `REQ-OPS-018`).
+- [x] MCAP chunking (`chunk_target`) with DRM metadata records carrying full u64 `(publisher_epoch, seq)` + `ingress_order`; standard MCAP fields stay interoperable (I-RC6, `REQ-OPS-006`).
+- [x] Replay under a replay deployment namespace ([deployment-identity.md](../deployment-identity.md)); source timestamps replayed exactly, receive time = replay time; three fidelity tiers + explicit scheduler (I-RC4, `REQ-OPS-009`).
+
+Deltas: none — the doc already states these; this section records the review. The
+implementation lands in Phase 32 (M15W1).
+
 ## Edge Cases & Errors
 
 | Case | Result |

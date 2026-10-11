@@ -11,6 +11,25 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M14 W3 tranche: spatial types/clocks + record core design confirmations.
+  NEW [spatial-types-design.md](docs/spec/spatial-types-design.md) confirms the
+  six typed quantities, compile-time `Point3<CameraFront>` vs dynamic
+  `SpatialPoint3{id}` + `Stamped<T>` binding, the grammar-extension EBNF draft,
+  `[spatial]` contract parsing, the I-D6 static/dynamic inference matrix, and the
+  four clock domains with affine mapping, identity epochs, and PTP/GNSS/SimReplay
+  degradation paths. NEW [mcu-bring-up.md](docs/spec/mcu-bring-up.md) locks the
+  reference MCU/RTOS (STM32H743 + FreeRTOS; fallback STM32F407), the pinned
+  toolchain, the CI cross-compile/zero-heap/stack jobs, the host↔MCU bring-up
+  steps, and the preventive-first linker-section audit.
+  [observability-plane.md](docs/algorithms/ops/observability-plane.md) pins the
+  trace dictionary versioning (`dict_version`, append-only per deployment) and
+  records the trace/diag design confirmation;
+  [record-replay.md](docs/algorithms/ops/record-replay.md) records the record
+  design confirmation. Executable design-lock tests in
+  [main.rs](xtask/src/main.rs) (`design_lock`) make the confirmations a permanent
+  gate. Gate evidence in [m14w3.md](docs/gates/m14w3.md);
+  [metrics-m14.md](docs/metrics/metrics-m14.md) records
+  `SPATIAL_TYPES_DESIGN = 1`, `CLOCK_DESIGN = 1`, `RECORD_DESIGN = 1`.
 - Week M14 W1 tranche: Windows↔Linux full interop matrix + serial-MCU doc
   final. The cross-OS interop harness
   ([cross_os.rs](xtask/src/cross_os.rs)) now spans the full work-plan matrix

@@ -69,3 +69,65 @@ cargo xtask audit-traceability
 
 REQ: REQ-QAL-008, REQ-OPS-004, REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026,
 REQ-ROUTE-029, REQ-ROUTE-032, REQ-ROUTE-040, REQ-CORE-086, REQ-CORE-087.
+
+## M14W3 — Spatial Types/Clocks + Record Core Design Confirmations
+
+| Variable | Target | Measured |
+|---|---|---|
+| `SPATIAL_TYPES_DESIGN` | typed Point3/…/Twist3 + `Stamped<T>` + compile/dynamic space binding confirmed | 1 — [spatial-types-design.md](../spec/spatial-types-design.md) §1–§5: six typed quantities, compile-time `Point3<CameraFront>` (raw-numerics payload), dynamic `SpatialPoint3{id}` + `Stamped<T>`, grammar-extension EBNF draft, `[spatial]` parsing, I-D6 inference matrix; locked by `design_lock::spatial_types_confirmed` |
+| `CLOCK_DESIGN` | four clock domains + mapping/drift/uncertainty confirmed | 1 — [spatial-types-design.md](../spec/spatial-types-design.md) §6–§7: `HostMonotonic`/`Device`/`Global(Ptp\|Gnss)`/`SimReplay`, affine `t_to = to_ref + r·(t_from − from_ref)`, `ClockIdentity{domain,epoch}`, PTP/GNSS + SimReplay sources and per-domain degradation paths; locked by `design_lock::clock_domains_confirmed` |
+| `RECORD_DESIGN` | recorder pipeline confirmed vs record-replay.md | 1 — [record-replay.md](../algorithms/ops/record-replay.md) §Design Confirmation: borrow-copy-release, bounded per-topic slabs, `on_full` {Drop,Stop,Backpressure}, gap ledger, MCAP chunking, replay namespace; locked by `design_lock::record_policies_confirmed` |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- NEW [spatial-types-design.md](../spec/spatial-types-design.md): E2 spatial types
+  + clock-domain design confirmation (absorbs the M14W2 grammar-extension draft).
+- NEW [mcu-bring-up.md](../spec/mcu-bring-up.md): E3 reference MCU/RTOS lock
+  (STM32H743 + FreeRTOS; fallback STM32F407), pinned toolchain, CI cross-compile /
+  zero-heap / stack jobs, host↔MCU bring-up steps, preventive-first linker-section
+  audit.
+- [observability-plane.md](../algorithms/ops/observability-plane.md): E1 trace
+  dictionary versioning pinned (`dict_version`, append-only per deployment) +
+  design-confirmation section; E4 diag confirmation.
+- [record-replay.md](../algorithms/ops/record-replay.md): E4 record design
+  confirmation section.
+- Executable design-lock tests (`xtask/src/main.rs` `design_lock`) —
+  `spatial_types_confirmed`, `clock_domains_confirmed`, `record_policies_confirmed`,
+  `trace_dictionary_confirmed`.
+- Gate evidence: [m14w3.md](../gates/m14w3.md); spec index
+  ([docs/spec/README.md](../spec/README.md)); [CHANGELOG.md](../../CHANGELOG.md).
+
+Notes:
+
+- Design-only tranche: the plan's test suite is review sign-offs; no runtime code
+  is required (Phase 32/33 implementation starts M15W1/M19W1). The design-lock
+  tests convert the sign-offs into a permanent gate.
+- No architecture divergence and no new REQ IDs: the confirmations restate pinned
+  invariants, so no ADR landed and the registry is unchanged.
+
+### Weekly gate checklist (chaired by E2, Friday)
+
+- [x] `SPATIAL_TYPES_DESIGN = 1`; `CLOCK_DESIGN = 1`; `RECORD_DESIGN = 1`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M14W3) = PASS`**
+
+### How to reproduce
+
+```text
+cargo test -p xtask design_lock
+cargo xtask audit-traceability
+cargo xtask check-layering
+cargo xtask fmt --check
+cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask test
+```
+
+REQ: REQ-SPATIAL-004, REQ-SPATIAL-005, REQ-SPATIAL-009, REQ-SPATIAL-017,
+REQ-SPATIAL-030, REQ-SPATIAL-031, REQ-SPATIAL-035, REQ-SPATIAL-036,
+REQ-SPATIAL-041, REQ-SPATIAL-051, REQ-OPS-005, REQ-OPS-006, REQ-OPS-007,
+REQ-OPS-008, REQ-OPS-009, REQ-OPS-014, REQ-OPS-015, REQ-OPS-017, REQ-OPS-018,
+REQ-OPS-019, REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026, REQ-ROUTE-040,
+REQ-CORE-086, REQ-CORE-087, REQ-QAL-008.
+

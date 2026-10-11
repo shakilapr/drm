@@ -15,6 +15,8 @@ Owned by E2 unless noted. Written by the weekly plan named in each file's header
 | `transport-capabilities.md` | 29 (draft M01) | `docs/algorithms/router/router-core.md`, `lanes-shaping.md`, `serial-mcu.md` |
 | `metadata-layout.md` | 5 | `docs/architecture.md` §No Universal Envelope, `docs/algorithms/canon-codec.md` |
 | `abi-policy.md` | 7 | `docs/algorithms/bindings/c-abi-surface.md`; ADR 0002 |
+| `spatial-types-design.md` | 33 prep (M14W3) | `docs/spatial_architecture.md`; `docs/algorithms/spatial/spatial-core.md`; `docs/algorithms/toolchain/workspace-model.md` |
+| `mcu-bring-up.md` | 32 prep (M14W3) | `docs/algorithms/router/serial-mcu.md`; `codebase.md` §3.3 |
 
 Specs here may not introduce requirements beyond the architecture; each lands with a `source_ref`
 back to the owning architecture/algorithm section.
