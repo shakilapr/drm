@@ -18,3 +18,22 @@ C ABI stub surface — opaque `drm_context`/`drm_publisher`/`drm_consumer`,
 `drm_status` mirror with the append-only `NotImplemented` code (`drm-ffi`,
 `drm.h`), Rust-side null-arg/status-propagation tests (`drm-ffi/tests/abi_stub.rs`),
 extended C spike.
+
+## M06W2 — Phase 17 Gate (Lifecycle), C ABI Endpoints
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 17)` | PASS | PASS — `docs/gates/phase-17.md` |
+| `FFI_ENDPOINTS` | open/close/publish/read real impl | `drm-ffi` 15 tests; endpoints backed in-process by a `drm-core` channel (cross-process SHM deferred) |
+| `C_RUST_PARITY` | C-driven exchange == Rust-native (identical bytes) | `drm-ffi/tests/inproc_endpoint.rs::c_rust_byte_parity` |
+| `VALIDATE_ONCE` | validation once at open, zero per-message checks | `validate_once_at_open_across_many_publishes` (per-message counter stays 0) |
+| `BORROW_ABI` | explicit release; double-release detected | `borrow_double_release_is_invalid_arg` |
+| `LIFECYCLE_E2E` | epoch observe/reset wired into the read loop | `consumer_read_loop_observes_publisher_restart` (`drm-core` lifecycle 17 passed) |
+| `SOAK_24H` | router soak 0 anomalies | `xtask soak` duration-bounded scaffold; 24 h wall-time run is an operator/CI lane, not executed in-session |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `drm-ffi` in-process endpoint backing (open/close/publish/read/
+borrow) + `drm.h` export declarations; lifecycle read-loop e2e; Phase 17 gate
+doc. Known follow-ups: FFI status for bad release is `InvalidArg` (doc I-A5
+provisional `InvalidBorrow`); copy-read export names `drm_read_*` vs doc
+`drm_copy_*` — reconcile at the Phase 7 finalize gate.
