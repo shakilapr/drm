@@ -11,6 +11,19 @@ use crate::channel::ccb::ChannelControlBlock;
 use crate::ring::{HistoryRing, LookupErr, RingEntry};
 use drm_types::Status;
 
+/// ABA long-run forcing harness.
+#[cfg(test)]
+mod aba;
+/// Deterministic acquisition race-matrix forcing tests (R1-R6).
+#[cfg(test)]
+mod race;
+/// Selection-vs-borrows property tests.
+#[cfg(test)]
+mod select;
+/// Shared test fixtures for the forcing suites.
+#[cfg(test)]
+mod support;
+
 /// Sole `NONE` encoding for hazard slot indices (pool indices are `< u32::MAX`).
 /// REQ: REQ-CORE-033.
 pub const HAZARD_NONE: u32 = u32::MAX;
