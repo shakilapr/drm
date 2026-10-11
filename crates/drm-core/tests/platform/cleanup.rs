@@ -11,12 +11,16 @@ use drm_core::shm::{
     FlockBackend, LockBackend, LockPaths, PosixShm, SegmentName, ShmBackend, ShmError,
 };
 
-use crate::child_util::{ok, tag};
+use crate::child_util::{ok, spawn_guard, tag};
 
 /// REQ: REQ-CORE-069, REQ-CORE-070 — exclusive probe wins on a free namespace;
 /// a held shared hold ⇒ probe busy; segments unlinked only after the probe wins.
 #[test]
 fn cleanup() {
+    // Serialize against the forking tests: a concurrent `Command::spawn` child
+    // would inherit this test's lock descriptors and keep a released lock alive
+    // until `exec`, making the re-probe read busy.
+    let _serial = spawn_guard();
     let shm = PosixShm;
     let flock = FlockBackend;
 

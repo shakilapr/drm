@@ -4,7 +4,20 @@
 #![cfg(unix)]
 
 use std::process::Output;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Process-wide serialization for the platform binary. `Command::spawn`
+/// (fork+exec) inherits the parent's open file descriptions, so a spawn running
+/// concurrently with the `cleanup` flock assertions can keep a just-released
+/// lock alive until the child `exec`s. Tests that spawn (via [`spawn_child`])
+/// and tests that assert on `flock` acquisition (`cleanup`) take this guard so
+/// the two never overlap.
+/// REQ: REQ-CORE-072, REQ-CORE-069.
+pub fn spawn_guard() -> MutexGuard<'static, ()> {
+    static GUARD: Mutex<()> = Mutex::new(());
+    GUARD.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// True when this process was spawned as a platform-suite child.
 #[must_use]
@@ -24,6 +37,7 @@ pub fn ok<T, E: std::fmt::Debug>(r: Result<T, E>, what: &str) -> T {
 /// Spawns this test binary in child mode running `$test` exactly once.
 /// REQ: REQ-CORE-072.
 pub fn spawn_child(test: &str, name_env: &str, name: &str) -> Output {
+    let _serial = spawn_guard();
     let exe = ok(std::env::current_exe(), "current_exe");
     ok(
         std::process::Command::new(exe)
