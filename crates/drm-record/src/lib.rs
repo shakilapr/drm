@@ -3,14 +3,21 @@
 //! buffers (`I-RC2`/`I-RC3`), and the per-topic loss ledger (`I-RC5`).
 //!
 //! Layer `ops` (codebase.md 2.1): depends on `drm-types` + `drm-core` only,
-//! never on another ops crate. `#![forbid(unsafe_code)]`. Disk threads, MCAP
-//! framing, and replay land with M15W3/M15W4; this tranche lands the
-//! ingress/buffer/policy core.
-//! REQ: REQ-OPS-005 (borrow-copy-release), REQ-OPS-007 (no disk on borrow),
-//! REQ-OPS-008 (`on_full` policies), REQ-OPS-018 (gap ledger),
+//! never on another ops crate. `#![forbid(unsafe_code)]`. The disk stage
+//! ([`disk`]) drains the descriptor ring into an MCAP stream ([`mcap`]) that
+//! observes recorder-owned memory exclusively (`I-RC1`); [`replay`] reads a
+//! recorded session back, reconstructs per-topic streams and gap boundaries,
+//! and republishes under an isolated replay namespace (`I-RC4`/`I-RC6`).
+//! REQ: REQ-OPS-005 (borrow-copy-release), REQ-OPS-006 (MCAP framing),
+//! REQ-OPS-007 (no disk on borrow), REQ-OPS-008 (`on_full` policies),
+//! REQ-OPS-009 (replay fidelity), REQ-OPS-018 (gap ledger),
 //! REQ-OPS-019 (per-topic slabs).
 
 #![forbid(unsafe_code)]
+
+pub mod disk;
+pub mod mcap;
+pub mod replay;
 
 use std::collections::VecDeque;
 
@@ -41,6 +48,19 @@ pub enum GapReason {
     PolicyDrop,
     /// A publisher restart left a range unrecorded (epoch boundary).
     PublisherEpoch,
+}
+
+impl GapReason {
+    /// Stable lowercase tag recorded in MCAP `DrmGap` markers.
+    /// REQ: REQ-OPS-006.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::HistoryLap => "history_lap",
+            Self::PolicyDrop => "policy_drop",
+            Self::PublisherEpoch => "publisher_epoch",
+        }
+    }
 }
 
 /// One coalesced missing-sequence range (`record-replay.md` §Data Structures
@@ -307,6 +327,8 @@ pub struct DescEntry {
     pub len: u32,
     /// Publisher sequence at copy completion.
     pub seq: u64,
+    /// Publisher epoch observed at copy completion (`I-RC6`).
+    pub publisher_epoch: u32,
     /// Local monotonic receive time at copy completion.
     pub recv_mono_ns: u64,
     /// Wall-clock receive time (human indexing only).
@@ -548,6 +570,7 @@ impl Recorder {
                         slab_index: idx,
                         len,
                         seq,
+                        publisher_epoch: ts.epoch.unwrap_or(0),
                         recv_mono_ns: now_mono_ns,
                         recv_wall_ns: now_wall_ns,
                         ingress_order: *global_order,
@@ -578,12 +601,55 @@ impl Recorder {
     /// REQ: REQ-OPS-007, REQ-OPS-019.
     #[must_use]
     pub fn drain_one(&mut self) -> Option<DescEntry> {
-        let desc = self.descriptors.pop_front()?;
+        let desc = self.pop_descriptor()?;
+        self.free_descriptor(&desc);
+        Some(desc)
+    }
+
+    /// Pops the oldest queued descriptor without freeing its slab slot, so the
+    /// disk stage can copy the recorder-owned payload first (`I-RC1`).
+    /// REQ: REQ-OPS-007.
+    #[must_use]
+    pub fn pop_descriptor(&mut self) -> Option<DescEntry> {
+        self.descriptors.pop_front()
+    }
+
+    /// Borrows the recorder-owned payload of `desc` (never a DRM handle; `I-RC1`).
+    /// REQ: REQ-OPS-007.
+    #[must_use]
+    pub fn slot_payload(&self, desc: &DescEntry) -> Option<&[u8]> {
+        let ts = self.topics.iter().find(|t| t.topic_id == desc.topic_id)?;
+        ts.slab.payload(desc.slab_index)
+    }
+
+    /// Frees the slab slot held by `desc` after the disk stage has copied it;
+    /// touches recorder memory only (`I-RC1`).
+    /// REQ: REQ-OPS-007.
+    pub fn free_descriptor(&mut self, desc: &DescEntry) {
         if let Some(ts) = self.topics.iter_mut().find(|t| t.topic_id == desc.topic_id) {
             ts.slab.free_slot(desc.slab_index);
         }
         self.disk_ops = self.disk_ops.saturating_add(1);
-        Some(desc)
+    }
+
+    /// Coalesced gaps across every topic, tagged with topic id and the observed
+    /// publisher epoch (`I-RC5`, `I-RC6`).
+    /// REQ: REQ-OPS-006, REQ-OPS-018.
+    pub fn gaps(&self) -> impl Iterator<Item = (u32, u32, PendingGap)> + '_ {
+        self.topics.iter().flat_map(|t| {
+            let epoch = t.epoch.unwrap_or(0);
+            t.ledger
+                .iter()
+                .copied()
+                .map(move |g| (t.topic_id, epoch, g))
+        })
+    }
+
+    /// Whether any topic's gap ledger overflowed (`gap_detail_lost`; `I-RC5`).
+    /// REQ: REQ-OPS-018.
+    #[must_use]
+    pub fn gap_detail_lost(&self) -> bool {
+        self.topics.iter().any(|t| t.ledger.gap_detail_lost())
     }
 
     /// Exact recorder-owned bytes currently accounted (`I-RC2`).

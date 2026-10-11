@@ -23,7 +23,9 @@ Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
 | MCU zero-heap data path + serial framing parity | `drm_node.{h,c}` static SPSC ring (I-SR5, REQ-CORE-087); `drm_serial.{h,c}` COBS/CRC32C (I-SR2..I-SR4); `make host-test`/`host-audit`; [m15w2.md](m15w2.md) | PASS (host + CI) |
 | Serial framing interop byte-for-byte | `drm-router::transport::serial` COBS/CRC32C + cross-OS host-loopback; MCU host parity (REQ-OPS-004) | PASS (host) |
 | Record-core ingress (borrow-copy-release, bounded slabs, policies) | `crates/drm-record`; `record_borrow_scope`/`record_bounded`/`record_policies`/`record_gap_ledger` (I-RC1/2/3/5); [m15w2.md](m15w2.md) | PASS |
-| Record/replay disk stage + MCAP, RPC/actions, full diag daemon | scheduled M16–M18 | pending |
+| Record disk stage + MCAP framing (DRM metadata, gaps) | `crates/drm-record/src/{mcap,disk}.rs`; `record_disk_mcap`/`record_mcap_drm_meta`/`record_mcap_zstd` (I-RC6, REQ-OPS-006); [m15w4.md](m15w4.md) | PASS |
+| Replay pipeline (faithful read/publish, scheduler, isolated namespace) | `crates/drm-record/src/replay.rs`; `replay_roundtrip`/`replay_publisher_faithful`/`replay_reader_epoch` (I-RC4, REQ-OPS-009); [m15w4.md](m15w4.md) | PASS |
+| RPC/actions, full diag daemon | scheduled M16–M18 | pending |
 
 ## Notes
 
@@ -32,6 +34,7 @@ Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
   constrained-device data path) is tracked in the M16–M19 weekly plans.
 
 REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004, REQ-OPS-005,
-REQ-OPS-007, REQ-OPS-008, REQ-OPS-014, REQ-OPS-015, REQ-OPS-016,
-REQ-OPS-017, REQ-OPS-018, REQ-OPS-019, REQ-CORE-087, REQ-CORE-093,
-REQ-CORE-094, REQ-ROUTE-025, REQ-ROUTE-026, REQ-QAL-006.
+REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-009, REQ-OPS-014,
+REQ-OPS-015, REQ-OPS-016, REQ-OPS-017, REQ-OPS-018, REQ-OPS-019,
+REQ-CORE-087, REQ-CORE-088, REQ-CORE-089, REQ-CORE-093, REQ-CORE-094,
+REQ-ROUTE-025, REQ-ROUTE-026, REQ-QAL-006.

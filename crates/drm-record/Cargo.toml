@@ -9,6 +9,10 @@ license.workspace = true
 [dependencies]
 drm-types = { path = "../drm-types" }
 drm-core = { path = "../drm-core" }
+zstd = "0.13"
+
+[dev-dependencies]
+mcap = { version = "0.25.0", default-features = false, features = ["zstd"] }
 
 [lints]
 workspace = true

@@ -128,3 +128,60 @@ make -C bindings/c/mcu host-audit
 cargo xtask audit-traceability
 cargo xtask check-layering
 ```
+
+## M15W4 — Replay Pipeline, MCU Serial Interop Gate Prep
+
+| Variable | Target | Measured |
+|---|---|---|
+| `REPLAY_FAITHFUL` | replay preserves samples/order/timestamps/gaps (I-RC4) | 1 — `drm-record` `replay_roundtrip` (record → wipe → replay; payload bytes, per-topic `(publisher_epoch, seq)`, global `(recv_mono_ns, ingress_order)`, gaps, source timestamps), `replay_publisher_faithful` (namespace-isolated republish), `replay_reader_epoch` (`PublisherEpoch` boundary), `replay_summary_metrics` |
+| `MCU_INTEROP` | host↔MCU byte-for-byte serial exchange green | 1 — `drm-router` `mcu_host_interop` (canonical COBS/CRC sequence byte-identical, deterministic encode, cross-decode), `serial_loopback_x10k`, `serial_corruption`, `serial_oversize`; `bindings/c/mcu` `make host-test` parity; `mcu-cross.yml` |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Replay reader** (`crates/drm-record/src/replay.rs`): `Session::decode`
+  reconstructs channels, per-topic streams ordered by `(publisher_epoch, seq)`,
+  and gap boundaries from `drm.gap`; `global_order` reproduces
+  `(recv_mono_ns, ingress_order)`. Tests `replay_reader_epoch`,
+  `replay_roundtrip`.
+- **Replay scheduler**: `SchedulerMode {Realtime, Rate, AsFast}` over an exact
+  rational `Rate`; target = `(recv_mono_ns − start) / rate`, ties broken by
+  `ingress_order`. Test `replay_scheduler_modes`.
+- **Replay publisher + namespace**: `ReplayPublisher` republishes under
+  `ReplayNamespace::derive(base, run)` (`I-DP2` isolation; source timestamps
+  verbatim, replay time = schedule); `ReplayReport` (samples/topics/gaps/
+  gap_sequences/drops/namespace). Tests `replay_publisher_faithful`,
+  `replay_namespace_isolated`, `replay_summary_metrics`.
+- **Record disk + MCAP** (`crates/drm-record/src/{mcap,disk}.rs`, M15W3
+  carry-over): from-scratch MCAP writer/reader (header/schema/channel/message/
+  chunk/statistics/index/footer), `drm.sample`/`drm.gap` metadata, optional zstd
+  chunks; `disk::Stage` drains recorder-owned memory only (`I-RC1`). Tests
+  `record_disk_mcap`, `record_mcap_drm_meta`, `record_mcap_zstd`,
+  `record_slow_disk_policy`, `record_disk_isolation`.
+- **Replay fixtures spec**: [replay-fixtures.md](../spec/replay-fixtures.md)
+  (`record_known_session` with injected history lap + policy drops).
+
+Notes:
+
+- No architecture divergence: pinned invariants only (record-replay
+  I-RC1..I-RC6, deployment-identity I-DP2, serial-mcu I-SR2..I-SR7); no ADR.
+- `drm-record` remains an ops crate depending only on `drm-types` + `drm-core`
+  (`#![forbid(unsafe_code)]`); `zstd` is used only for optional MCAP chunk
+  compression.
+
+### Weekly gate checklist (chaired by E3, Friday)
+
+- [x] `REPLAY_FAITHFUL = 1`; `MCU_INTEROP = 1`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M15W4) = PASS`**
+
+### How to reproduce
+
+```text
+cargo test -p drm-record replay
+cargo test -p drm-record
+cargo test -p drm-router mcu_host_interop
+make -C bindings/c/mcu host-test
+cargo xtask audit-traceability
+cargo xtask check-layering
+```

@@ -11,6 +11,21 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M15 W4 tranche: replay pipeline + record disk/MCAP stage. `drm-record`
+  gains the from-scratch MCAP writer/reader ([mcap.rs](crates/drm-record/src/mcap.rs))
+  and recorder-owned disk stage ([disk.rs](crates/drm-record/src/disk.rs)) —
+  standard MCAP framing plus `drm.sample`/`drm.gap` DRM metadata records
+  (`I-RC6`, REQ-OPS-006), optional zstd chunks, and no DRM handle on the disk
+  thread (`I-RC1`, REQ-OPS-007). NEW replay module
+  ([replay.rs](crates/drm-record/src/replay.rs)): `Session::decode` reconstructs
+  per-topic streams ordered by `(publisher_epoch, seq)` and gap boundaries
+  (`I-RC4`/`I-RC5`, REQ-OPS-009/018); `SchedulerMode {Realtime, Rate, AsFast}`
+  schedules the recorder-observed global order `(recv_mono_ns, ingress_order)`;
+  `ReplayPublisher` republishes under an isolated `ReplayNamespace` derived from
+  the live deployment id (REQ-CORE-088/089). Fixture spec
+  [replay-fixtures.md](docs/spec/replay-fixtures.md); gate evidence
+  [m15w4.md](docs/gates/m15w4.md); [metrics-m15.md](docs/metrics/metrics-m15.md)
+  records `REPLAY_FAITHFUL = 1`, `MCU_INTEROP = 1`.
 - Week M15 W2 tranche: diag aggregation/deadline matrix, record-core start,
   MCU zero-heap data path. `drm-diag` gains the out-of-band `Aggregator` +
   `DiagReport` (channel counters, per-consumer deadline states, link stats;
