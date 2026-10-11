@@ -37,3 +37,19 @@ borrow) + `drm.h` export declarations; lifecycle read-loop e2e; Phase 17 gate
 doc. Known follow-ups: FFI status for bad release is `InvalidArg` (doc I-A5
 provisional `InvalidBorrow`); copy-read export names `drm_read_*` vs doc
 `drm_copy_*` — reconcile at the Phase 7 finalize gate.
+
+## M06W3 — Phase 18 Completion, FFI Parity Sweep
+
+| Variable | Target | Measured |
+|---|---|---|
+| `IDENTITY_E2E` | fingerprint isolation e2e + cross-deploy matrix green (I-DP4/I-DP2) | `drm-core` `identity_e2e` 3 tests (unrelated change leaves fingerprint identical; own change refused before SHM touch; two live deployments clean per decision tree) |
+| `FFI_MATRIX` | C/Rust/Python(ctypes) × publisher/consumer × topic kinds | `drm-ffi` `ffi_matrix` 7 tests (Rust-native + C-ABI paths, borrow round-trip, read_next ordering) + Python ctypes harness 5 passed against `libdrm_ffi.so`; variable-size topic is a documented gap |
+| `FFI_NEGATIVES` | misuse ⇒ explicit Status, no crash (I-A4) | `drm-ffi` `ffi_negative` 8 tests (null, oversize, too-small buffer, double-release, foreign/stale token, lease exhaustion) |
+| `ROUTER_BASELINE` | perf baseline recorded, stable ×5 | not executed in-session (pinned-machine perf lane) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `identity_e2e` (drm-core); `ffi_matrix`/`ffi_negative` +
+`cdylib` + `bindings/python/tests/test_ffi_ctypes.py` (drm-ffi);
+`docs/gates/phase-18.md` draft. FFI misuse beyond documented handle UB
+(use-after-close) requires a handle-generation table — an arch change (ADR),
+recorded as out of scope.
