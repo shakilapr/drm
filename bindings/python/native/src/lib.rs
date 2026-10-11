@@ -18,15 +18,16 @@
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use drm_ffi::{
-    ENDPOINT_SAMPLE_MAX, ENDPOINT_TOPIC_ID, drm_abi_version, drm_borrow_latest, drm_borrow_release,
-    drm_borrow_view, drm_consumer, drm_consumer_close, drm_consumer_open, drm_context,
-    drm_context_close, drm_context_open, drm_publish_copy, drm_publisher, drm_publisher_close,
-    drm_publisher_open, drm_read_latest, drm_read_next,
+    ENDPOINT_SAMPLE_MAX, ENDPOINT_TOPIC_ID, drm_abi_version, drm_borrow_latest,
+    drm_borrow_outstanding_token, drm_borrow_release, drm_borrow_view, drm_consumer,
+    drm_consumer_close, drm_consumer_open, drm_context, drm_context_close, drm_context_open,
+    drm_publish_copy, drm_publisher, drm_publisher_close, drm_publisher_open, drm_read_latest,
+    drm_read_next,
 };
 use drm_types::Status;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyTuple};
 
 pyo3::create_exception!(
     _native,
@@ -91,14 +92,35 @@ impl Copy {
         PyBytes::new(py, &self.data)
     }
 
-    /// The sample as a `NumPy`-owned `uint8` array. Never a shared-memory view:
-    /// `numpy.frombuffer` reads the Python-owned `bytes` and `.copy()` makes the
-    /// array independently owned. REQ: REQ-BIND-015.
-    fn numpy<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    /// The sample as a `NumPy`-owned array. Never a shared-memory view: the
+    /// array is built from the Python-owned `bytes` and `.copy()` makes it
+    /// independently owned (I-B5). `dtype` (a `NumPy` dtype string) and `shape`
+    /// are supplied by the generated schema descriptor (Phase 24); the default
+    /// is a flat `uint8` array over the raw canonical bytes. The result is a
+    /// read-only, C-contiguous array.
+    /// REQ: REQ-BIND-015.
+    #[pyo3(signature = (dtype=None, shape=None))]
+    fn numpy<'py>(
+        &self,
+        py: Python<'py>,
+        dtype: Option<&str>,
+        shape: Option<Vec<usize>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let numpy = py.import("numpy")?;
         let owned = PyBytes::new(py, &self.data);
-        let view = numpy.call_method1("frombuffer", (owned, "uint8"))?;
-        view.call_method0("copy")
+        let dtype = dtype.unwrap_or("uint8");
+        let array = numpy.call_method1("frombuffer", (owned, dtype))?;
+        let array = match shape {
+            Some(shape) => {
+                let dims = PyTuple::new(py, shape)?;
+                array.call_method1("reshape", (dims,))?
+            }
+            None => array,
+        };
+        let owned_array = array.call_method0("copy")?;
+        let flags = owned_array.getattr("flags")?;
+        flags.setattr("writeable", false)?;
+        Ok(owned_array)
     }
 
     /// Number of bytes in the sample. REQ: REQ-BIND-015.
@@ -414,6 +436,20 @@ impl Consumer {
         // SAFETY: `handle` is live; `token` identifies the outstanding borrow.
         check(unsafe { drm_borrow_release(handle, view.token) })?;
         Ok(addr as u64)
+    }
+
+    /// Diagnostic (I-B5/I-B6 forced-GC suite): the token of the borrow currently
+    /// outstanding on this endpoint, or `0` when no hazard slot is pinned. The
+    /// owned-read API never leaves a non-zero value behind.
+    /// REQ: REQ-BIND-006, REQ-BIND-015.
+    fn _borrow_outstanding(&self) -> PyResult<u32> {
+        let state = lock(&self.state);
+        if state.handle == 0 {
+            return Err(DrmError::new_err("consumer is closed"));
+        }
+        // SAFETY: `state.handle` is live; the diagnostic only reads the
+        // single-outstanding cell.
+        Ok(unsafe { drm_borrow_outstanding_token(state.handle as *const drm_consumer) })
     }
 
     /// Context-manager entry. REQ: REQ-BIND-002.

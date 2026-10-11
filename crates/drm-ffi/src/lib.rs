@@ -502,6 +502,28 @@ pub unsafe extern "C" fn drm_borrow_release(consumer: *mut drm_consumer, token: 
     }
 }
 
+/// Token of the borrow currently outstanding on `consumer`, or `0` when none.
+/// Rust-native diagnostic for the Python forced-GC hazard-free probe
+/// (bindings-cpp-rust-python.md I-B5/I-B6); not part of the C ABI. A non-zero
+/// result means a hazard slot is pinned and must be released with
+/// [`drm_borrow_release`]. REQ: REQ-BIND-006, REQ-BIND-015.
+///
+/// # Safety
+/// `consumer` is null or a live consumer handle.
+#[must_use]
+pub unsafe fn drm_borrow_outstanding_token(consumer: *const drm_consumer) -> u32 {
+    if consumer.is_null() {
+        return 0;
+    }
+    // SAFETY: caller contract — `consumer` is a live handle.
+    let consumer = unsafe { &*consumer.cast::<ConsumerBox>() };
+    // SAFETY: single-borrower endpoint; the cell is read under the same
+    // single-thread discipline as borrow/release.
+    unsafe { &*consumer.outstanding.get() }
+        .as_ref()
+        .map_or(0, |(token, _)| *token)
+}
+
 /// Copy the newest committed sample into a caller buffer.
 /// REQ: REQ-BIND-002, REQ-BIND-008.
 ///
@@ -696,6 +718,46 @@ mod tests {
     fn skeleton_compiles() {
         assert_eq!(Status::Busy.code(), -11);
         assert_eq!(Status::NotImplemented.code(), -22);
+    }
+
+    /// REQ: REQ-BIND-006, REQ-BIND-015 — the Rust-native diagnostic reports a
+    /// pinned borrow token and clears to zero after release.
+    #[test]
+    fn borrow_outstanding_token_reports_pin() {
+        use super::{
+            drm_borrow_latest, drm_borrow_outstanding_token, drm_borrow_release, drm_borrow_view,
+            drm_consumer, drm_consumer_close, drm_consumer_open, drm_context, drm_context_close,
+            drm_context_open, drm_publish_copy, drm_publisher, drm_publisher_close,
+            drm_publisher_open,
+        };
+        let mut ctx: *mut drm_context = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { drm_context_open(std::ptr::null(), &raw mut ctx) },
+            0
+        );
+        let mut publisher: *mut drm_publisher = std::ptr::null_mut();
+        assert_eq!(unsafe { drm_publisher_open(ctx, 0, &raw mut publisher) }, 0);
+        assert_eq!(unsafe { drm_publish_copy(publisher, b"x".as_ptr(), 1) }, 0);
+        let mut consumer: *mut drm_consumer = std::ptr::null_mut();
+        assert_eq!(unsafe { drm_consumer_open(ctx, 0, &raw mut consumer) }, 0);
+        assert_eq!(unsafe { drm_borrow_outstanding_token(consumer) }, 0);
+        let mut view = drm_borrow_view {
+            data: std::ptr::null(),
+            len: 0,
+            sequence: 0,
+            token: 0,
+        };
+        assert_eq!(unsafe { drm_borrow_latest(consumer, &raw mut view) }, 0);
+        assert_eq!(
+            unsafe { drm_borrow_outstanding_token(consumer) },
+            view.token
+        );
+        assert_ne!(view.token, 0);
+        assert_eq!(unsafe { drm_borrow_release(consumer, view.token) }, 0);
+        assert_eq!(unsafe { drm_borrow_outstanding_token(consumer) }, 0);
+        assert_eq!(unsafe { drm_consumer_close(consumer) }, 0);
+        assert_eq!(unsafe { drm_publisher_close(publisher) }, 0);
+        assert_eq!(unsafe { drm_context_close(ctx) }, 0);
     }
 
     /// REQ: REQ-BIND-007 — I-A4 exhaustive 1:1 map: the `DRM_OK`/`DRM_ERR_*`

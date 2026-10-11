@@ -7,6 +7,7 @@
 
 pub mod budget;
 pub mod canon;
+pub mod codegen;
 pub mod model;
 pub mod parser;
 pub mod topology;
