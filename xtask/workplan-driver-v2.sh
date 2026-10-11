@@ -21,6 +21,8 @@ CONTINUE="${DRM_WORKPLAN_CONTINUE:-1}"
 MAX="${DRM_WORKPLAN_MAX:-200}"
 LEDGER=.workplan-progress.json
 BLOCKED=.workplan-blocked.json
+EXHAUSTED=.workplan-exhausted.json
+RETRY="$(printf '%s' "$(cat .workplan-retry-flag 2>/dev/null)")"
 
 log() { printf '[%s] %s\n' "$(date -Is)" "$*" >>"$LOG"; }
 
@@ -34,25 +36,58 @@ gates() {
 }
 
 # Print the first week that is neither done nor quarantined.
+#
+# Two tiers, so a quarantined week is not abandoned forever:
+#   tier 1 — weeks that are neither done, quarantined, nor exhausted;
+#   tier 2 — quarantined weeks that have not yet failed a RETRY pass.
+# A week that fails a retry pass is written to the exhausted ledger and never picked again, so
+# the loop always terminates. Without this the driver declared "ALL WEEKS DONE OR QUARANTINED"
+# with m10w2/m15w3/m22w1 silently missing from a plan it reported as complete.
 pick() {
-  python3 - "$LEDGER" "$BLOCKED" <<'PY'
+  python3 - "$LEDGER" "$BLOCKED" "$EXHAUSTED" <<'PY'
 import json, os, re, sys
-led, blk = sys.argv[1], sys.argv[2]
-done = set()
-if os.path.exists(led):
-    done = {re.sub(r"-w", "w", s.strip().lower().removeprefix("work-plan-").removesuffix(".md"))
-            for s in json.load(open(led)).get("done", [])}
-blocked = set(json.load(open(blk)).get("blocked", [])) if os.path.exists(blk) else set()
+led, blk, exh = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def load(path, key):
+    if not os.path.exists(path):
+        return set()
+    try:
+        return set(json.load(open(path)).get(key, []))
+    except (OSError, ValueError):
+        return set()
+
+done = {re.sub(r"-w", "w", s.strip().lower().removeprefix("work-plan-").removesuffix(".md"))
+        for s in load(led, "done")}
+blocked = load(blk, "blocked")
+exhausted = load(exh, "exhausted")
+
 weeks = []
 for name in os.listdir("docs/work-plan"):
     m = re.match(r"work-plan-m(\d+)-w(\d+)\.md$", name)
     if m:
         weeks.append((int(m.group(1)), int(m.group(2)), f"m{int(m.group(1)):02d}w{int(m.group(2))}"))
 weeks.sort()
+
 for _, _, stem in weeks:
-    if stem not in done and stem not in blocked:
+    if stem not in done and stem not in blocked and stem not in exhausted:
         print(stem)
-        break
+        raise SystemExit
+for _, _, stem in weeks:
+    if stem in blocked and stem not in exhausted and stem not in done:
+        print(stem)
+        raise SystemExit
+PY
+}
+
+# A week that failed a retry pass is exhausted: retrying it forever would be an infinite loop.
+exhaust() {
+  python3 - "$EXHAUSTED" "$1" <<'PY'
+import json, os, sys
+p, w = sys.argv[1], sys.argv[2]
+d = json.load(open(p)) if os.path.exists(p) else {"exhausted": []}
+if w not in d["exhausted"]:
+    d["exhausted"].append(w)
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
 PY
 }
 
@@ -104,16 +139,35 @@ $(tail -c 4000 "$LOG")"
     git diff --cached --quiet || git commit -q -m "feat: work-plan $WEEK (autonomous driver)"
     cargo xtask workplan mark-done "$WEEK" >>"$LOG" 2>&1
     git add "$LEDGER" && git commit -q -m "chore(workplan): mark $WEEK complete" >>"$LOG" 2>&1
+    # A retried week that lands must leave the quarantine ledger, or it is picked forever.
+    if [ -n "$RETRY" ]; then
+      python3 - "$BLOCKED" "$WEEK" <<'PY'
+import json, sys
+p, w = sys.argv[1], sys.argv[2]
+d = json.load(open(p)) if __import__("os").path.exists(p) else {"blocked": []}
+d["blocked"] = [x for x in d["blocked"] if x != w]
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+      git add "$BLOCKED" && git commit -q -m "chore(workplan): clear quarantine for $WEEK after a green retry" >>"$LOG" 2>&1
+    fi
     log "week $WEEK COMPLETE"
   else
-    # Park the failing work on a wip branch so main stays green, then quarantine.
-    git checkout -q -b "wip/$WEEK" 2>/dev/null || git checkout -q "wip/$WEEK"
-    git add -A -- . ':(exclude)tests/fuzz/Cargo.lock' ':(exclude)handover.md'
-    git diff --cached --quiet || git commit -q -m "wip(workplan): $WEEK failing attempt (gates red)"
-    git checkout -q main
-    quarantine "$WEEK"
-    git add "$BLOCKED" && git commit -q -m "chore(workplan): quarantine $WEEK after $ATTEMPTS failed attempts" >>"$LOG" 2>&1
-    log "week $WEEK QUARANTINED (work parked on wip/$WEEK)"
+    if [ -n "$RETRY" ]; then
+      # This week was already quarantined and has now failed its retry pass: exhaust it so the
+      # loop can terminate instead of picking it forever.
+      exhaust "$WEEK"
+      git add "$EXHAUSTED" && git commit -q -m "chore(workplan): exhaust $WEEK after a failed retry pass" >>"$LOG" 2>&1
+      log "week $WEEK EXHAUSTED (failed a retry pass; not picked again)"
+    else
+      # Park the failing work on a wip branch so main stays green, then quarantine.
+      git checkout -q -b "wip/$WEEK" 2>/dev/null || git checkout -q "wip/$WEEK"
+      git add -A -- . ':(exclude)tests/fuzz/Cargo.lock' ':(exclude)handover.md'
+      git diff --cached --quiet || git commit -q -m "wip(workplan): $WEEK failing attempt (gates red)"
+      git checkout -q main
+      quarantine "$WEEK"
+      git add "$BLOCKED" && git commit -q -m "chore(workplan): quarantine $WEEK after $ATTEMPTS failed attempts" >>"$LOG" 2>&1
+      log "week $WEEK QUARANTINED (work parked on wip/$WEEK)"
+    fi
     if [ "$CONTINUE" != "1" ]; then
       log "stopping (DRM_WORKPLAN_CONTINUE=$CONTINUE)"
       break
