@@ -1,16 +1,21 @@
 //! Real-Windows lifecycle tests (Windows CI): publisher authority over
 //! `LockFileEx`, pagefile-backed sections via `CreateFileMappingW`, in-place
-//! `Init` recovery, consumer open-only, and epoch parity across publisher
-//! restarts with a live consumer mapping holding the section open (I-W4b).
-//! Mirrors the POSIX suite (`tests/posix.rs`) and the in-memory protocol suite
-//! (`tests.rs`); the full crash matrix runs at the Phase 31 gate (M14W2).
+//! `Init` recovery, consumer open-only, epoch parity across publisher
+//! restarts with a live consumer mapping holding the section open (I-W4b), and
+//! the M13W4 crash matrix — a publisher process killed and restarted 50 times
+//! (subset of the 100× Linux loop) with kernel lock release (I-W3) and
+//! exactly-once epoch advance (I-L3). Mirrors the POSIX suite (`tests/posix.rs`)
+//! and the in-memory protocol suite (`tests.rs`).
 //! REQ: REQ-CORE-101, REQ-CORE-054, REQ-CORE-071, REQ-CORE-019, REQ-CORE-020,
-//! REQ-CORE-057, REQ-CORE-074, REQ-CORE-075, REQ-CORE-098.
+//! REQ-CORE-057, REQ-CORE-074, REQ-CORE-075, REQ-CORE-098, REQ-CORE-018,
+//! REQ-CORE-038.
 
 use std::mem::offset_of;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 use super::{expect, fixture, read_u32, read_u64, spec, write_u64};
 use crate::channel::ccb::{ChannelControlBlock, Expectation};
@@ -268,4 +273,164 @@ fn win_identity_diagnostic_subset() {
     assert!(identity_alive(me.pid, me.start_ticks));
     assert!(!identity_alive(me.pid, me.start_ticks.wrapping_add(1)));
     assert!(!is_alive(0));
+}
+
+/// Waits (sleeping) until `path` exists or a bounded deadline elapses.
+/// REQ: REQ-CORE-101.
+fn wait_for_file(path: &Path, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !path.exists() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Publisher open that tolerates the brief `LockFileEx` release lag after a
+/// process death (windows-backends.md §Edge Cases: transiently busy is treated
+/// as active, never force-destroyed).
+/// REQ: REQ-CORE-054, REQ-CORE-075.
+fn open_publisher_settled(
+    shm: WinShm,
+    locks: WinLockBackend,
+    path: &Path,
+    n: &SegmentName,
+    e: &Expectation,
+) -> Publisher {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match publisher_open(&shm, &locks, path, n, e.topic_name.as_bytes(), e, &spec()) {
+            Ok(p) => return p,
+            Err(Status::Permission) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(err) => unreachable!("publisher open after death: {err:?}"),
+        }
+    }
+}
+
+/// REQ: REQ-CORE-101, REQ-CORE-054, REQ-CORE-020 — child driver for the crash
+/// matrix: adopt the section named by `DRM_WIN_CRASH_NAME` under the publisher
+/// authority, plant `DRM_WIN_CRASH_FLOOR` as the published `write_seq`, signal
+/// `DRM_WIN_CRASH_READY`, then block until the parent kills it (the kernel
+/// releases the lock). A normal suite run (no env) returns immediately.
+#[test]
+fn win_lifecycle_crash_child() {
+    let (Ok(raw_name), Ok(raw_lock), Ok(raw_ready)) = (
+        std::env::var("DRM_WIN_CRASH_NAME"),
+        std::env::var("DRM_WIN_CRASH_LOCK"),
+        std::env::var("DRM_WIN_CRASH_READY"),
+    ) else {
+        return;
+    };
+    let floor = std::env::var("DRM_WIN_CRASH_FLOOR")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    let n = fixture(SegmentName::new(&raw_name), "child section name");
+    let e = expect("pkg/topic-a");
+    let path = PathBuf::from(raw_lock);
+    let p = open_publisher_settled(WinShm, WinLockBackend, &path, &n, &e);
+    write_u64(
+        p.mapping(),
+        p.view.ccb_offset,
+        offset_of!(ChannelControlBlock, write_seq),
+        floor,
+    );
+    let _ = std::fs::write(&raw_ready, b"ready");
+    // Hold authority across the kill: leak the publisher so no `Drop` closes it.
+    std::mem::forget(p);
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+/// REQ: REQ-CORE-101, REQ-CORE-054, REQ-CORE-020, REQ-CORE-018, REQ-CORE-038 —
+/// I-L2/I-L3/I-L4/I-L6 Windows crash matrix: a publisher process is killed and
+/// restarted 50 times (subset of the 100× Linux loop) over real `LockFileEx`
+/// authority and a pagefile section kept alive by a live consumer mapping. The
+/// kernel releases the lock on death (I-W3), each restart adopts the Ready
+/// image and advances the epoch exactly once (I-L3), the preserved `write_seq`
+/// becomes the new window floor (I-L6), and the consumer mapping observes every
+/// epoch (I-L4) — no prior-run payload is ever read as new (I-L5).
+#[test]
+fn win_lifecycle_crash_x50() {
+    let _serial = crate::test_guard::acquire();
+    let shm = WinShm;
+    let locks = WinLockBackend;
+    let n = section("crash50");
+    let e = expect("pkg/topic-a");
+    let path = lock_path("crash50");
+    let ready = std::env::temp_dir().join(format!("drm-win-crash-{}.ready", std::process::id()));
+    let exe = fixture(std::env::current_exe(), "current_exe");
+
+    // Seed the section (epoch 1) and keep it alive with a consumer mapping so it
+    // survives every publisher death (pagefile sections die with their last
+    // handle, I-W4b).
+    let seed = open_publisher(shm, locks, &path, &n, &e);
+    assert_eq!(seed.epoch, 1);
+    let consumer: Consumer = fixture(consumer_open(&shm, &n, &e, &spec(), None), "consumer open");
+    drop(seed);
+
+    let mut epoch = 1_u32;
+    let mut floor = 0_u64;
+    for cycle in 0..50_u32 {
+        let _ = std::fs::remove_file(&ready);
+        let mut child = fixture(
+            Command::new(&exe)
+                .args([
+                    "--exact",
+                    "channel::lifecycle::tests::windows::win_lifecycle_crash_child",
+                    "--nocapture",
+                ])
+                .env("DRM_WIN_CRASH_NAME", n.as_str())
+                .env("DRM_WIN_CRASH_LOCK", &path)
+                .env("DRM_WIN_CRASH_FLOOR", floor.to_string())
+                .env("DRM_WIN_CRASH_READY", &ready)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn(),
+            "spawn publisher child",
+        );
+        wait_for_file(&ready, "publisher child");
+        fixture(child.kill(), "kill publisher child");
+        fixture(child.wait(), "reap publisher child");
+        // Kernel released the authority: the child consumed one epoch, the
+        // restart consumes the next.
+        let p = open_publisher_settled(shm, locks, &path, &n, &e);
+        epoch += 2;
+        assert_eq!(
+            p.epoch, epoch,
+            "epoch advances exactly once per acquisition"
+        );
+        assert_eq!(
+            read_u64(
+                p.mapping(),
+                p.view.ccb_offset,
+                offset_of!(ChannelControlBlock, first_valid_seq)
+            ),
+            floor,
+            "cycle {cycle}: floor = preserved next sequence"
+        );
+        assert_eq!(
+            read_u32(
+                consumer.mapping(),
+                consumer.view.ccb_offset,
+                offset_of!(ChannelControlBlock, publisher_epoch)
+            ),
+            epoch,
+            "cycle {cycle}: consumer mapping observes the new epoch"
+        );
+        floor = floor.saturating_add(3);
+        write_u64(
+            p.mapping(),
+            p.view.ccb_offset,
+            offset_of!(ChannelControlBlock, write_seq),
+            floor,
+        );
+        drop(p);
+    }
+    assert_eq!(epoch, 101, "50 kills => 50 restart acquisitions");
+    drop(consumer);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&ready);
 }

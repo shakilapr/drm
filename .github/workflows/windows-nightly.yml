@@ -1,17 +1,18 @@
 # Nightly Windows conformance (work-plan M12W2-E4-T2, M12W4-E4-T1,
-# extended M13W1-E1/E3/E4, full port M13W3): the cross-OS manifest defined in
-# xtask/src/cross_os.rs — SHM sections, process identity, `LockFileEx` locks,
-# Windows publisher/consumer lifecycle (in-place `Init` reinit, restart epoch
-# parity), the bounded serial codec, socket transports, router
-# framing/lanes/shaping, toolchain verify/budget/determinism, and the bindings
-# golden/FFI rows. The subset runs three consecutive times so runner flakiness
-# surfaces (M12W4 Tests: green ×3); the full manifest runs ×2 with run 2
-# required green (M13W3 Tests: full run ×2). Results feed
-# docs/metrics/metrics-m12.md, docs/metrics/metrics-m13.md, and
-# docs/gates/phase-31.md.
-# REQ: REQ-QAL-008, REQ-CORE-074, REQ-CORE-075, REQ-CORE-076, REQ-CORE-077,
-# REQ-CORE-078, REQ-CORE-101, REQ-ROUTE-025, REQ-ROUTE-026, REQ-ROUTE-029,
-# REQ-ROUTE-032.
+# extended M13W1-E1/E3/E4, full port M13W3, crash matrix M13W4): the cross-OS
+# manifest defined in xtask/src/cross_os.rs — SHM sections, process identity,
+# `LockFileEx` locks, Windows publisher/consumer lifecycle (in-place `Init`
+# reinit, restart epoch parity), the publisher crash matrix (kill/restart ×50),
+# reader-kill reclamation, link-cut isolation, the bounded serial codec, socket
+# transports, router framing/lanes/shaping, toolchain verify/budget/determinism,
+# and the bindings golden/FFI rows. The subset runs three consecutive times so
+# runner flakiness surfaces (M12W4 Tests: green ×3); the full manifest runs ×2
+# with run 2 required green (M13W3 Tests: full run ×2). Results feed
+# docs/metrics/metrics-m12.md, docs/metrics/metrics-m13.md,
+# docs/gates/phase-31.md, and docs/gates/month-13.md.
+# REQ: REQ-QAL-008, REQ-CORE-054, REQ-CORE-056, REQ-CORE-057, REQ-CORE-074,
+# REQ-CORE-075, REQ-CORE-076, REQ-CORE-077, REQ-CORE-078, REQ-CORE-101,
+# REQ-ROUTE-007, REQ-ROUTE-025, REQ-ROUTE-026, REQ-ROUTE-029, REQ-ROUTE-032.
 name: windows-nightly
 
 on:
@@ -40,6 +41,15 @@ jobs:
         run: |
           echo "::group::full conformance (CONFORMANCE_RUNS=2)"
           cargo xtask test --cross-os --full
+          echo "::endgroup::"
+      - name: lifecycle_win_crash (M13W4; publisher kill/restart ×50 + reader kill)
+        shell: bash
+        run: |
+          echo "::group::publisher crash matrix (×50)"
+          cargo test -p drm-core --lib win_lifecycle_crash_x50 -- --nocapture
+          echo "::endgroup::"
+          echo "::group::reader-kill reclamation matrix"
+          cargo test -p drm-core --lib reclaim_kill_matrix_windows -- --nocapture
           echo "::endgroup::"
       - name: cross-OS interop matrix (UDP + TCP cells)
         shell: bash

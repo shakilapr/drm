@@ -11,6 +11,28 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M13 W4 tranche: Windows crash-recovery matrix + Phase 31 gate prep +
+  month-13 review. Windows publisher kill/restart ×50
+  ([windows.rs](crates/drm-core/src/channel/lifecycle/tests/windows.rs)
+  `win_lifecycle_crash_x50` + `win_lifecycle_crash_child`): kernel `LockFileEx`
+  release, exactly-once epoch advance, preserved floor, consumer observes each
+  epoch (I-W3/I-L2/I-L3/I-L4/I-L6). Windows reader-kill reclamation matrix
+  ([reclaim/tests/windows.rs](crates/drm-core/src/channel/reclaim/tests/windows.rs)
+  `reclaim_kill_matrix_windows`): kill at every borrow stage over real Win32
+  identity, proof-before-reclaim under the registration lock, live reader never
+  mis-reclaimed, reused PID is a dead incarnation (I-E5/REQ-CORE-057). Link-cut
+  isolation ([data_path.rs](crates/drm-router/src/data_path.rs)
+  `Router::link_down`/`link_up`/`link_is_down` + `IngressOutcome::LinkDown`;
+  suite [disconnect_isolation.rs](crates/drm-router/tests/disconnect_isolation.rs)):
+  a down link takes only its routes offline; local shared memory and sibling
+  links continue; reconnect resumes with a fresh ingress session (I-RT6).
+  Cross-OS manifest ([cross_os.rs](xtask/src/cross_os.rs)) adds three green rows
+  (`win-lifecycle-crash`, `win-reclaim-kill`, `router-disconnect-isolation`).
+  Evidence in [phase-31.md](docs/gates/phase-31.md) (M13W4 section),
+  [month-13.md](docs/gates/month-13.md), and
+  [tests/conformance/README.md](tests/conformance/README.md);
+  [metrics-m13.md](docs/metrics/metrics-m13.md) records
+  `WIN_CRASH_MATRIX = 1`, `PHASE31_EVIDENCE = 1`, `MONTH13_REVIEW = ON_TRACK`.
 - Week M13 W3 tranche: Windows conformance full port —
   [cross_os.rs](xtask/src/cross_os.rs) grows the cross-OS manifest from 12 to 33
   rows (runtime platform, lifecycle, toolchain, router, and bindings families),

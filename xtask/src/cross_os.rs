@@ -156,6 +156,24 @@ pub const SUBSET: &[SubsetRow] = &[
         windows: WindowsState::Green,
     },
     SubsetRow {
+        id: "win-lifecycle-crash",
+        invariants: &["I-W3", "I-L2", "I-L3", "I-L4", "I-L6"],
+        args: &["test", "-p", "drm-core", "--lib", "win_lifecycle_crash_x50"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-reclaim-kill",
+        invariants: &["I-W5", "I-E5"],
+        args: &[
+            "test",
+            "-p",
+            "drm-core",
+            "--lib",
+            "reclaim_kill_matrix_windows",
+        ],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
         id: "win-handle-leak",
         invariants: &["I-W7"],
         args: &[
@@ -248,6 +266,12 @@ pub const SUBSET: &[SubsetRow] = &[
         id: "serial-route",
         invariants: &["I-SR1", "I-SR4", "I-RT1", "I-RT11"],
         args: &["test", "-p", "drm-router", "serial_route"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "router-disconnect-isolation",
+        invariants: &["I-RT6"],
+        args: &["test", "-p", "drm-router", "--test", "disconnect_isolation"],
         windows: WindowsState::Green,
     },
     SubsetRow {

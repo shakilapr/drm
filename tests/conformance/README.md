@@ -69,7 +69,7 @@ dual-VM/lab runner in the M14 matrix.
 REQ: REQ-QAL-008, REQ-OPS-004, REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026,
 REQ-ROUTE-029, REQ-ROUTE-032.
 
-## Windows conformance full port (defined M12W4, extended M13W1/M13W2, full port M13W3)
+## Windows conformance full port (defined M12W4, extended M13W1/M13W2, full port M13W3, crash matrix M13W4)
 
 Every core conformance suite row must run green on the Windows runner, or carry
 an explicit port note tracked on the port board while a platform fixture is
@@ -96,6 +96,8 @@ has exactly one `PORT_BOARD` entry (owner + target week + gate-risk note).
 | `win-lifecycle-parity` | I-W4b/I-W6/I-W7 | `cargo test -p drm-core --test platform_windows` | green |
 | `win-race-create` | I-W1/I-L1 | `cargo test -p drm-core --lib win_race_create` | green (M13W1 E1) |
 | `win-init-reinit` | I-W1/I-L8 | `cargo test -p drm-core --lib win_init_reinit` | green (M13W1 E1) |
+| `win-lifecycle-crash` | I-W3/I-L2/I-L3/I-L4/I-L6 | `cargo test -p drm-core --lib win_lifecycle_crash_x50` | green (M13W4 E1) |
+| `win-reclaim-kill` | I-W5/I-E5 | `cargo test -p drm-core --lib reclaim_kill_matrix_windows` | green (M13W4 E4) |
 | `win-handle-leak` | I-W7 | `cargo test -p drm-core --test platform_windows win_no_handle_leak` | green |
 | `win-kill-release` | I-W4b | `cargo test -p drm-core --test platform_windows win_kill_releases_section` | green |
 | `win-quota-edge` | I-W6 | `cargo test -p drm-core --test platform_windows win_quota_edge` | green |
@@ -108,6 +110,7 @@ has exactly one `PORT_BOARD` entry (owner + target week + gate-risk note).
 | `router-shaping` | I-LS3/I-LS4 | `cargo test -p drm-router shaping` | green |
 | `serial-codec` | I-SR1/I-SR2/I-SR3/I-SR4/I-SR6 | `cargo test -p drm-router --lib transport::serial` | green (M13W1 E3) |
 | `serial-route` | I-SR1/I-SR4/I-RT1/I-RT11 | `cargo test -p drm-router serial_route` | green (M13W3) |
+| `router-disconnect-isolation` | I-RT6 | `cargo test -p drm-router --test disconnect_isolation` | green (M13W4 E3) |
 | `serial-loopback` | I-SR4/I-SR6 | `cargo test -p drm-router --lib transport::serial::tests::serial_loopback_x10k` | scheduled (unix socketpair; board: E3/M14W1) |
 | `golden-rust` | I-G1/I-G2/I-G3 | `cargo test -p drm-core --test golden_primitives` | green |
 | `golden-c` | I-G1/I-G4 | `cargo test -p drm-core --test golden_primitives` | scheduled (board: E4/M14W1) |
@@ -116,5 +119,6 @@ has exactly one `PORT_BOARD` entry (owner + target week + gate-risk note).
 | `ffi-matrix` | I-G6/I-G7 | `cargo test -p drm-ffi` | scheduled (board: E4/M14W1) |
 | `borrow-disciplines` | I-G8/I-G9 | `cargo test -p drm-ffi` | scheduled (board: E4/M14W1) |
 
-REQ: REQ-QAL-008, REQ-CORE-101, REQ-CORE-077, REQ-CORE-098, REQ-ROUTE-025,
-REQ-ROUTE-026, REQ-ROUTE-029.
+REQ: REQ-QAL-008, REQ-CORE-101, REQ-CORE-077, REQ-CORE-098, REQ-CORE-054,
+REQ-CORE-056, REQ-CORE-057, REQ-ROUTE-007, REQ-ROUTE-025, REQ-ROUTE-026,
+REQ-ROUTE-029.

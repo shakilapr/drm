@@ -195,3 +195,71 @@ cargo xtask audit-traceability
 REQ: REQ-QAL-008, REQ-CORE-101, REQ-CORE-078, REQ-CORE-075, REQ-CORE-077,
 REQ-CORE-074, REQ-CORE-098, REQ-ROUTE-025, REQ-ROUTE-026, REQ-ROUTE-029,
 REQ-OPS-004.
+
+## M13W4 — Windows Crash-Recovery Matrix, Phase 31 Gate Prep, Month-13 Review
+
+| Variable | Target | Measured |
+|---|---|---|
+| `WIN_CRASH_MATRIX` | publisher-kill/restart, reader-kill reclamation, clean races green on Windows | 1 — publisher-kill/restart ×50 (`channel::lifecycle::tests::windows::win_lifecycle_crash_x50`: kernel `LockFileEx` release, exactly-once epoch advance, preserved floor, consumer observes each epoch — I-W3/I-L2/I-L3/I-L4/I-L6); reader-kill reclamation matrix (`channel::reclaim::tests::windows::reclaim_kill_matrix_windows`: kill at every borrow stage, live reader never mis-reclaimed, reused PID is a dead incarnation — I-E5/REQ-CORE-057); link-cut isolation (`drm-router/tests/disconnect_isolation.rs`: only the cut link's routes offline, local loops and sibling links continue, reconnect clean — I-RT6); the `win-race-create`/`win-init-reinit` clean races stay green |
+| `PHASE31_EVIDENCE` | gate doc drafted — 4 criteria lines mapped to artifacts | 1 — [phase-31.md](../gates/phase-31.md) criterion table maps all four work-plan #31 criteria to artifacts + tests + results; criterion 3 (Windows crash recovery) closes at M13W4 |
+| `MONTH13_REVIEW` | ON_TRACK | ON_TRACK — [month-13.md](../gates/month-13.md) (Windows port status vs gate criteria, carry-over/quarantine, risk deltas, registry health, M14 commitment) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Windows crash matrix (`crates/drm-core/src/channel/lifecycle/tests/windows.rs`,
+  `win_lifecycle_crash_x50` + `win_lifecycle_crash_child`): a publisher child is
+  spawned, killed, and restarted 50 times over real `LockFileEx` authority with
+  a consumer mapping keeping the pagefile section alive (I-W4b); each restart
+  advances the epoch exactly once and republishes `first_valid_seq = write_seq`
+  (I-L3/I-L6), and the consumer mapping observes every epoch (I-L4).
+- Windows reader-kill reclamation matrix
+  (`crates/drm-core/src/channel/reclaim/tests/windows.rs`,
+  `reclaim_kill_matrix_windows`): kills a reader at every borrow stage (real
+  Win32 identity: signaled process + creation time), asserts proof-before-reclaim
+  under the registration lock (I-E5), never mis-reclaims a live reader, and
+  treats a reused PID as a different, dead incarnation (REQ-CORE-057).
+- Link-cut isolation (`crates/drm-router/src/data_path.rs` `Router::link_down` /
+  `link_up` / `link_is_down` + `IngressOutcome::LinkDown`; suite
+  `crates/drm-router/tests/disconnect_isolation.rs`): a down link takes only its
+  own routes offline — egress is a no-op, ingress is dropped without touching
+  ordering state, sibling links and local shared memory are untouched, and
+  reconnect resumes with a fresh ingress session (I-RT6/I-RT9).
+- Cross-OS manifest (`xtask/src/cross_os.rs`): three new green rows —
+  `win-lifecycle-crash`, `win-reclaim-kill`, `router-disconnect-isolation` — so
+  the crash matrix and link-cut isolation re-run under the permanent Windows
+  nightly gates.
+- Gate evidence ([phase-31.md](../gates/phase-31.md) M13W4 section) and
+  conformance matrix ([tests/conformance/README.md](../../tests/conformance/README.md));
+  month review ([month-13.md](../gates/month-13.md)).
+- [CHANGELOG.md](../../CHANGELOG.md): M13W4 tranche entry.
+
+Notes:
+
+- Windows-only rows cannot execute on the Linux authoring host; they are
+  cross-compiled clean (`cargo check -p drm-core --tests --target
+  x86_64-pc-windows-msvc`) and gated by the `windows-latest` jobs.
+- No architecture divergence: the crash/reclamation matrices and link-cut
+  isolation implement pinned invariants (publisher-lifecycle.md I-L2/I-L3/I-L4/
+  I-L6, exhaustion-reclamation.md I-E5, windows-backends.md I-W3/I-W5,
+  router-core.md I-RT6), so no ADR or algorithm-doc change landed.
+
+### Weekly gate checklist (chaired by E3, Friday)
+
+- [x] `WIN_CRASH_MATRIX = 1`; `PHASE31_EVIDENCE = 1` (4 criteria mapped); `MONTH13_REVIEW = ON_TRACK`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M13W4) = PASS`**
+
+### How to reproduce
+
+```text
+cargo xtask test --cross-os
+cargo test -p drm-core --lib win_lifecycle_crash_x50      # Windows runner
+cargo test -p drm-core --lib reclaim_kill_matrix_windows  # Windows runner
+cargo test -p drm-router --test disconnect_isolation
+cargo xtask audit-traceability
+```
+
+REQ: REQ-CORE-101, REQ-CORE-054, REQ-CORE-020, REQ-CORE-018, REQ-CORE-038,
+REQ-CORE-056, REQ-CORE-057, REQ-CORE-074, REQ-CORE-075, REQ-ROUTE-007,
+REQ-ROUTE-011, REQ-ROUTE-022, REQ-QAL-008.

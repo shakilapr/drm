@@ -394,4 +394,10 @@ mod tests {
         assert!(freed(&c, 1, g1), "dead owner reclaimed across restart");
         assert_eq!(c.publish(&pat(3)), Ok(2), "publishing resumes post-restart");
     }
+
+    /// Real-Windows reader-kill reclamation matrix (Windows CI): proves the
+    /// reclamation authority against real Win32 process identity
+    /// (windows-backends.md I-W5/I-W6: signaled process + creation time).
+    #[cfg(windows)]
+    mod windows;
 }

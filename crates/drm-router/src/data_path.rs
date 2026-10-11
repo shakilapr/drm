@@ -2,12 +2,14 @@
 //! filtering from the derived forwarding plan (I-RT1), datagram bound
 //! enforcement before any syscall (I-RT3), header-stripped ingress with
 //! per-`(link, wire_channel_id)` ordering (I-RT9) and synthetic-publisher
-//! deposit in native format (I-RT4). The router never retains a borrowed DRM
-//! sample across the send call (I-RT8 external-I/O rule).
+//! deposit in native format (I-RT4), and link-cut isolation (I-RT6: a down link
+//! takes only its routes offline; local shared memory and sibling links
+//! continue). The router never retains a borrowed DRM sample across the send
+//! call (I-RT8 external-I/O rule).
 //! REQ: REQ-ROUTE-022, REQ-ROUTE-023, REQ-ROUTE-031, REQ-ROUTE-032,
-//! REQ-ROUTE-033, REQ-ROUTE-011, REQ-ROUTE-038.
+//! REQ-ROUTE-033, REQ-ROUTE-011, REQ-ROUTE-038, REQ-ROUTE-007.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use drm_types::Status;
 
@@ -54,6 +56,10 @@ pub enum IngressOutcome {
     /// Unknown `(link, wire_channel_id)`: dropped without blocking (never a
     /// panic). REQ: REQ-ROUTE-011.
     UnknownChannel,
+    /// `link` is down (I-RT6): the frame is dropped without touching ordering
+    /// state; local shared memory is untouched by the router.
+    /// REQ: REQ-ROUTE-007.
+    LinkDown,
 }
 
 /// Synthetic-publisher deposit target: receives header-stripped payloads in
@@ -86,6 +92,7 @@ pub trait ImportSink {
 pub struct Router {
     routes: Vec<EgressRoute>,
     ingress: BTreeMap<(u32, u32), IngressState>,
+    down_links: BTreeSet<u32>,
 }
 
 impl Router {
@@ -96,7 +103,32 @@ impl Router {
         Self {
             routes,
             ingress: BTreeMap::new(),
+            down_links: BTreeSet::new(),
         }
+    }
+
+    /// Marks `link` down (I-RT6): routes over it stop egressing and its ingress
+    /// frames are dropped, while local shared memory and every other link are
+    /// untouched. Idempotent.
+    /// REQ: REQ-ROUTE-007.
+    pub fn link_down(&mut self, link: u32) {
+        self.down_links.insert(link);
+    }
+
+    /// Marks `link` up after a reconnect (I-RT6): egress resumes and the
+    /// per-link ingress ordering state is dropped — a fresh session with empty
+    /// ordering state and no historical retransmit (I-RT9). Idempotent.
+    /// REQ: REQ-ROUTE-007.
+    pub fn link_up(&mut self, link: u32) {
+        self.down_links.remove(&link);
+        self.ingress.retain(|(l, _), _| *l != link);
+    }
+
+    /// Whether `link` is currently down (I-RT6).
+    /// REQ: REQ-ROUTE-007.
+    #[must_use]
+    pub fn link_is_down(&self, link: u32) -> bool {
+        self.down_links.contains(&link)
     }
 
     /// The registered route bindings, in input order.
@@ -193,9 +225,10 @@ impl Router {
 
     /// Builds the egress header for `(link, topic)` after the forwarding-plan
     /// filter (I-RT1); `Ok(None)` means the topic is filtered — no frame, no
-    /// work, no reservation. Shared by [`Router::egress_udp`] and
-    /// [`Router::egress_frame`].
-    /// REQ: REQ-ROUTE-022, REQ-ROUTE-033.
+    /// work, no reservation. A down link (I-RT6) also yields `Ok(None)`: routes
+    /// over a cut link are offline, so no frame is emitted. Shared by
+    /// [`Router::egress_udp`] and [`Router::egress_frame`].
+    /// REQ: REQ-ROUTE-022, REQ-ROUTE-033, REQ-ROUTE-007.
     ///
     /// # Errors
     /// [`Status::InvalidArg`] when `payload` is longer than `u32`.
@@ -207,6 +240,9 @@ impl Router {
         seq: u64,
         payload: &[u8],
     ) -> Result<Option<(EgressRoute, WireHeader)>, Status> {
+        if self.down_links.contains(&link) {
+            return Ok(None); // I-RT6: link cut takes only its routes offline
+        }
         let Some(route) = self.route(link, topic) else {
             return Ok(None);
         };
@@ -226,15 +262,16 @@ impl Router {
         Ok(Some((route, header)))
     }
 
-    /// Ingests one decoded frame for `link`: validates exact length (I-RT14)
-    /// and the generated receive bound before any state mutation (I-RT18),
-    /// classifies per-`(link, wire_channel_id)` ordering (I-RT9), strips the wire
-    /// headers, and deposits the native payload to `sink` (I-RT4).
+    /// Ingests one decoded frame for `link`: a down link (I-RT6) drops the frame
+    /// with no state change; otherwise validates exact length (I-RT14) and the
+    /// generated receive bound before any state mutation (I-RT18), classifies
+    /// per-`(link, wire_channel_id)` ordering (I-RT9), strips the wire headers,
+    /// and deposits the native payload to `sink` (I-RT4).
     ///
     /// # Errors
     /// [`Status::InvalidData`] on a length mismatch or receive-bound violation
     /// (no state changes, I-RT14); the sink's status after state advances.
-    /// REQ: REQ-ROUTE-011, REQ-ROUTE-031, REQ-ROUTE-038.
+    /// REQ: REQ-ROUTE-011, REQ-ROUTE-031, REQ-ROUTE-038, REQ-ROUTE-007.
     pub fn ingress_frame<S: ImportSink>(
         &mut self,
         link: u32,
@@ -242,6 +279,9 @@ impl Router {
         payload: &[u8],
         sink: &mut S,
     ) -> Result<IngressOutcome, Status> {
+        if self.down_links.contains(&link) {
+            return Ok(IngressOutcome::LinkDown); // I-RT6: no ordering state touched
+        }
         if header.payload_len as usize != payload.len() {
             return Err(Status::InvalidData); // I-RT14: before state mutation
         }
