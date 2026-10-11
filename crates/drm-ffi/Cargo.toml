@@ -6,6 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+# `rlib` keeps the Rust workspace/tests linking as before; `cdylib` produces the
+# `libdrm_ffi.so` the C/Python/ctypes conformance harnesses dlopen (bindings/c,
+# bindings/python tests). REQ: REQ-BIND-004, REQ-BIND-018.
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 drm-types = { path = "../drm-types" }
 drm-core = { path = "../drm-core" }

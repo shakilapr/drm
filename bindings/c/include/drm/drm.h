@@ -109,7 +109,8 @@ drm_status drm_publish_copy(drm_publisher *publisher, const uint8_t *data, size_
  * buffer). `drm_read_next` additionally reports a Gap count via `*out_missed`
  * (REQ-BIND-019). */
 drm_status drm_read_latest(drm_consumer *consumer, uint8_t *buf, size_t cap, size_t *out_len);
-drm_status drm_read_next(drm_consumer *consumer, uint8_t *buf, size_t cap, size_t *out_len, uint64_t *out_missed);
+drm_status drm_read_next(drm_consumer *consumer, uint8_t *buf, size_t cap, size_t *out_len,
+                         uint64_t *out_missed);
 
 /* Zero-copy borrow (REQ-BIND-003): at most one outstanding borrow per consumer;
  * release is explicit (no RAII in C) — double-release returns
