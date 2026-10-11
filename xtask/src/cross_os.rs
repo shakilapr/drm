@@ -1,12 +1,15 @@
-//! Cross-OS conformance subset (work-plan M12W4-E4-T1, closed out M13W1-E1/E3;
-//! windows-backends.md §Test Matrix). The Linux conformance suite rows that must
-//! run green on the Windows runner, or carry an explicit port note when a
-//! platform fixture is still scheduled. `cargo xtask test --cross-os` executes
-//! every green row on the current host — Windows-only rows are `cfg`-gated and
-//! no-op elsewhere — so the same manifest defines the nightly Windows subset and
-//! the local smoke, with no divergent lists. `PORT_GAPS_CLOSED` holds when no
-//! row is silently missing: each is either green or scheduled with a note. The
-//! M12W4 `win-race-create` and `win-init-reinit` carry-overs are green here.
+//! Cross-OS conformance manifest (work-plan M12W4-E4-T1, extended M13W1/M13W2,
+//! full port M13W3-E1/E2/E3/E4; windows-backends.md §Test Matrix). Every Linux
+//! conformance suite row must run green on the Windows runner or carry an
+//! explicit port note (`WindowsState::Scheduled`) tracked on [`PORT_BOARD`].
+//! `cargo xtask test --cross-os` executes every green row on the current host —
+//! Windows-only rows are `cfg`-gated and no-op elsewhere — so the same manifest
+//! defines the nightly Windows run and the local smoke, with no divergent lists.
+//! `cargo xtask test --cross-os --full` runs the whole manifest
+//! [`CONFORMANCE_RUNS`] times and archives per-run evidence under
+//! `target/conformance/` (work-plan M13W3 Tests: "full run ×2, run 2 green").
+//! `PORT_GAPS_CLOSED` holds when no row is silently missing: each is either green
+//! or scheduled with a board entry (owner + gate-risk note).
 //! REQ: REQ-QAL-008, REQ-CORE-101, REQ-ROUTE-025, REQ-ROUTE-026.
 
 use anyhow::{Result, bail};
@@ -50,15 +53,82 @@ pub const REQUIRED_INVARIANTS: &[&str] = &[
     "I-W1", "I-W2", "I-W3", "I-W4", "I-W4b", "I-W5", "I-W6", "I-W7", "I-W8",
 ];
 
-/// The Windows conformance subset: every row is green on the Windows runner or
-/// scheduled with a port note (windows-backends.md §Test Matrix; work-plan
-/// M12W4 E1/E3/E4).
+/// The full Windows conformance manifest (work-plan M13W3 full port): every row
+/// is green on the Windows runner or scheduled with a port note and a
+/// [`PORT_BOARD`] entry (windows-backends.md §Test Matrix).
 /// REQ: REQ-QAL-008.
 pub const SUBSET: &[SubsetRow] = &[
+    // --- Runtime core: platform rows (windows-backends.md §Test Matrix) ---
     SubsetRow {
         id: "win-shm-locks-identity",
         invariants: &["I-W1", "I-W2", "I-W3", "I-W5", "I-W6", "I-W7", "I-W8"],
         args: &["test", "-p", "drm-core", "--lib", "win_"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-open-semantics",
+        invariants: &["I-W2", "I-W3"],
+        args: &["test", "-p", "drm-core", "--lib", "win_open_semantics"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-precommit-refusal",
+        invariants: &["I-W6"],
+        args: &["test", "-p", "drm-core", "--lib", "win_precommit_refusal"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-lock-release-on-death",
+        invariants: &["I-W3", "I-W4"],
+        args: &[
+            "test",
+            "-p",
+            "drm-core",
+            "--lib",
+            "win_lock_release_on_death",
+        ],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-process-identity",
+        invariants: &["I-W5"],
+        args: &["test", "-p", "drm-core", "--lib", "win_process_identity"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-pid-reuse",
+        invariants: &["I-W5"],
+        args: &["test", "-p", "drm-core", "--lib", "win_pid_reuse"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-active-hold",
+        invariants: &["I-W8"],
+        args: &[
+            "test",
+            "-p",
+            "drm-core",
+            "--lib",
+            "win_active_hold_lifecycle",
+        ],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-close-last-handle",
+        invariants: &["I-W4b"],
+        args: &["test", "-p", "drm-core", "--lib", "win_close_last_handle"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-create-failure",
+        invariants: &["I-W7"],
+        args: &[
+            "test",
+            "-p",
+            "drm-core",
+            "--lib",
+            "win_create_failure_matrix",
+        ],
         windows: WindowsState::Green,
     },
     SubsetRow {
@@ -73,6 +143,77 @@ pub const SUBSET: &[SubsetRow] = &[
         args: &["test", "-p", "drm-core", "--test", "platform_windows"],
         windows: WindowsState::Green,
     },
+    SubsetRow {
+        id: "win-race-create",
+        invariants: &["I-W1", "I-L1"],
+        args: &["test", "-p", "drm-core", "--lib", "win_race_create"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-init-reinit",
+        invariants: &["I-W1", "I-L8"],
+        args: &["test", "-p", "drm-core", "--lib", "win_init_reinit"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-handle-leak",
+        invariants: &["I-W7"],
+        args: &[
+            "test",
+            "-p",
+            "drm-core",
+            "--test",
+            "platform_windows",
+            "win_no_handle_leak",
+        ],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-kill-release",
+        invariants: &["I-W4b"],
+        args: &[
+            "test",
+            "-p",
+            "drm-core",
+            "--test",
+            "platform_windows",
+            "win_kill_releases_section",
+        ],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "win-quota-edge",
+        invariants: &["I-W6"],
+        args: &[
+            "test",
+            "-p",
+            "drm-core",
+            "--test",
+            "platform_windows",
+            "win_quota_edge",
+        ],
+        windows: WindowsState::Green,
+    },
+    // --- Toolchain rows ---
+    SubsetRow {
+        id: "verify-engine",
+        invariants: &["I-V1", "I-V6"],
+        args: &["test", "-p", "drm-workspace", "--test", "verify_engine"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "toolchain-budget",
+        invariants: &["I-MB1", "I-MB2", "I-MB4"],
+        args: &["test", "-p", "drm-workspace", "--test", "budget"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "toolchain-model-determinism",
+        invariants: &["I-D1", "I-D2"],
+        args: &["test", "-p", "drm-workspace", "--test", "model_determinism"],
+        windows: WindowsState::Green,
+    },
+    // --- Router & transport rows ---
     SubsetRow {
         id: "router-transport",
         invariants: &["I-RT5"],
@@ -98,27 +239,15 @@ pub const SUBSET: &[SubsetRow] = &[
         windows: WindowsState::Green,
     },
     SubsetRow {
-        id: "verify-engine",
-        invariants: &["I-V1", "I-V6"],
-        args: &["test", "-p", "drm-workspace", "--test", "verify_engine"],
-        windows: WindowsState::Green,
-    },
-    SubsetRow {
-        id: "win-race-create",
-        invariants: &["I-W1", "I-L1"],
-        args: &["test", "-p", "drm-core", "--lib", "win_race_create"],
-        windows: WindowsState::Green,
-    },
-    SubsetRow {
-        id: "win-init-reinit",
-        invariants: &["I-W1", "I-L8"],
-        args: &["test", "-p", "drm-core", "--lib", "win_init_reinit"],
-        windows: WindowsState::Green,
-    },
-    SubsetRow {
         id: "serial-codec",
         invariants: &["I-SR1", "I-SR2", "I-SR3", "I-SR4", "I-SR6"],
         args: &["test", "-p", "drm-router", "--lib", "transport::serial"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "serial-route",
+        invariants: &["I-SR1", "I-SR4", "I-RT1", "I-RT11"],
+        args: &["test", "-p", "drm-router", "serial_route"],
         windows: WindowsState::Green,
     },
     SubsetRow {
@@ -135,17 +264,154 @@ pub const SUBSET: &[SubsetRow] = &[
             "socketpair loopback is unix-only; Windows COM/named-pipe fixture M14",
         ),
     },
+    // --- Bindings rows ---
+    SubsetRow {
+        id: "golden-rust",
+        invariants: &["I-G1", "I-G2", "I-G3"],
+        args: &["test", "-p", "drm-core", "--test", "golden_primitives"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "golden-c",
+        invariants: &["I-G1", "I-G4"],
+        args: &["test", "-p", "drm-core", "--test", "golden_primitives"],
+        windows: WindowsState::Scheduled(
+            "C11 decoder needs cc/clang-cl on the Windows runner; bindings Phase 32",
+        ),
+    },
+    SubsetRow {
+        id: "golden-cpp",
+        invariants: &["I-G1", "I-G4"],
+        args: &["test", "-p", "drm-core", "--test", "golden_primitives"],
+        windows: WindowsState::Scheduled("C++17 decoder needs clang-cl; bindings Phase 32"),
+    },
+    SubsetRow {
+        id: "golden-python",
+        invariants: &["I-G1", "I-G5"],
+        args: &["test", "-p", "drm-core", "--test", "golden_primitives"],
+        windows: WindowsState::Scheduled(
+            "Python ctypes reader needs a Windows Python runtime; bindings Phase 32",
+        ),
+    },
+    SubsetRow {
+        id: "ffi-matrix",
+        invariants: &["I-G6", "I-G7"],
+        args: &["test", "-p", "drm-ffi"],
+        windows: WindowsState::Scheduled(
+            "FFI Windows cells land with the c-abi-surface work (Phase 30/32)",
+        ),
+    },
+    SubsetRow {
+        id: "borrow-disciplines",
+        invariants: &["I-G8", "I-G9"],
+        args: &["test", "-p", "drm-ffi"],
+        windows: WindowsState::Scheduled(
+            "Catch2 borrow-discipline harness needs clang-cl; bindings Phase 32",
+        ),
+    },
 ];
 
-/// `cargo xtask test --cross-os`: runs every green subset row on the current
-/// host and reports the scheduled rows; fails on the first failing row.
+/// A tracked port gap: a conformance row that cannot run on the Windows runner
+/// yet, with its owning engineer, target week, and gate-risk note. Work-plan
+/// M13W3-E4-T1: no silent skips — every scheduled row has exactly one entry.
+/// REQ: REQ-QAL-008.
+#[derive(Debug, Clone, Copy)]
+pub struct PortGap {
+    /// Row id, matching a [`SubsetRow::id`] with [`WindowsState::Scheduled`].
+    pub row: &'static str,
+    /// Owning engineer (`E1`..`E4`).
+    pub owner: &'static str,
+    /// Target week that closes the gap.
+    pub week: &'static str,
+    /// Gate-risk note (what blocks the row and which gate it threatens).
+    pub risk: &'static str,
+}
+
+/// The port board: one entry per scheduled conformance row (work-plan M13W3
+/// E4-T1 "gap-tracking board with owners"). `board_complete` holds iff the board
+/// and the scheduled rows match exactly.
+/// REQ: REQ-QAL-008.
+pub const PORT_BOARD: &[PortGap] = &[
+    PortGap {
+        row: "serial-loopback",
+        owner: "E3",
+        week: "M14W1",
+        risk: "COM/named-pipe fixture pending; serial gate M16W4",
+    },
+    PortGap {
+        row: "golden-c",
+        owner: "E4",
+        week: "M14W1",
+        risk: "clang-cl decoder pending; Phase 31 gate M14W2",
+    },
+    PortGap {
+        row: "golden-cpp",
+        owner: "E4",
+        week: "M14W1",
+        risk: "clang-cl decoder pending; Phase 31 gate M14W2",
+    },
+    PortGap {
+        row: "golden-python",
+        owner: "E4",
+        week: "M14W1",
+        risk: "Windows Python runtime pending; Phase 31 gate M14W2",
+    },
+    PortGap {
+        row: "ffi-matrix",
+        owner: "E4",
+        week: "M14W1",
+        risk: "FFI Windows cells pending; c-abi-surface Phase 30/32",
+    },
+    PortGap {
+        row: "borrow-disciplines",
+        owner: "E4",
+        week: "M14W1",
+        risk: "Catch2 harness pending; Phase 31 gate M14W2",
+    },
+];
+
+/// True iff the [`PORT_BOARD`] and the scheduled [`SUBSET`] rows match exactly
+/// and every board entry is actionable (owner, week, risk non-empty).
+/// REQ: REQ-QAL-008.
+#[must_use]
+pub fn board_complete() -> bool {
+    let scheduled: Vec<&str> = SUBSET
+        .iter()
+        .filter_map(|r| match r.windows {
+            WindowsState::Scheduled(_) => Some(r.id),
+            WindowsState::Green => None,
+        })
+        .collect();
+    scheduled
+        .iter()
+        .all(|id| PORT_BOARD.iter().any(|g| g.row == *id))
+        && PORT_BOARD.iter().all(|g| {
+            scheduled.contains(&g.row)
+                && !g.owner.is_empty()
+                && !g.week.is_empty()
+                && !g.risk.is_empty()
+        })
+}
+
+/// Consecutive full conformance runs required green (work-plan M13W3 Tests:
+/// "windows CI full run ×2" — run 2 must be green).
+/// REQ: REQ-QAL-008.
+pub const CONFORMANCE_RUNS: u32 = 2;
+
+/// Executes every green subset row on the current host, reports the scheduled
+/// rows, and returns `(green, scheduled)` counts. Fails on the first failing
+/// row or when the manifest is incomplete.
 /// REQ: REQ-QAL-008.
 ///
 /// # Errors
-/// [`anyhow::Error`] when a green row's cargo test invocation exits nonzero.
-pub fn run() -> Result<()> {
+/// [`anyhow::Error`] when an invariant is uncovered, a scheduled row is off the
+/// port board (silent skip), or a green row's cargo invocation exits nonzero.
+fn run_once() -> Result<(usize, usize)> {
     if !covers_required_invariants() {
         bail!("cross-os subset does not cover every required I-W invariant");
+    }
+    if !board_complete() {
+        bail!("port board does not track every scheduled row (silent skip)");
     }
     let mut green = 0_usize;
     let mut scheduled = 0_usize;
@@ -162,7 +428,59 @@ pub fn run() -> Result<()> {
             }
         }
     }
+    Ok((green, scheduled))
+}
+
+/// `cargo xtask test --cross-os`: runs every green subset row on the current
+/// host and reports the scheduled rows; fails on the first failing row.
+/// REQ: REQ-QAL-008.
+///
+/// # Errors
+/// [`anyhow::Error`] when a green row's cargo test invocation exits nonzero.
+pub fn run() -> Result<()> {
+    let (green, scheduled) = run_once()?;
     println!("cross-os subset: {green} green row(s), {scheduled} scheduled");
+    Ok(())
+}
+
+/// Archives one full-run's summary under `target/conformance/full-run-<run>.txt`.
+/// REQ: REQ-QAL-008.
+///
+/// # Errors
+/// [`anyhow::Error`] when the directory or file cannot be written.
+fn write_run_evidence(run: u32, green: usize, scheduled: usize) -> Result<()> {
+    let dir = Path::new("target").join("conformance");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("full-run-{run}.txt"));
+    let body = format!(
+        "run={run}\ngreen_rows={green}\nscheduled_rows={scheduled}\ntracked_gaps={}\n",
+        PORT_BOARD.len()
+    );
+    std::fs::write(&path, body)?;
+    Ok(())
+}
+
+/// `cargo xtask test --cross-os --full`: executes the whole conformance manifest
+/// [`CONFORMANCE_RUNS`] times (work-plan M13W3 Tests: "full run ×2, run 2
+/// green"), archiving per-run evidence under `target/conformance/`. Fails on the
+/// first failing run.
+/// REQ: REQ-QAL-008.
+///
+/// # Errors
+/// [`anyhow::Error`] when any run's green row fails or evidence cannot be
+/// written.
+pub fn run_full() -> Result<()> {
+    let mut last = (0_usize, 0_usize);
+    for run in 1..=CONFORMANCE_RUNS {
+        last = run_once().map_err(|e| e.context(format!("full conformance run {run}")))?;
+        write_run_evidence(run, last.0, last.1)?;
+    }
+    println!(
+        "cross-os full conformance: {CONFORMANCE_RUNS} run(s) green ({} green rows, {} scheduled, {} tracked gaps)",
+        last.0,
+        last.1,
+        PORT_BOARD.len()
+    );
     Ok(())
 }
 
@@ -616,7 +934,7 @@ mod interop_tests {
 /// green Windows run proves the windows-backends.md §Invariants set.
 #[cfg(test)]
 mod tests {
-    use super::{REQUIRED_INVARIANTS, SUBSET, WindowsState};
+    use super::{PORT_BOARD, REQUIRED_INVARIANTS, SUBSET, WindowsState, board_complete};
 
     /// REQ: REQ-QAL-008.
     #[test]
@@ -647,6 +965,57 @@ mod tests {
                     row.id
                 ),
             }
+        }
+    }
+
+    /// REQ: REQ-QAL-008 — the port board matches the scheduled rows exactly: no
+    /// scheduled row is untracked and no board entry is stale.
+    #[test]
+    fn port_board_tracks_every_gap() {
+        assert!(
+            board_complete(),
+            "port board must track every scheduled row (no silent skips)"
+        );
+    }
+
+    /// REQ: REQ-QAL-008 — every board entry is actionable (owner, target week,
+    /// gate-risk note) and names a scheduled row.
+    #[test]
+    fn port_board_entries_are_actionable() {
+        for gap in PORT_BOARD {
+            assert!(!gap.row.is_empty(), "board row id required");
+            assert!(!gap.owner.is_empty(), "board owner required");
+            assert!(!gap.week.is_empty(), "board target week required");
+            assert!(!gap.risk.is_empty(), "board gate-risk note required");
+            assert!(
+                SUBSET
+                    .iter()
+                    .any(|r| r.id == gap.row && matches!(r.windows, WindowsState::Scheduled(_))),
+                "board row `{}` must be a scheduled subset row",
+                gap.row
+            );
+        }
+    }
+
+    /// REQ: REQ-QAL-008 — the full manifest exercises every suite family, so a
+    /// green full run covers runtime, toolchain, router, and bindings rows.
+    #[test]
+    fn manifest_covers_every_suite() {
+        let ids: Vec<&str> = SUBSET.iter().map(|r| r.id).collect();
+        for family in [
+            "win-",
+            "router-",
+            "serial-",
+            "verify-",
+            "toolchain-",
+            "golden-",
+            "ffi-",
+            "borrow-",
+        ] {
+            assert!(
+                ids.iter().any(|id| id.starts_with(family)),
+                "manifest misses suite family `{family}`"
+            );
         }
     }
 }

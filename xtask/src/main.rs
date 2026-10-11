@@ -32,7 +32,7 @@ fn main() -> std::process::ExitCode {
 fn run(args: &[String]) -> Result<()> {
     let Some(cmd) = args.first() else {
         bail!(
-            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--cross-os [--transport udp|tcp]] | check-layering | audit-traceability | soak --duration <h> | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
+            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--cross-os [--transport udp|tcp | --full]] | check-layering | audit-traceability | soak --duration <h> | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
         );
     };
     let flags = &args[1..];
@@ -144,8 +144,11 @@ fn test(flags: &[String]) -> Result<()> {
             let transport = cross_os::InteropTransport::parse(transport)?;
             cross_os::run_interop(Some(transport)).context("xtask test --cross-os --transport")?;
         }
+        ["--cross-os", "--full"] => {
+            cross_os::run_full().context("xtask test --cross-os --full")?;
+        }
         other => bail!(
-            "test flags: {other:?} (expected none, --stress, --cross-os [--transport udp|tcp])"
+            "test flags: {other:?} (expected none, --stress, --cross-os [--transport udp|tcp | --full])"
         ),
     }
     Ok(())

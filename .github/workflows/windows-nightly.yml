@@ -1,12 +1,14 @@
-# Nightly Windows conformance subset (work-plan M12W2-E4-T2, M12W4-E4-T1,
-# extended M13W1-E1/E3/E4): the cross-OS subset defined in
+# Nightly Windows conformance (work-plan M12W2-E4-T2, M12W4-E4-T1,
+# extended M13W1-E1/E3/E4, full port M13W3): the cross-OS manifest defined in
 # xtask/src/cross_os.rs — SHM sections, process identity, `LockFileEx` locks,
 # Windows publisher/consumer lifecycle (in-place `Init` reinit, restart epoch
 # parity), the bounded serial codec, socket transports, router
-# framing/lanes/shaping, and the verify engine. Runs three consecutive times so
-# runner flakiness surfaces (work-plan M12W4 Tests: green ×3 consecutive).
-# Results feed docs/metrics/metrics-m12.md, docs/metrics/metrics-m13.md, and
-# docs/gates/month-12.md.
+# framing/lanes/shaping, toolchain verify/budget/determinism, and the bindings
+# golden/FFI rows. The subset runs three consecutive times so runner flakiness
+# surfaces (M12W4 Tests: green ×3); the full manifest runs ×2 with run 2
+# required green (M13W3 Tests: full run ×2). Results feed
+# docs/metrics/metrics-m12.md, docs/metrics/metrics-m13.md, and
+# docs/gates/phase-31.md.
 # REQ: REQ-QAL-008, REQ-CORE-074, REQ-CORE-075, REQ-CORE-076, REQ-CORE-077,
 # REQ-CORE-078, REQ-CORE-101, REQ-ROUTE-025, REQ-ROUTE-026, REQ-ROUTE-029,
 # REQ-ROUTE-032.
@@ -33,6 +35,12 @@ jobs:
             cargo xtask test --cross-os
             echo "::endgroup::"
           done
+      - name: cross-OS full conformance run ×2 (M13W3; run 2 must be green)
+        shell: bash
+        run: |
+          echo "::group::full conformance (CONFORMANCE_RUNS=2)"
+          cargo xtask test --cross-os --full
+          echo "::endgroup::"
       - name: cross-OS interop matrix (UDP + TCP cells)
         shell: bash
         run: |

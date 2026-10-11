@@ -24,7 +24,8 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 | `xtask soak` | long-duration stability suite (`tests/soak`) |
 | `xtask test --stress` | chaos/stress suites (`tests/stress`) |
 | `xtask test --two-host` | two-host router/transport matrix |
-| `xtask test --cross-os` | cross-OS conformance subset (`xtask/src/cross_os.rs`); every Linux suite row green on Windows or scheduled with a port note |
+| `xtask test --cross-os` | cross-OS conformance manifest (`xtask/src/cross_os.rs` `SUBSET`); every Linux suite row green on Windows or scheduled with a port board entry (owner + gate-risk) |
+| `xtask test --cross-os --full` | full conformance run ×`CONFORMANCE_RUNS` (run 2 must be green), per-run evidence under `target/conformance/` |
 | `xtask test --cross-os --transport <udp\|tcp>` | cross-OS interop matrix (`xtask/src/cross_os.rs` `INTEROP_MATRIX`): `{publisher_os, consumer_os} × {C, Rust, Python} × transport` cells executed over loopback (or the two-netns simulation fallback) with per-cell evidence under `target/interop/` |
 | `xtask bench --report-regressions` | benchmark regression report (audit.yml) |
 | `xtask abi-check --against <ref>` | ABI/layout compatibility vs a previous release (release.yml) |

@@ -40,23 +40,27 @@ jobs:
         run: cargo xtask audit-traceability --registry
 
   windows-smoke:
-    # Windows conformance subset (work-plan M12W4-E4-T3, extended M13W1-E1/E3;
-    # windows-backends.md §Test Matrix): the same manifest the nightly job runs —
-    # section create/map round-trip, precommit, lock acquire/release, kernel
-    # release-on-death, incarnation guard, active-hold lifecycle, guarded
-    # cleanup, platform lifecycle parity, Windows publisher/consumer lifecycle
-    # (in-place `Init` reinit, restart epoch parity), the bounded serial codec,
-    # socket transports, router framing/lanes/shaping, and the verify engine.
-    # Platform-only suites are cfg(unix); the subset is the blocking Windows
-    # platform gate. One list, never a fork (xtask/src/cross_os.rs).
+    # Windows conformance manifest (work-plan M12W4-E4-T3, extended M13W1-E1/E3,
+    # full port M13W3; windows-backends.md §Test Matrix): the same manifest the
+    # nightly job runs — section create/map round-trip, precommit refusal, lock
+    # acquire/release, kernel release-on-death, incarnation guard, active-hold
+    # lifecycle, guarded cleanup, platform lifecycle parity, Windows
+    # publisher/consumer lifecycle (in-place `Init` reinit, restart epoch
+    # parity), the bounded serial codec, socket transports, router
+    # framing/lanes/shaping, toolchain verify/budget/determinism, and the
+    # bindings golden/FFI rows (scheduled on the port board). Platform-only
+    # suites are cfg(unix); the manifest is the blocking Windows platform gate.
+    # One list, never a fork (xtask/src/cross_os.rs).
     # REQ: REQ-QAL-008, REQ-CORE-074, REQ-CORE-075, REQ-CORE-076, REQ-CORE-077,
     # REQ-CORE-078, REQ-CORE-101, REQ-ROUTE-025, REQ-ROUTE-026.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable # honors rust-toolchain.toml
-      - name: cross-OS conformance subset
+      - name: cross-OS conformance manifest
         run: cargo xtask test --cross-os
+      - name: cross-OS full conformance run ×2 (run 2 must be green)
+        run: cargo xtask test --cross-os --full
 
   interop-cells:
     # Cross-OS interop matrix (work-plan M13W2-E4-T1, Phase 31): the

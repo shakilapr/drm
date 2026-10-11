@@ -409,6 +409,8 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
+
     use super::{WinLockBackend, WinShm, current_identity, identity_alive, is_alive};
     use crate::shm::{
         CleanReport, LockBackend, LockPaths, SegmentName, ShmBackend, ShmError,
@@ -459,12 +461,21 @@ mod tests {
         shm.unmap(m);
     }
 
-    /// REQ: REQ-CORE-098 — open semantics: a miss never creates (I-W2).
+    /// REQ: REQ-CORE-098, REQ-CORE-078 — I-W2/I-W3: a miss never creates
+    /// (`NotFound`), and an undersized section is classified `StaleIncomplete`
+    /// before any exact-size attach (no partial state).
     #[test]
     fn win_open_semantics() {
         let shm = WinShm;
         let n = name("missing");
         assert!(matches!(shm.open_existing(&n, 64), Err(ShmError::NotFound)));
+        let small = name("undersized");
+        let held = ok(shm.create_exclusive(&small, 64), "small create");
+        assert!(matches!(
+            shm.open_existing(&small, 1 << 20),
+            Err(ShmError::StaleIncomplete)
+        ));
+        shm.unmap(held);
     }
 
     /// REQ: REQ-CORE-077 — precommit locks the region or refuses (I-W6).
@@ -476,6 +487,37 @@ mod tests {
         match shm.precommit_and_prove(&m) {
             Ok(()) | Err(ShmError::QuotaExceeded) => {}
             Err(e) => unreachable!("precommit: {e:?}"),
+        }
+        shm.unmap(m);
+    }
+
+    /// REQ: REQ-CORE-077, REQ-CORE-101 — I-W6: when the OS refuses `VirtualLock`
+    /// (working-set quota) `precommit_and_prove` returns an explicit
+    /// `QuotaExceeded`; activation never continues pageable. The process working
+    /// set is squeezed below the 16 MiB region, then restored (`SIZE_T -1`). When
+    /// the OS declines the squeeze only the explicit-error contract is asserted.
+    #[test]
+    fn win_precommit_refusal() {
+        let _serial = crate::test_guard::acquire();
+        let shm = WinShm;
+        let n = name("precommit-refusal");
+        let m = ok(shm.create_exclusive(&n, 1 << 24), "create");
+        // SAFETY: `GetCurrentProcess` returns a pseudo-handle needing no cleanup.
+        let proc = unsafe { GetCurrentProcess() };
+        // Squeeze the working set to one byte: a 16 MiB lock cannot fit.
+        // SAFETY: `proc` is the current-process pseudo-handle.
+        let squeezed = unsafe { SetProcessWorkingSetSize(proc, 0, 1) } != 0;
+        let result = shm.precommit_and_prove(&m);
+        if squeezed {
+            // Restore unlimited working set (`SIZE_T -1` = `usize::MAX`).
+            // SAFETY: same current-process pseudo-handle.
+            unsafe { SetProcessWorkingSetSize(proc, usize::MAX, usize::MAX) };
+        }
+        match result {
+            // A squeezed working set cannot back a 16 MiB lock: refusal required.
+            Ok(()) => assert!(!squeezed, "squeezed working set must refuse the lock"),
+            Err(ShmError::QuotaExceeded) => {}
+            Err(e) => unreachable!("precommit refusal: {e:?}"),
         }
         shm.unmap(m);
     }

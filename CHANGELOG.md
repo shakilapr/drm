@@ -11,6 +11,23 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M13 W3 tranche: Windows conformance full port —
+  [cross_os.rs](xtask/src/cross_os.rs) grows the cross-OS manifest from 12 to 33
+  rows (runtime platform, lifecycle, toolchain, router, and bindings families),
+  a `PortGap`/`PORT_BOARD` gap-tracking board with `board_complete()`, and
+  `CONFORMANCE_RUNS`/`run_full()` executed by `cargo xtask test --cross-os
+  --full` (per-run evidence under `target/conformance/`; flag parsing in
+  `xtask/src/main.rs`); every scheduled row carries an owner, target week, and
+  gate-risk note (zero silent skips). Windows platform fixes in
+  [windows.rs](crates/drm-core/src/shm/windows.rs): `win_open_semantics` now
+  asserts the undersized `StaleIncomplete` classification (I-W2/I-W3 size
+  parity) and `win_precommit_refusal` forces a `VirtualLock` refusal and asserts
+  the explicit `QuotaExceeded` (I-W6). Evidence in
+  [phase-31.md](docs/gates/phase-31.md) (M13W3 section),
+  [tests/conformance/README.md](tests/conformance/README.md) full-port table,
+  and `windows-nightly.yml` full-run ×2 step;
+  [metrics-m13.md](docs/metrics/metrics-m13.md) records
+  `WIN_CONFORMANCE_FULL = 1`, `PORT_FIX_COUNT = 6`.
 - Week M13 W2 tranche: Windows↔Linux interop matrix + spatial extraction p2 —
   the parameterized cross-OS interop harness
   ([cross_os.rs](xtask/src/cross_os.rs) `InteropCell`/`interop_matrix`/

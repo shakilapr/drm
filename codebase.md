@@ -249,7 +249,7 @@ Extension commands are registered in `xtask/README.md` and covered by ADR 0003: 
 |---|---|---|
 | `ci.yml` | every PR / push | Matrix: Linux x86_64 + aarch64, Windows x86_64. `xtask lint`, `xtask test`, conformance, `check-layering`, semver-checks, frontend lint/build |
 | `sanitizers.yml` | PR (core paths) + nightly | ASan/TSan full matrix; Miri where applicable; scheduled Windows MSVC ASan |
-| `windows-nightly.yml` | nightly | Windows conformance subset (`cargo xtask test --cross-os`, green ×3): SHM/identity/`LockFileEx` locks, publisher/consumer lifecycle parity (in-place `Init` reinit, restart epochs), bounded serial codec, socket transports, router framing/lanes/shaping, serial route integration, cross-OS interop matrix (`--transport udp`/`tcp`), verify |
+| `windows-nightly.yml` | nightly | Windows conformance manifest (`cargo xtask test --cross-os`, green ×3; `--full` run ×2, run 2 green): SHM/identity/`LockFileEx` locks, publisher/consumer lifecycle parity (in-place `Init` reinit, restart epochs), bounded serial codec, socket transports, router framing/lanes/shaping, serial route integration, toolchain verify/budget/determinism, bindings golden/FFI rows (scheduled on `PORT_BOARD`), cross-OS interop matrix (`--transport udp`/`tcp`) |
 | `audit.yml` | nightly + release | cargo-deny, advisories, `audit-zero-alloc`, `audit-traceability`, `gen-check`, docs/examples execution, benchmark regression report |
 | `release.yml` | tag `v*` | crates.io publish, Python wheels (maturin), Studio artifacts, SBOM, ABI compatibility check vs previous release |
 

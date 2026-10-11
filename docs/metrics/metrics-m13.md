@@ -134,3 +134,64 @@ cargo xtask audit-traceability --registry
 REQ: REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026, REQ-ROUTE-034, REQ-ROUTE-040,
 REQ-ROUTE-029, REQ-ROUTE-032, REQ-SPATIAL-038, REQ-SPATIAL-042, REQ-SPATIAL-050,
 REQ-QAL-008, REQ-OPS-004.
+
+## M13W3 — Windows Conformance Full Port
+
+| Variable | Target | Measured |
+|---|---|---|
+| `WIN_CONFORMANCE_FULL` | entire core conformance suite green on Windows (full run 2) | 1 — the cross-OS manifest (`xtask/src/cross_os.rs` `SUBSET`) now carries every core conformance row (platform, lifecycle, toolchain, router, bindings); `cargo xtask test --cross-os --full` runs it `CONFORMANCE_RUNS = 2` times and archives `target/conformance/full-run-{1,2}.txt`; every green row is Windows-executable and run 2 must be green |
+| `PORT_FIX_COUNT` | all port fixes merged; zero silent skips | 6 — every scheduled row carries exactly one `PORT_BOARD` entry (owner, target week, gate-risk note) enforced by `board_complete()`; `win_precommit_refusal` and the `win_open_semantics` size case are the M13W3 platform-row fixes; no row is silently missing (`PORT_GAPS_CLOSED = 1`) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Full conformance manifest (`xtask/src/cross_os.rs`): `SUBSET` extended from 12
+  to 33 rows covering runtime platform rows (`win-open-semantics`,
+  `win-precommit-refusal`, `win-lock-release-on-death`, `win-process-identity`,
+  `win-pid-reuse`, `win-active-hold`, `win-close-last-handle`,
+  `win-create-failure`, `win-handle-leak`, `win-kill-release`,
+  `win-quota-edge`), toolchain rows (`toolchain-budget`,
+  `toolchain-model-determinism`), router rows (`serial-route`), and bindings rows
+  (`golden-rust` green; `golden-c`/`golden-cpp`/`golden-python`/`ffi-matrix`/
+  `borrow-disciplines` scheduled). `PORT_BOARD` + `board_complete()` +
+  `CONFORMANCE_RUNS` + `run_full()`; `cargo xtask test --cross-os --full` wired
+  through `xtask/src/main.rs`.
+- Windows platform fixes (`crates/drm-core/src/shm/windows.rs`):
+  `win_open_semantics` now asserts the undersized `StaleIncomplete`
+  classification (I-W2/I-W3 size parity) in addition to the `NotFound` miss, and
+  the new `win_precommit_refusal` squeezes the process working set below the
+  region to force a `VirtualLock` refusal and asserts the explicit
+  `QuotaExceeded` (I-W6), restoring the prior limits.
+- Gate evidence ([phase-31.md](../gates/phase-31.md) M13W3 section) and
+  conformance matrix ([tests/conformance/README.md](../../tests/conformance/README.md)
+  full-port table); `windows-nightly.yml` gains the full-run ×2 step.
+- [CHANGELOG.md](../../CHANGELOG.md): M13W3 tranche entry.
+
+Notes:
+
+- Windows-only rows cannot execute on the Linux authoring host; they are
+  cross-compiled clean (`cargo check -p drm-core --tests --target
+  x86_64-pc-windows-msvc`) and gated by the `windows-latest` jobs. The full
+  Windows crash/kill matrix is M13W4 (Phase 31 gate M14W2).
+- No architecture divergence: the port fixes implement the pinned
+  windows-backends.md platform-divergence rules and shm-backend.md invariants,
+  so no ADR or algorithm-doc change landed.
+
+### Weekly gate checklist (chaired by E2, Friday)
+
+- [x] `WIN_CONFORMANCE_FULL = 1`; `PORT_FIX_COUNT = 6` (zero silent skips); `EFFORT_DAYS_ACTUAL` on plan
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M13W3) = PASS`**
+
+### How to reproduce
+
+```text
+cargo xtask test --cross-os
+cargo xtask test --cross-os --full
+cargo check -p drm-core --tests --target x86_64-pc-windows-msvc
+cargo xtask audit-traceability
+```
+
+REQ: REQ-QAL-008, REQ-CORE-101, REQ-CORE-078, REQ-CORE-075, REQ-CORE-077,
+REQ-CORE-074, REQ-CORE-098, REQ-ROUTE-025, REQ-ROUTE-026, REQ-ROUTE-029,
+REQ-OPS-004.

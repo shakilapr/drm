@@ -69,28 +69,52 @@ dual-VM/lab runner in the M14 matrix.
 REQ: REQ-QAL-008, REQ-OPS-004, REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026,
 REQ-ROUTE-029, REQ-ROUTE-032.
 
-## Windows conformance subset (defined M12W4, extended M13W1)
+## Windows conformance full port (defined M12W4, extended M13W1/M13W2, full port M13W3)
 
-The Linux conformance suite rows that must run green on the Windows runner, or
-carry an explicit port note while a platform fixture is scheduled. The manifest
-is the single source of truth in `xtask/src/cross_os.rs`; `cargo xtask test
---cross-os` executes every green row on the current host (Windows-only rows are
-`cfg`-gated and no-op elsewhere), so the nightly Windows job and the local smoke
-never diverge. `PORT_GAPS_CLOSED = 1` iff no row is silently missing.
+Every core conformance suite row must run green on the Windows runner, or carry
+an explicit port note tracked on the port board while a platform fixture is
+scheduled. The manifest is the single source of truth in `xtask/src/cross_os.rs`
+(`SUBSET`); `cargo xtask test --cross-os` executes every green row on the current
+host (Windows-only rows are `cfg`-gated and no-op elsewhere), so the nightly
+Windows job and the local smoke never diverge. `cargo xtask test --cross-os
+--full` runs the whole manifest `CONFORMANCE_RUNS = 2` times with run 2 required
+green. `PORT_GAPS_CLOSED = 1` iff no row is silently missing: every scheduled row
+has exactly one `PORT_BOARD` entry (owner + target week + gate-risk note).
 
 | Row | Invariants | Vehicle | Windows |
 |---|---|---|---|
 | `win-shm-locks-identity` | I-W1/I-W2/I-W3/I-W5/I-W6/I-W7/I-W8 | `cargo test -p drm-core --lib win_` | green |
+| `win-open-semantics` | I-W2/I-W3 | `cargo test -p drm-core --lib win_open_semantics` | green (M13W3) |
+| `win-precommit-refusal` | I-W6 | `cargo test -p drm-core --lib win_precommit_refusal` | green (M13W3) |
+| `win-lock-release-on-death` | I-W3/I-W4 | `cargo test -p drm-core --lib win_lock_release_on_death` | green |
+| `win-process-identity` | I-W5 | `cargo test -p drm-core --lib win_process_identity` | green |
+| `win-pid-reuse` | I-W5 | `cargo test -p drm-core --lib win_pid_reuse` | green |
+| `win-active-hold` | I-W8 | `cargo test -p drm-core --lib win_active_hold_lifecycle` | green |
+| `win-close-last-handle` | I-W4b | `cargo test -p drm-core --lib win_close_last_handle` | green |
+| `win-create-failure` | I-W7 | `cargo test -p drm-core --lib win_create_failure_matrix` | green |
 | `win-cleanup` | I-W4 | `cargo test -p drm-core --lib win_cleanup` | green |
 | `win-lifecycle-parity` | I-W4b/I-W6/I-W7 | `cargo test -p drm-core --test platform_windows` | green |
+| `win-race-create` | I-W1/I-L1 | `cargo test -p drm-core --lib win_race_create` | green (M13W1 E1) |
+| `win-init-reinit` | I-W1/I-L8 | `cargo test -p drm-core --lib win_init_reinit` | green (M13W1 E1) |
+| `win-handle-leak` | I-W7 | `cargo test -p drm-core --test platform_windows win_no_handle_leak` | green |
+| `win-kill-release` | I-W4b | `cargo test -p drm-core --test platform_windows win_kill_releases_section` | green |
+| `win-quota-edge` | I-W6 | `cargo test -p drm-core --test platform_windows win_quota_edge` | green |
+| `verify-engine` | I-V1/I-V6 | `cargo test -p drm-workspace --test verify_engine` | green |
+| `toolchain-budget` | I-MB1/I-MB2/I-MB4 | `cargo test -p drm-workspace --test budget` | green (M13W3) |
+| `toolchain-model-determinism` | I-D1/I-D2 | `cargo test -p drm-workspace --test model_determinism` | green (M13W3) |
 | `router-transport` | I-RT5 | `cargo test -p drm-router --lib transport` | green |
 | `router-framing` | I-RT9 | `cargo test -p drm-router --test framing_record` | green |
 | `router-lanes` | I-LS1/I-LS2 | `cargo test -p drm-router --test lane` | green |
 | `router-shaping` | I-LS3/I-LS4 | `cargo test -p drm-router shaping` | green |
-| `verify-engine` | I-V1/I-V6 | `cargo test -p drm-workspace --test verify_engine` | green |
-| `win-race-create` | I-W1/I-L1 | `cargo test -p drm-core --lib win_race_create` | green (M13W1 E1) |
-| `win-init-reinit` | I-W1/I-L8 | `cargo test -p drm-core --lib win_init_reinit` | green (M13W1 E1) |
 | `serial-codec` | I-SR1/I-SR2/I-SR3/I-SR4/I-SR6 | `cargo test -p drm-router --lib transport::serial` | green (M13W1 E3) |
-| `serial-loopback` | I-SR4/I-SR6 | `cargo test -p drm-router --lib transport::serial::tests::serial_loopback_x10k` | scheduled (unix socketpair; Windows COM fixture M14) |
+| `serial-route` | I-SR1/I-SR4/I-RT1/I-RT11 | `cargo test -p drm-router serial_route` | green (M13W3) |
+| `serial-loopback` | I-SR4/I-SR6 | `cargo test -p drm-router --lib transport::serial::tests::serial_loopback_x10k` | scheduled (unix socketpair; board: E3/M14W1) |
+| `golden-rust` | I-G1/I-G2/I-G3 | `cargo test -p drm-core --test golden_primitives` | green |
+| `golden-c` | I-G1/I-G4 | `cargo test -p drm-core --test golden_primitives` | scheduled (board: E4/M14W1) |
+| `golden-cpp` | I-G1/I-G4 | `cargo test -p drm-core --test golden_primitives` | scheduled (board: E4/M14W1) |
+| `golden-python` | I-G1/I-G5 | `cargo test -p drm-core --test golden_primitives` | scheduled (board: E4/M14W1) |
+| `ffi-matrix` | I-G6/I-G7 | `cargo test -p drm-ffi` | scheduled (board: E4/M14W1) |
+| `borrow-disciplines` | I-G8/I-G9 | `cargo test -p drm-ffi` | scheduled (board: E4/M14W1) |
 
-REQ: REQ-QAL-008, REQ-CORE-101, REQ-ROUTE-025, REQ-ROUTE-026.
+REQ: REQ-QAL-008, REQ-CORE-101, REQ-CORE-077, REQ-CORE-098, REQ-ROUTE-025,
+REQ-ROUTE-026, REQ-ROUTE-029.
