@@ -5,6 +5,7 @@ members = [
     "crates/drm-types",
     "crates/drm-core",
     "crates/drm-workspace",
+    "crates/drm-spatial",
     "crates/drm-router",
     "crates/drm-cli",
     "crates/drm-diag",

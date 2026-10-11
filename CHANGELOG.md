@@ -11,6 +11,25 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M19 W1 tranche: spatial types and static collapse (Phase 33 start). New
+  `crates/drm-spatial` runtime crate: distinct typed quantities
+  (`Point3`/`Direction3`/`Vector3`/`Pose3`/`Transform3`/`Twist3`), rigid `SE(3)`
+  apply/compose, the WGS84→ECEF→ENU geodetic chain, affine clock-domain mapping
+  with identity epoch and unresolved rejection, and versioned dynamic-edge
+  cache slots (lockless seqlock over `AtomicU64` `f64` bit patterns, single
+  writer per edge) ([spatial-core.md](docs/algorithms/spatial/spatial-core.md);
+  REQ-SPATIAL-036, REQ-SPATIAL-038, REQ-SPATIAL-012, REQ-SPATIAL-004,
+  REQ-SPATIAL-041, REQ-SPATIAL-051, REQ-SPATIAL-050, REQ-SPATIAL-030).
+  `drm-workspace` gains spatial grammar extensions (six keywords, `space:`
+  binding, dynamic `SpatialPoint3`; REQ-SPATIAL-005/009/047) and the
+  build-time static-collapse engine v0 that parses `spaces/**.drm`, classifies
+  edges, folds contiguous static chains to one constant, and emits a
+  `@generated` C artifact (REQ-SPATIAL-031/048/049/017). An independent `NumPy`
+  oracle (`tests/oracle/spatial_oracle.py` +
+  `tests/fixtures/spatial/oracle_vectors.json`) is the numeric ground truth for
+  `cargo test -p drm-spatial math`. Gate evidence
+  ([m19w1.md](docs/gates/m19w1.md), [phase-33.md](docs/gates/phase-33.md));
+  metrics [metrics-m19.md](docs/metrics/metrics-m19.md).
 - Week M18 W4 tranche: hardening close, soak escalation, month-18 review. The
   soak harness escalates to daily 24 h runs over rotating topologies
   (`single-machine` → `two-machine-sim` → `physical-pair`) with an I-QAL2

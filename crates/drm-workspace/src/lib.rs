@@ -12,6 +12,7 @@ pub mod deploy;
 pub mod model;
 pub mod orchestrator;
 pub mod parser;
+pub mod spatial;
 pub mod topology;
 pub mod verify;
 pub mod watch;

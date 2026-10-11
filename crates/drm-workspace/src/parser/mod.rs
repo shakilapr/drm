@@ -12,7 +12,6 @@ pub mod diag;
 pub mod lex;
 pub mod render;
 
-#[cfg(feature = "spatial-grammar")]
 pub mod spatial;
 
 use std::collections::HashSet;

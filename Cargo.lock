@@ -387,6 +387,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "drm-spatial"
+version = "0.1.0"
+dependencies = [
+ "drm-types",
+ "serde_json",
+]
+
+[[package]]
 name = "drm-types"
 version = "0.1.0"
 
