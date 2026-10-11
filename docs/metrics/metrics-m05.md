@@ -46,3 +46,16 @@ wall-time run is the CI/nightly lane.
 Deliverables: lifecycle coverage (`drm-core::channel::lifecycle`); bounded
 COBS+CRC32C best-effort serial codec (`drm-router::transport::serial`);
 `docs/gates/phase-15.md` draft.
+
+## M05W4 — Phase 15 Gate (Exhaustion), Deployment Identity Start
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 15)` | PASS | PASS — `docs/gates/phase-15.md` |
+| `IDENTITY_UNITS` | guard + namespace + cleanup green (I-DP1/I-DP2/I-DP5) | `drm-core` `identity` (guard refuses before SHM touch; namespaces cannot cross-open), `clean` (active hold ⇒ `ActiveUntouched`; inactive ⇒ `Cleaned`, recreatable) |
+| `CROSS_DEPLOY` | two deployments concurrently, zero cross-attachment | `drm-router` `cross_deploy_same_topic_disjoint_keys` (two ids, same slot ⇒ disjoint `/drm.<hex-id>.<slot>` keys) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `drm-core::deploy` (fingerprint guard, deployment-namespaced
+segment names, `clean` decision tree) + `drm-router::deployment`
+(`DeploymentNamespace` reusing `drm_core::deploy::DeploymentId`).

@@ -1,7 +1,7 @@
-# Phase 15 Gate (DRAFT) — Pool Exhaustion Behavior
+# Phase 15 Gate — Pool Exhaustion Behavior
 
-> Draft for M05W3; completion chair is M05W4. Evidence is executable and
-> remains green under the permanent workspace gates.
+Evidence is executable and remains green under the permanent workspace gates.
+Verdict: **PASS**.
 
 Implementation: `drm-core::channel` exhaustion path
 ([exhaustion-reclamation.md](../algorithms/runtime/exhaustion-reclamation.md)).
