@@ -5,6 +5,7 @@
 pub mod alloc;
 pub mod canon;
 pub mod channel;
+pub mod deploy;
 pub mod hazard;
 pub mod ring;
 pub mod shm;
