@@ -17,6 +17,12 @@ Scope: runtime spatial proximity indexes mirroring the dual hierarchy — a **fi
 | `REQ-SPATIAL-proximity-complete` | candidate set is a deliberate superset — callers exact-check; misses forbidden; scratch overflow returns OutputTooSmall{required}, never silent truncation | `REQ-SPATIAL-020` |
 | `REQ-SPATIAL-memory-verified` | object records, membership pool, cell-hash table, query-scratch, and dual-BVH-bank memory is verified | `REQ-SPATIAL-018` |
 | `REQ-SPATIAL-rejected-structures` | octrees, k-d trees, sweep-and-prune excluded | `REQ-SPATIAL-026` |
+| `REQ-SPATIAL-grid-incremental` | updates incremental, serialized by a single non-blocking updater touching only changed cells (`remove ∪ add`, intersection kept) — O(k), never a whole-index copy | `REQ-SPATIAL-042` |
+| `REQ-SPATIAL-grid-epoch` | global grid epoch (even = stable, odd = updating) makes multi-cell moves transactional; queries accept candidates only on an unchanged epoch, exhaustion returns `CONCURRENT_UPDATE` | `REQ-SPATIAL-043` |
+| `REQ-SPATIAL-bvh-banks` | each recalibratable BVH subtree has two fixed-capacity banks; recalibration builds the inactive bank then atomically selects it; oversize geometry rejected without disturbing the active bank | `REQ-SPATIAL-044` |
+| `REQ-SPATIAL-proximity-latest` | proximity evaluates only the latest indexed state; per-candidate historical state resolves afterward through `at()` | `REQ-SPATIAL-045` |
+| `REQ-SPATIAL-proximity-cell-fallback` | prospective cell count computed with checked arithmetic before enumeration; above `max_query_cells` fall back to the fixed object table, bounding worst-case work independently of radius | `REQ-SPATIAL-046` |
+| `REQ-SPATIAL-index-capacity` | generated membership pool has checked capacity `max_objects × max_cells_per_object`; verify rejects a slack/envelope bound that can touch more cells | `REQ-SPATIAL-052` |
 
 ## Data Structures
 

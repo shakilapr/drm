@@ -33,3 +33,8 @@ jobs:
             cargo xtask test --cross-os
             echo "::endgroup::"
           done
+      - name: cross-OS interop matrix (UDP + TCP cells)
+        shell: bash
+        run: |
+          cargo xtask test --cross-os --transport udp
+          cargo xtask test --cross-os --transport tcp

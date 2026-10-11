@@ -22,6 +22,7 @@ Scope: spatial query surface — **compiled transform plans** per (target, refer
 | `REQ-SPATIAL-calibration-slots` | Effective = Nominal × Correction; shared calibration slot with effective timestamp; live cache invalidation, no recompilation, no restart | `REQ-SPATIAL-003` |
 | `REQ-SPATIAL-generational-handles` | runtime overlay handles generational; single-writer edges | `REQ-SPATIAL-011` |
 | `REQ-SPATIAL-history-bound` | `history = H` guaranteed sample-time window; `max_samples = N` fixed capacity; `min_sample_period = P` producer-density contract; verify `N ≥ ⌊H/P⌋ + 2`; `expected_rate` never sizes correctness storage | `REQ-SPATIAL-037` |
+| `REQ-SPATIAL-lockless-slots` | dynamic edge slots use lockless sequence counters so Python/Rust/C++/TypeScript read transforms concurrently without mutexes; each slot stores transform + sample and receive timestamps | `REQ-SPATIAL-050` |
 
 ## Data Structures
 

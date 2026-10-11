@@ -21,6 +21,14 @@ Scope: `drm-spatial` foundations — distinct semantic types, compile-time fixed
 | `REQ-SPATIAL-time-history` | rings allocated only on upstream dynamic edges with declared requirements; ordered by sample time; in-window late arrivals insert in order | `REQ-SPATIAL-033` |
 | `REQ-SPATIAL-history-bound` | `history = H` guaranteed sample-time window; `max_samples = N` fixed capacity; `min_sample_period = P` producer-density contract; verify `N ≥ ⌊H/P⌋ + 2`; `expected_rate` never defines retention | `REQ-SPATIAL-037` |
 | `REQ-SPATIAL-mcu-constants` | MCU receives pre-calculated static constants at build; straight-line multiply at runtime | `REQ-SPATIAL-017` |
+| `REQ-SPATIAL-rigid-transforms` | rigid transforms only — translation + unit-quaternion rotation; scale and shear excluded (no matrix decomposition, no non-rigid distortion) | `REQ-SPATIAL-038` |
+| `REQ-SPATIAL-forest-bridge` | disconnected trees coexist; cross-tree queries return path-not-found unless an explicit bridge transform or common ancestor frame is registered | `REQ-SPATIAL-039` |
+| `REQ-SPATIAL-boundary-conversions` | external frameworks (Unreal, Unity, OpenCV optical, NED) declare explicit axis conversions at boundaries | `REQ-SPATIAL-040` |
+| `REQ-SPATIAL-clock-affine` | affine clock mapping `t_to = t_to,ref + r·(t_from − t_from,ref)` with reference pair, rate ratio, reference uncertainty, and bounded uncertainty growth | `REQ-SPATIAL-041` |
+| `REQ-SPATIAL-path-identity` | spatial identities derive from filesystem path (`packages/robot/spaces/camera/front.drm` ⇒ `robot/camera/front`) | `REQ-SPATIAL-047` |
+| `REQ-SPATIAL-static-relationship` | static relationship declares nominal offset (translation + rotation) relative to its parent; dynamic space declares only its parent frame | `REQ-SPATIAL-048` |
+| `REQ-SPATIAL-static-collapse` | contiguous static transform chains collapse to one constant at build time; runtime resolves with a single multiplication | `REQ-SPATIAL-049` |
+| `REQ-SPATIAL-clock-reset-epoch` | every clock has identity (kind, source, epoch); device reset/re-time bumps the epoch so an old mapping never applies to a new incarnation | `REQ-SPATIAL-051` |
 
 ## Data Structures
 

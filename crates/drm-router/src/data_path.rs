@@ -155,11 +155,63 @@ impl Router {
         payload: &[u8],
         adapter: &mut A,
     ) -> Result<bool, Status> {
-        let Some(route) = self.route(link, topic) else {
+        let Some((route, header)) = self.prepare_egress(link, topic, epoch, seq, payload)? else {
             return Ok(false);
         };
+        if header.encoded_len() > usize::from(route.max_datagram_payload) {
+            return Err(Status::InvalidArg); // I-RT3: before any syscall
+        }
+        adapter.send_frame(&header, payload)?;
+        Ok(true)
+    }
+
+    /// Egresses one sample for `topic` on `link` over a stream/serial transport:
+    /// the same filtering (I-RT1) and header construction as
+    /// [`Router::egress_udp`], but without the per-datagram bound — the frame
+    /// bound is the transport's own ([`crate::transport::serial`] I-SR2, TCP
+    /// I-RT18). Serial is best-effort, so the adapter's [`Status::Retry`] is
+    /// surfaced to the caller, which counts and continues (I-RT15/I-SR).
+    ///
+    /// # Errors
+    /// [`Status::InvalidArg`] when `payload` is longer than `u32`; otherwise the
+    /// adapter's media error. REQ: REQ-ROUTE-022, REQ-ROUTE-024, REQ-ROUTE-034.
+    pub fn egress_frame<A: TransportAdapter>(
+        &mut self,
+        link: u32,
+        topic: u32,
+        epoch: u64,
+        seq: u64,
+        payload: &[u8],
+        adapter: &mut A,
+    ) -> Result<bool, Status> {
+        let Some((_route, header)) = self.prepare_egress(link, topic, epoch, seq, payload)? else {
+            return Ok(false);
+        };
+        adapter.send_frame(&header, payload)?;
+        Ok(true)
+    }
+
+    /// Builds the egress header for `(link, topic)` after the forwarding-plan
+    /// filter (I-RT1); `Ok(None)` means the topic is filtered — no frame, no
+    /// work, no reservation. Shared by [`Router::egress_udp`] and
+    /// [`Router::egress_frame`].
+    /// REQ: REQ-ROUTE-022, REQ-ROUTE-033.
+    ///
+    /// # Errors
+    /// [`Status::InvalidArg`] when `payload` is longer than `u32`.
+    fn prepare_egress(
+        &self,
+        link: u32,
+        topic: u32,
+        epoch: u64,
+        seq: u64,
+        payload: &[u8],
+    ) -> Result<Option<(EgressRoute, WireHeader)>, Status> {
+        let Some(route) = self.route(link, topic) else {
+            return Ok(None);
+        };
         if !route.remote_consumers {
-            return Ok(false); // I-RT1: local-only topics never egress
+            return Ok(None); // I-RT1: local-only topics never egress
         }
         let Ok(payload_len) = u32::try_from(payload.len()) else {
             return Err(Status::InvalidArg);
@@ -171,11 +223,7 @@ impl Router {
             source_seq: seq,
             payload_len,
         };
-        if header.encoded_len() > usize::from(route.max_datagram_payload) {
-            return Err(Status::InvalidArg); // I-RT3: before any syscall
-        }
-        adapter.send_frame(&header, payload)?;
-        Ok(true)
+        Ok(Some((route, header)))
     }
 
     /// Ingests one decoded frame for `link`: validates exact length (I-RT14)

@@ -58,6 +58,24 @@ jobs:
       - name: cross-OS conformance subset
         run: cargo xtask test --cross-os
 
+  interop-cells:
+    # Cross-OS interop matrix (work-plan M13W2-E4-T1, Phase 31): the
+    # {publisher_os, consumer_os} × {C, Rust, Python} × {udp, tcp} cells run over
+    # loopback on this host (the documented two-netns simulation fallback when a
+    # second host is unavailable); per-cell evidence is archived under
+    # target/interop/. Windows↔Linux cells re-run on the physical dual-VM/lab
+    # runner in the M14 matrix. One matrix, never a fork
+    # (xtask/src/cross_os.rs INTEROP_MATRIX).
+    # REQ: REQ-QAL-008, REQ-OPS-004, REQ-ROUTE-029, REQ-ROUTE-032.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable # honors rust-toolchain.toml
+      - name: interop UDP cells
+        run: cargo xtask test --cross-os --transport udp
+      - name: interop TCP cells
+        run: cargo xtask test --cross-os --transport tcp
+
   corpus:
     # Blocking parser-corpus matrix (work-plan M01W3-E4-T1): counts must print
     # 30/30 valid + 30/30 invalid in the log. REQ: REQ-TOOL-001.

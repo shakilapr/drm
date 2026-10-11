@@ -45,7 +45,7 @@ drm/
 │   ├── drm-core/                   # SHM backends, channels, rings, hazard pools, epochs, precommit
 │   │   └── src/{shm,channel,hazard,ring,epoch,alloc}/  # shm/{segment,lock,process}=POSIX, shm/windows=Win32
 │   ├── drm-ffi/                    # canonical C ABI exports; drm.h single source of truth
-│   ├── drm-router/                 # boundary router: framing, priority lanes, traffic shaping
+│   ├── drm-router/                 # boundary router: framing (UDP/TCP/serial), priority lanes, traffic shaping
 │   ├── drm-spatial/                # spatial-temporal engine (Phase 33)
 │   ├── drm-workspace/              # parser, WorkspaceModel, verify, codegen, topology, orchestrator, watch, deploy
 │   │   └── src/{parser,model,verify,codegen,topology,orchestrator,watch,deploy}/
@@ -249,7 +249,7 @@ Extension commands are registered in `xtask/README.md` and covered by ADR 0003: 
 |---|---|---|
 | `ci.yml` | every PR / push | Matrix: Linux x86_64 + aarch64, Windows x86_64. `xtask lint`, `xtask test`, conformance, `check-layering`, semver-checks, frontend lint/build |
 | `sanitizers.yml` | PR (core paths) + nightly | ASan/TSan full matrix; Miri where applicable; scheduled Windows MSVC ASan |
-| `windows-nightly.yml` | nightly | Windows conformance subset (`cargo xtask test --cross-os`, green ×3): SHM/identity/`LockFileEx` locks, publisher/consumer lifecycle parity (in-place `Init` reinit, restart epochs), bounded serial codec, socket transports, router framing/lanes/shaping, verify |
+| `windows-nightly.yml` | nightly | Windows conformance subset (`cargo xtask test --cross-os`, green ×3): SHM/identity/`LockFileEx` locks, publisher/consumer lifecycle parity (in-place `Init` reinit, restart epochs), bounded serial codec, socket transports, router framing/lanes/shaping, serial route integration, cross-OS interop matrix (`--transport udp`/`tcp`), verify |
 | `audit.yml` | nightly + release | cargo-deny, advisories, `audit-zero-alloc`, `audit-traceability`, `gen-check`, docs/examples execution, benchmark regression report |
 | `release.yml` | tag `v*` | crates.io publish, Python wheels (maturin), Studio artifacts, SBOM, ABI compatibility check vs previous release |
 

@@ -8,12 +8,14 @@
 //! existing [`crate::wire::WireHeader`] header type and [`crate::crc32c`].
 //! REQ: REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026.
 
+use std::io::{self, Read, Write};
+
 use drm_types::Status;
 
 use crate::crc32c::{crc32c, crc32c_update};
 use crate::wire::{FLAG_E2E_CRC, HEADER_LEN, WireHeader};
 
-use super::Reliability;
+use super::{Reliability, TransportAdapter};
 
 /// Serial CRC32C trailer length in bytes, mandatory on every frame (I-SR3).
 /// REQ: REQ-ROUTE-026.
@@ -394,6 +396,147 @@ pub fn frame_decode<'a>(
         e2e_crc,
         payload,
     })
+}
+
+/// A serial-link transport adapter over an arbitrary byte stream (UART,
+/// socketpair, pipe): one bounded COBS/CRC32C frame per sample (I-SR1), the
+/// decoded bound enforced at encode and refused at decode (I-SR2), a single
+/// `0x00` delimiter for resync (I-SR4). Buffers are sized once at activation
+/// ([`SerialTransport::new`]); steady-state encode/decode performs no heap
+/// allocation (REQ-CORE-087). Serial is best-effort only (REQ-ROUTE-024), so a
+/// full or unavailable link maps to [`Status::Retry`] and the router drops the
+/// frame per the serial contract — it never blocks the egress scan.
+/// REQ: REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026.
+pub struct SerialTransport<L: Read + Write> {
+    link: L,
+    cfg: SerialLinkConfig,
+    wire: Vec<u8>,
+    decoded: Vec<u8>,
+    acc: Vec<u8>,
+}
+
+impl<L: Read + Write> SerialTransport<L> {
+    /// Adopts `link` with `cfg`'s framing; all scratch is allocated here, never
+    /// on the data path. REQ: REQ-ROUTE-025.
+    #[must_use]
+    pub fn new(link: L, cfg: SerialLinkConfig) -> Self {
+        let wire = vec![0_u8; cfg.max_wire_bytes()];
+        let decoded = vec![0_u8; cfg.max_coded_input_len()];
+        let acc = Vec::with_capacity(cfg.max_wire_bytes());
+        Self {
+            link,
+            cfg,
+            wire,
+            decoded,
+            acc,
+        }
+    }
+
+    /// The link's framing configuration. REQ: REQ-ROUTE-025.
+    #[must_use]
+    pub fn config(&self) -> &SerialLinkConfig {
+        &self.cfg
+    }
+
+    /// Consumes the adapter, returning the underlying link.
+    #[must_use]
+    pub fn into_inner(self) -> L {
+        self.link
+    }
+
+    /// Borrows the underlying link (e.g. to set blocking mode in a fixture).
+    pub fn link_mut(&mut self) -> &mut L {
+        &mut self.link
+    }
+}
+
+/// End-to-end CRC32C over `{stream_epoch, source_seq, payload_len, payload}`
+/// (router-core I-RT12), the optional serial trailer content.
+/// REQ: REQ-ROUTE-026.
+#[must_use]
+fn e2e_crc(header: &WireHeader, payload: &[u8]) -> u32 {
+    let mut acc = crc32c_update(0xFFFF_FFFF, &header.stream_epoch.to_le_bytes());
+    acc = crc32c_update(acc, &header.source_seq.to_le_bytes());
+    acc = crc32c_update(acc, &header.payload_len.to_le_bytes());
+    acc = crc32c_update(acc, payload);
+    acc ^ 0xFFFF_FFFF
+}
+
+/// Maps a byte-stream IO error to a canonical [`Status`].
+/// REQ: REQ-ROUTE-024.
+fn map_io(e: &io::Error) -> Status {
+    match e.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => Status::Retry,
+        io::ErrorKind::PermissionDenied => Status::Permission,
+        _ => Status::InvalidArg,
+    }
+}
+
+/// Adapter surface (I-RT11): serial is a best-effort bounded stream; one frame
+/// carries exactly one sample (I-SR1). A full link is [`Status::Retry`], never
+/// a blocking send.
+/// REQ: REQ-ROUTE-024, REQ-ROUTE-025.
+impl<L: Read + Write> TransportAdapter for SerialTransport<L> {
+    fn send_frame(&mut self, header: &WireHeader, payload: &[u8]) -> Result<(), Status> {
+        if header.flags & !FLAG_E2E_CRC != 0 || header.payload_len as usize != payload.len() {
+            return Err(Status::InvalidArg);
+        }
+        let e2e = (header.flags & FLAG_E2E_CRC != 0).then(|| e2e_crc(header, payload));
+        let frame = SerialFrame {
+            header: *header,
+            e2e_crc: e2e,
+            payload,
+        };
+        let n = frame_encode(&self.cfg, &frame, &mut self.wire)?;
+        let mut off = 0;
+        while off < n {
+            match self.link.write(&self.wire[off..n]) {
+                Ok(0) => return Err(Status::Retry),
+                Ok(w) => off += w,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(Status::Retry),
+                Err(e) => return Err(map_io(&e)),
+            }
+        }
+        Ok(())
+    }
+
+    fn recv_frame<'a>(
+        &mut self,
+        buf: &'a mut [u8],
+    ) -> Result<Option<(WireHeader, &'a [u8])>, Status> {
+        if buf.len() < self.cfg.max_coded_input_len() {
+            return Err(Status::InvalidArg);
+        }
+        self.acc.clear();
+        let mut byte = [0_u8; 1];
+        loop {
+            if self.acc.last() == Some(&FRAME_DELIMITER) {
+                break;
+            }
+            if self.acc.len() >= self.cfg.max_wire_bytes() {
+                self.acc.clear();
+                return Err(Status::InvalidData); // I-SR2: foreign oversize, resync
+            }
+            match self.link.read(&mut byte) {
+                Ok(0) => return Err(Status::InvalidData), // peer closed mid-frame
+                Ok(_) => self.acc.push(byte[0]),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                Err(e) => return Err(map_io(&e)),
+            }
+        }
+        let frame = frame_decode(&self.cfg, &self.acc, &mut self.decoded)?;
+        let header = frame.header;
+        let payload_len = header.payload_len as usize;
+        if buf.len() < payload_len {
+            return Err(Status::InvalidArg);
+        }
+        buf[..payload_len].copy_from_slice(frame.payload);
+        Ok(Some((header, &buf[..payload_len])))
+    }
+
+    fn capabilities(&self) -> Reliability {
+        Reliability::BestEffort
+    }
 }
 
 #[cfg(test)]

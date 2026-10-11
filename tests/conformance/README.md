@@ -45,8 +45,29 @@ eventually cross a real link. Status: `R` runner present; `-` not yet wired.
 - Rust UDP: `cargo test -p drm-router --lib udp`; `cargo run -p drm-router --example udp_pair` (10k loopback exchanges).
 - Rust TCP: `cargo test -p drm-router --lib transport::tcp` (length-framed records, reconnect session scope).
 - Rust serial: `cargo test -p drm-router --lib transport::serial` (bounded COBS + CRC32C codec, `serial_loopback_x10k` socketpair exchange on unix).
+- Serial route integration (M13W2-E3): `cargo test -p drm-router serial_route` — the serial link enters the transport registry as a best-effort stream, and a sample crosses the full router path (egress filter → COBS/CRC32C encode → byte link → decode → native deposit).
 - C++ cells land with the C++17/20 bindings work package (Phase 20, REQ-BIND-013).
 - C/C++/Python cells over TCP/serial land with the Phase 32 serial/MCU work (`serial-mcu.md`).
+
+## Cross-OS interop matrix (defined M13W2-E1)
+
+The parameterized `{publisher_os, consumer_os} × {C, Rust, Python} × {udp, tcp}`
+cell runner lives in `xtask/src/cross_os.rs` (`INTEROP_MATRIX`); `cargo xtask
+test --cross-os --transport <udp|tcp>` executes every green cell on the current
+host over loopback (the documented two-netns simulation fallback when a second
+host is unavailable) and archives per-cell evidence (bytes + timing) under
+`target/interop/`. Each endpoint runs under a `deployment-identity.md` namespace
+derived from its OS/language labels. Windows↔Linux cells re-run on the physical
+dual-VM/lab runner in the M14 matrix.
+
+| Cell family | Direction | UDP | TCP |
+|---|---|---|---|
+| Rust ↔ Rust | windows→linux, linux→windows | green (sim fallback) | green (sim fallback) |
+| Rust ↔ C | windows→linux, linux→windows | scheduled (Phase 32/33 bindings) | scheduled (Phase 32/33 bindings) |
+| Rust ↔ Python | windows→linux, linux→windows | scheduled (Phase 32/33 bindings) | scheduled (Phase 32/33 bindings) |
+
+REQ: REQ-QAL-008, REQ-OPS-004, REQ-ROUTE-024, REQ-ROUTE-025, REQ-ROUTE-026,
+REQ-ROUTE-029, REQ-ROUTE-032.
 
 ## Windows conformance subset (defined M12W4, extended M13W1)
 

@@ -11,6 +11,27 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M13 W2 tranche: Windows↔Linux interop matrix + spatial extraction p2 —
+  the parameterized cross-OS interop harness
+  ([cross_os.rs](xtask/src/cross_os.rs) `InteropCell`/`interop_matrix`/
+  `cell_state`/`run_cell`/`run_interop`, `cargo xtask test --cross-os
+  --transport udp` / `tcp`; flag parsing in `xtask/src/main.rs`) runs the Rust
+  pair over loopback in both directions for UDP and TCP with per-cell evidence
+  under `target/interop/`, C/Python cells scheduled until their
+  router-transport bindings land (Phase 32/33); serial route integration
+  ([serial.rs](crates/drm-router/src/transport/serial.rs) `SerialTransport`
+  implementing `TransportAdapter`, [data_path.rs](crates/drm-router/src/data_path.rs)
+  `Router::egress_frame` sharing the I-RT1 filter/header build with `egress_udp`)
+  with the full-path suite
+  ([serial_route.rs](crates/drm-router/tests/serial_route.rs): registry, route
+  shaping, socketpair loopback); spatial extraction p2 adds 15 `REQ-SPATIAL-*`
+  rows (total 52) with matching slugs in
+  [spatial-core.md](docs/algorithms/spatial/spatial-core.md)/
+  [spatial-index.md](docs/algorithms/spatial/spatial-index.md)/
+  [spatial-queries.md](docs/algorithms/spatial/spatial-queries.md); the
+  `interop-cells` CI job and `windows-nightly.yml` interop step; gate draft
+  [phase-31.md](docs/gates/phase-31.md); [metrics-m13.md](docs/metrics/metrics-m13.md)
+  records `INTEROP_CELLS = 1`, `SPATIAL_REQ_P2 = 52`, `SERIAL_ADAPTER = 1`.
 - Week M13 W1 tranche: Windows platform completion + serial transport — Windows
   publisher/consumer lifecycle over `LockFileEx` + pagefile sections with
   in-place `Init` recovery ([lifecycle.rs](crates/drm-core/src/channel/lifecycle.rs)
