@@ -66,7 +66,8 @@ drm/
 │   │   └── tests/
 │   ├── rust/crates/drm/            # safe Rust SDK; borrow guards (root workspace member)
 │   └── python/                     # PyO3 native module + pure facade; maturin build
-│       ├── drm/
+│       ├── drm/                     # pure facade: Context/Topic/Copy, ContractError
+│       ├── native/                  # PyO3 crate `drm-python` (workspace member)
 │       ├── tests/
 │       └── pyproject.toml
 │
@@ -168,10 +169,10 @@ Artifact rules:
 | R10 | **Files**: UTF-8, LF, final newline; code ≤100 columns; enforced by `.editorconfig` and formatters. |
 | R11 | **Shared atomics**: shared-memory layouts use explicit fixed-width atomic fields, never aggregate or packed atomics. Activation proves required atomics lock-free. Protocol docs name linearization points and crash states. |
 
-### 3.2 Rust (`crates/*`, `bindings/rust`)
+### 3.2 Rust (`crates/*`, `bindings/rust`, `bindings/python/native`)
 - Edition 2024; toolchain pinned via `rust-toolchain.toml`; formatting via rustfmt (`max_width = 100`).
 - Lints via `[workspace.lints]`: all crates deny warnings; runtime crates additionally deny `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic`, `clippy::pedantic`. Init/teardown exceptions use narrow module-level allows with an invariant comment (R4).
-- `unsafe_op_in_unsafe_fn` denied globally; `#![forbid(unsafe_code)]` in toolchain, ops, and facade crates; `unsafe` confined to `drm-core` and `drm-ffi`.
+- `unsafe_op_in_unsafe_fn` denied globally; `#![forbid(unsafe_code)]` in toolchain, ops, and facade crates; `unsafe` is confined to `drm-core`/`drm-ffi` plus the thin `drm-ffi` call boundary in bindings (`drm` SDK, `drm-python` native core).
 - Zero-allocation data path proven by a counting `GlobalAlloc` test harness plus `xtask audit-zero-alloc` (linker/symbol audit; MCU gates are preventive first — no heap implementation linked, malloc-family symbols are link errors, RTOS dynamic allocation disabled — with the linker-section audit as a secondary assertion, never review).
 - Errors: typed enums via `thiserror`, mapping 1:1 to the status taxonomy (R4).
 - Fail-stop FFI: expected conditions return `Status`; a Rust panic in `drm-core`/`drm-ffi` is an internal invariant violation that terminates the node process (`extern "C"` non-unwinding boundary; release profile `panic = "abort"`; no `catch_unwind`; no `Internal` status — OS/environment failures map to precise codes).

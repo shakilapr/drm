@@ -24,7 +24,7 @@ fn layer_of(crate_name: &str) -> Option<Layer> {
         "drm-core" | "drm-ffi" | "drm-router" | "drm-spatial" => Some(Layer::Runtime),
         "drm-workspace" => Some(Layer::Toolchain),
         "drm-record" | "drm-diag" | "drm-trace" | "drm-rpc" => Some(Layer::Ops),
-        "drm" => Some(Layer::Bindings),
+        "drm" | "drm-python" => Some(Layer::Bindings),
         "drm-cli" | "drm-extension-host" | "xtask" => Some(Layer::Facade),
         _ => None,
     }
@@ -72,6 +72,7 @@ pub fn check(_flags: &[String]) -> Result<()> {
         "drm-cli",
         "drm-ffi",
         "drm",
+        "drm-python",
         "xtask",
     ];
     let mut violations: Vec<String> = Vec::new();

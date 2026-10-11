@@ -1,9 +1,21 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
 [project]
-name = "drm-bindings-python"
+name = "drm"
 version = "0.1.0"
-description = "DRM Python test scaffolding: golden byte decoder conformance (pytest + struct)."
+description = "DRM Python binding: PyO3 native core + owned-read-only facade."
 requires-python = ">=3.10"
-license = { text = "Proprietary" }
+license = { text = "MIT OR Apache-2.0" }
+dependencies = []
+
+[tool.maturin]
+# Native core crate (workspace member `drm-python`); the pure facade lives in
+# `drm/`. `module-name` places the extension at `drm._native`.
+manifest-path = "native/Cargo.toml"
+python-source = "."
+module-name = "drm._native"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -19,4 +31,4 @@ select = ["E", "F", "W", "I", "UP", "B"]
 [tool.mypy]
 strict = true
 python_version = "3.10"
-files = ["tests"]
+files = ["tests", "drm"]

@@ -9,6 +9,7 @@ members = [
     "crates/drm-cli",
     "crates/drm-ffi",
     "bindings/rust/crates/drm",
+    "bindings/python/native",
     "xtask",
 ]
 exclude = ["tests/fuzz"]

@@ -20,6 +20,19 @@
 //! safe code. REQ: REQ-BIND-016, REQ-BIND-001, REQ-BIND-006, REQ-BIND-021,
 //! REQ-BIND-002, REQ-BIND-004, REQ-BIND-017.
 //!
+//! # Borrow lifecycle
+//!
+//! A [`BorrowGuard`] pins one hazard slot for the duration of a scoped read
+//! (see runtime `hazard-protocol.md`, invariant `I-HZ7` one outstanding borrow,
+//! and bindings-cpp-rust-python.md I-B4). External I/O must never retain the
+//! borrowed bytes; take an owned read instead:
+//!
+//! * [`Consumer::read_latest`] copies the newest sample into a caller buffer;
+//! * [`Consumer::read_next`] copies the next in-order sample and reports a
+//!   lapped cursor as [`ReadOutcome::Gap`].
+//!
+//! Owned reads return application memory and may be retained freely.
+//!
 //! # Example
 //!
 //! ```
@@ -44,7 +57,7 @@ use core::ptr;
 use drm_ffi::{
     drm_borrow_latest, drm_borrow_release, drm_borrow_view, drm_consumer, drm_consumer_close,
     drm_consumer_open, drm_context, drm_context_close, drm_context_open, drm_publish_copy,
-    drm_publisher, drm_publisher_close, drm_publisher_open, drm_read_latest,
+    drm_publisher, drm_publisher_close, drm_publisher_open, drm_read_latest, drm_read_next,
 };
 use drm_types::Status;
 
@@ -90,6 +103,25 @@ impl fmt::Display for Error {
 }
 
 impl core::error::Error for Error {}
+
+/// Outcome of an owned sequential read ([`Consumer::read_next`]).
+///
+/// A caught-up/empty channel is not an error: it surfaces as `Ok(None)` so the
+/// caller can poll. A lapped cursor is explicit — `missed` is the exact number
+/// of samples never delivered (cursor-delivery I-C2). REQ: REQ-BIND-002.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadOutcome {
+    /// A sample was copied into the caller buffer.
+    Sample {
+        /// Number of bytes written into the destination buffer.
+        len: usize,
+    },
+    /// The cursor was lapped; `missed` samples were never delivered (I-C2).
+    Gap {
+        /// Exact count of missed samples.
+        missed: u64,
+    },
+}
 
 /// Maps a C status code to `Ok(())` or [`Error`], preserving unknown codes.
 /// REQ: REQ-BIND-017.
@@ -268,6 +300,22 @@ impl Consumer<'_> {
     /// `InvalidArg` when `dst` is smaller than the fixed sample size, or
     /// `NoSample` on an empty channel).
     /// REQ: REQ-BIND-002, REQ-BIND-008.
+    ///
+    /// ```
+    /// use drm::Context;
+    ///
+    /// # fn main() -> Result<(), drm::Error> {
+    /// let ctx = Context::open(None)?;
+    /// let publisher = ctx.open_publisher(0)?;
+    /// let consumer = ctx.open_consumer(0)?;
+    /// publisher.publish(b"hi")?;
+    /// let mut buf = [0_u8; 64];
+    /// let len = consumer.read_latest(&mut buf)?;
+    /// assert_eq!(&buf[..2], b"hi");
+    /// assert_eq!(len, 64); // fixed-size topic, zero-padded
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn read_latest(&self, dst: &mut [u8]) -> Result<usize, Error> {
         let mut out_len: usize = 0;
         // SAFETY: `self.handle` is live; `dst` is valid for `dst.len()` writes;
@@ -276,6 +324,56 @@ impl Consumer<'_> {
             unsafe { drm_read_latest(self.handle, dst.as_mut_ptr(), dst.len(), &raw mut out_len) };
         check(code)?;
         Ok(out_len)
+    }
+
+    /// Copy-reads the next in-order committed sample into `dst` (owned read).
+    ///
+    /// Returns `Ok(None)` when the consumer is caught up, and
+    /// `Ok(Some(ReadOutcome::Gap { missed }))` when the cursor was lapped
+    /// (I-C2). The destination is only written on `Ok(Some(..))`.
+    ///
+    /// # Errors
+    /// Returns [`Error`] for any other non-`Ok` status (for example `InvalidArg`
+    /// when `dst` is smaller than the fixed sample size).
+    /// REQ: REQ-BIND-002, REQ-BIND-008.
+    ///
+    /// ```
+    /// use drm::{Context, ReadOutcome};
+    ///
+    /// # fn main() -> Result<(), drm::Error> {
+    /// let ctx = Context::open(None)?;
+    /// let publisher = ctx.open_publisher(0)?;
+    /// let consumer = ctx.open_consumer(0)?;
+    /// assert!(consumer.read_next(&mut [0_u8; 64])?.is_none()); // caught up
+    /// publisher.publish(b"go")?;
+    /// match consumer.read_next(&mut [0_u8; 64])? {
+    ///     Some(ReadOutcome::Sample { len }) => assert_eq!(len, 64),
+    ///     other => panic!("unexpected outcome: {other:?}"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn read_next(&self, dst: &mut [u8]) -> Result<Option<ReadOutcome>, Error> {
+        let mut out_len: usize = 0;
+        let mut missed: u64 = 0;
+        // SAFETY: `self.handle` is live; `dst` is valid for `dst.len()` writes;
+        // `out_len`/`missed` are valid out-parameters.
+        let code = unsafe {
+            drm_read_next(
+                self.handle,
+                dst.as_mut_ptr(),
+                dst.len(),
+                &raw mut out_len,
+                &raw mut missed,
+            )
+        };
+        match Status::from_code(code) {
+            Some(Status::Ok) => Ok(Some(ReadOutcome::Sample { len: out_len })),
+            Some(Status::NoSample) => Ok(None),
+            Some(Status::Gap) => Ok(Some(ReadOutcome::Gap { missed })),
+            Some(status) => Err(Error::Status(status)),
+            None => Err(Error::UnknownStatus(code)),
+        }
     }
 }
 
@@ -371,7 +469,7 @@ mod sdk {
     use drm_ffi::ENDPOINT_SAMPLE_MAX;
     use drm_types::Status;
 
-    use super::{Context, Error};
+    use super::{Context, Error, ReadOutcome};
 
     /// The one topic the in-process backing declares. REQ: REQ-BIND-008.
     const TOPIC: u32 = 0;
@@ -468,6 +566,65 @@ mod sdk {
         let _ = consumer
             .borrow_latest()
             .unwrap_or_else(|e| unreachable!("borrow after release: {e:?}"));
+    }
+
+    /// REQ: REQ-BIND-002 — owned `read_latest` copies the newest sample into
+    /// caller memory (retained after the call) and reports the fixed length.
+    #[test]
+    fn sdk_owned_read_latest() {
+        let ctx = Context::open(None).unwrap_or_else(|e| unreachable!("open: {e:?}"));
+        let publisher = ctx
+            .open_publisher(TOPIC)
+            .unwrap_or_else(|e| unreachable!("publisher: {e:?}"));
+        let consumer = ctx
+            .open_consumer(TOPIC)
+            .unwrap_or_else(|e| unreachable!("consumer: {e:?}"));
+        publisher
+            .publish(b"owned")
+            .unwrap_or_else(|e| unreachable!("publish: {e:?}"));
+
+        let mut buf = [0_u8; ENDPOINT_SAMPLE_MAX];
+        let len = consumer
+            .read_latest(&mut buf)
+            .unwrap_or_else(|e| unreachable!("read: {e:?}"));
+        assert_eq!(len, ENDPOINT_SAMPLE_MAX);
+        assert_eq!(&buf[..5], b"owned");
+    }
+
+    /// REQ: REQ-BIND-002 — sequential owned read returns `None` when caught up
+    /// and `Some(Sample)` once a sample is published.
+    #[test]
+    fn sdk_owned_read_next() {
+        let ctx = Context::open(None).unwrap_or_else(|e| unreachable!("open: {e:?}"));
+        let publisher = ctx
+            .open_publisher(TOPIC)
+            .unwrap_or_else(|e| unreachable!("publisher: {e:?}"));
+        let consumer = ctx
+            .open_consumer(TOPIC)
+            .unwrap_or_else(|e| unreachable!("consumer: {e:?}"));
+
+        let mut buf = [0_u8; ENDPOINT_SAMPLE_MAX];
+        assert!(
+            consumer
+                .read_next(&mut buf)
+                .unwrap_or_else(|e| unreachable!("read: {e:?}"))
+                .is_none(),
+            "a caught-up consumer reports no sample"
+        );
+
+        publisher
+            .publish(b"seq")
+            .unwrap_or_else(|e| unreachable!("publish: {e:?}"));
+        match consumer
+            .read_next(&mut buf)
+            .unwrap_or_else(|e| unreachable!("read: {e:?}"))
+        {
+            Some(ReadOutcome::Sample { len }) => {
+                assert_eq!(len, ENDPOINT_SAMPLE_MAX);
+                assert_eq!(&buf[..3], b"seq");
+            }
+            other => unreachable!("expected a delivered sample, got {other:?}"),
+        }
     }
 
     /// REQ: REQ-BIND-016 — the SDK defines no C-layout (`repr(C)`) struct, so

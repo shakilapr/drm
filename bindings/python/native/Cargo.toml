@@ -1,0 +1,21 @@
+[package]
+name = "drm-python"
+description = "PyO3 native core for the DRM Python binding: owned reads only over drm-ffi."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+# The extension module is imported as `drm._native` (maturin `module-name`).
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+drm-ffi = { path = "../../../crates/drm-ffi" }
+drm-types = { path = "../../../crates/drm-types" }
+# Pinned (work-plan M08W1 risks): record the resolved version in pyproject.toml.
+pyo3 = { version = "0.29.3", features = ["extension-module"] }
+
+[lints]
+workspace = true
