@@ -649,6 +649,8 @@ fn align_up(v: u64, align: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{Channel, OverflowPolicy as Pol, ReadOutcome, Status};
+    use crate::hazard::{HAZARD_NONE, pack};
+    use std::sync::atomic::Ordering;
 
     fn ch(policy: Pol, depth: u64, pool: u64, required: usize) -> Channel {
         Channel::activate(depth, pool, 16, 8, policy, required, 2, None)
@@ -657,6 +659,141 @@ mod tests {
 
     fn pat(v: u8) -> [u8; 16] {
         [v; 16]
+    }
+
+    /// Hold the sole slot left selectable once the history window is saturated,
+    /// so the next `select` returns `None` (I-E1 setup). Reproduces `select_slot`'s
+    /// referenced-slot scan over `[0, pool_size)` and claims that slot on `rec(0)`.
+    /// With `pool_size = depth + 1` and `depth` committed samples, exactly one slot
+    /// is free. Returns the claimed `(generation, slot)` for release (I-E4).
+    fn hold_last_slot(c: &Channel) -> (u32, u32) {
+        let ws = c.write_seq();
+        let oldest = c.oldest_retained(ws);
+        let mut used = Vec::new();
+        for s in oldest..ws {
+            if let Ok(e) = c.ring().lookup_sc(c.ccb(), s) {
+                used.push(e.slot);
+            }
+        }
+        let pool = u32::try_from(c.pool_size()).unwrap_or_else(|e| unreachable!("pool: {e:?}"));
+        let free = (0..pool)
+            .find(|s| !used.contains(s))
+            .unwrap_or_else(|| unreachable!("no free slot"));
+        let rec = c.rec(0).unwrap_or_else(|| unreachable!("rec"));
+        let (g, _) = rec.hazard.load(Ordering::SeqCst);
+        assert!(
+            rec.hazard
+                .compare_exchange(pack(g, HAZARD_NONE), pack(g, free)),
+            "hold failed"
+        );
+        (g, free)
+    }
+
+    /// Release the hold installed by [`hold_last_slot`] (owner guard drop).
+    fn release_hold(c: &Channel, generation: u32, slot: u32) {
+        let rec = c.rec(0).unwrap_or_else(|| unreachable!("rec"));
+        assert!(
+            rec.hazard
+                .compare_exchange(pack(generation, slot), pack(generation, HAZARD_NONE)),
+            "release failed"
+        );
+    }
+
+    /// REQ: REQ-CORE-022, REQ-CORE-093 — with every pool slot held, a publish
+    /// drops immediately (`Err(PoolExhausted)`) and bumps `pool_exhausted`/
+    /// `drop_count` by exactly one per attempt; no blocking (I-E1, I-E3).
+    #[test]
+    fn exhaustion_drop_and_counter() {
+        let c = ch(Pol::Overwrite, 2, 3, 0);
+        assert_eq!(c.publish(&pat(1)), Ok(0));
+        assert_eq!(c.publish(&pat(2)), Ok(1));
+        let (g, slot) = hold_last_slot(&c);
+
+        let t0 = std::time::Instant::now();
+        let res = c.publish(&pat(3));
+        assert!(t0.elapsed().as_millis() < 1, "took {:?}", t0.elapsed());
+        assert_eq!(res, Err(Status::PoolExhausted));
+        assert_eq!(c.pool_exhausted(), 1);
+        assert_eq!(c.drop_count(), 1);
+        assert_eq!(c.write_seq(), 2, "dropped publish must not commit");
+
+        // Exactly one further increment per attempt.
+        assert_eq!(c.publish(&pat(4)), Err(Status::PoolExhausted));
+        assert_eq!(c.pool_exhausted(), 2);
+        assert_eq!(c.drop_count(), 2);
+        assert_eq!(c.write_seq(), 2);
+
+        release_hold(&c, g, slot);
+    }
+
+    /// REQ: REQ-CORE-021 — the drop path writes nothing: the current `latest()`
+    /// sample is unchanged after a dropped publish (I-E2).
+    #[test]
+    fn exhaustion_latest_preserved() {
+        let c = ch(Pol::Overwrite, 2, 3, 0);
+        assert_eq!(c.publish(&pat(0x11)), Ok(0));
+        assert_eq!(c.publish(&pat(0x22)), Ok(1));
+        // Snapshot the current latest through an unheld endpoint (rec 1); the
+        // hold claims rec 0.
+        let mut st = c.reader();
+        let mut before = [0_u8; 16];
+        assert_eq!(c.latest(&mut st, 1, &mut before), Ok(ReadOutcome::Sample));
+        assert_eq!(before, pat(0x22));
+
+        let (g, slot) = hold_last_slot(&c);
+        assert_eq!(c.publish(&pat(0x33)), Err(Status::PoolExhausted));
+
+        let mut st2 = c.reader();
+        let mut after = [0_u8; 16];
+        assert_eq!(c.latest(&mut st2, 1, &mut after), Ok(ReadOutcome::Sample));
+        assert_eq!(after, before, "dropped publish must not disturb latest");
+
+        release_hold(&c, g, slot);
+    }
+
+    /// REQ: REQ-CORE-023 — once capacity returns, the very next publish succeeds
+    /// immediately, with no grace period (I-E4).
+    #[test]
+    fn exhaustion_resume_on_release() {
+        let c = ch(Pol::Overwrite, 2, 3, 0);
+        assert_eq!(c.publish(&pat(1)), Ok(0));
+        assert_eq!(c.publish(&pat(2)), Ok(1));
+        let (g, slot) = hold_last_slot(&c);
+        assert_eq!(c.publish(&pat(3)), Err(Status::PoolExhausted));
+        assert_eq!(c.write_seq(), 2);
+
+        release_hold(&c, g, slot);
+        let t0 = std::time::Instant::now();
+        let res = c.publish(&pat(4));
+        assert!(t0.elapsed().as_millis() < 1, "took {:?}", t0.elapsed());
+        assert_eq!(res, Ok(2), "publish resumes instantly");
+        assert_eq!(c.write_seq(), 3);
+
+        // The resuming sample is the newly committed one.
+        let mut st = c.reader();
+        let mut buf = [0_u8; 16];
+        assert_eq!(c.latest(&mut st, 1, &mut buf), Ok(ReadOutcome::Sample));
+        assert_eq!(buf, pat(4));
+    }
+
+    /// REQ: REQ-CORE-022, REQ-CORE-093 — counter increments are exact across many
+    /// drop attempts: N dropped publishes raise both counters by exactly N (I-E3).
+    #[test]
+    fn exhaustion_counter_exact() {
+        const N: u64 = 1000;
+        let c = ch(Pol::Overwrite, 2, 3, 0);
+        assert_eq!(c.publish(&pat(1)), Ok(0));
+        assert_eq!(c.publish(&pat(2)), Ok(1));
+        let (g, slot) = hold_last_slot(&c);
+
+        for _ in 0..N {
+            assert_eq!(c.publish(&pat(9)), Err(Status::PoolExhausted));
+        }
+        assert_eq!(c.pool_exhausted(), N);
+        assert_eq!(c.drop_count(), N);
+        assert_eq!(c.write_seq(), 2, "no dropped publish commits");
+
+        release_hold(&c, g, slot);
     }
 
     /// REQ: REQ-CORE-051 — copy publish round-trip; monotonic sequence.
