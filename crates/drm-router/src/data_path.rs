@@ -93,6 +93,14 @@ pub struct Router {
     routes: Vec<EgressRoute>,
     ingress: BTreeMap<(u32, u32), IngressState>,
     down_links: BTreeSet<u32>,
+    /// Links reconnected since their last session: the first frame per
+    /// `(link, wire_channel_id)` after reconnect bumps the synthetic importer's
+    /// epoch (I-RT4/I-RT9, publisher-lifecycle.md I-L4 restart path).
+    /// REQ: REQ-ROUTE-007, REQ-ROUTE-031.
+    reconnected: BTreeSet<u32>,
+    /// `(link, wire_channel_id)` already epoch-bumped in the current session.
+    /// REQ: REQ-ROUTE-007.
+    reset_done: BTreeSet<(u32, u32)>,
 }
 
 impl Router {
@@ -104,6 +112,8 @@ impl Router {
             routes,
             ingress: BTreeMap::new(),
             down_links: BTreeSet::new(),
+            reconnected: BTreeSet::new(),
+            reset_done: BTreeSet::new(),
         }
     }
 
@@ -117,11 +127,16 @@ impl Router {
 
     /// Marks `link` up after a reconnect (I-RT6): egress resumes and the
     /// per-link ingress ordering state is dropped — a fresh session with empty
-    /// ordering state and no historical retransmit (I-RT9). Idempotent.
-    /// REQ: REQ-ROUTE-007.
+    /// ordering state and no historical retransmit (I-RT9). The first frame per
+    /// `(link, wire_channel_id)` after reconnect additionally bumps the
+    /// synthetic importer's epoch (I-RT4/I-RT9 restart path), so consumers reset
+    /// as they would after a `publisher_open` on reconnect. Idempotent.
+    /// REQ: REQ-ROUTE-007, REQ-ROUTE-031.
     pub fn link_up(&mut self, link: u32) {
         self.down_links.remove(&link);
         self.ingress.retain(|(l, _), _| *l != link);
+        self.reconnected.insert(link);
+        self.reset_done.retain(|(l, _)| *l != link);
     }
 
     /// Whether `link` is currently down (I-RT6).
@@ -290,6 +305,15 @@ impl Router {
         };
         if crate::wire::record_bound_violated(header.payload_len, route.max_record_bytes) {
             return Err(Status::InvalidData); // I-RT18: before any buffering
+        }
+        // Reconnect session (I-RT6): bump the synthetic importer's epoch once per
+        // `(link, wire_channel_id)`, mirroring `publisher_open` on reconnect, so
+        // consumers reset before the first post-reconnect sample (I-RT4/I-RT9).
+        if self.reconnected.contains(&link)
+            && !self.reset_done.contains(&(link, header.wire_channel_id))
+        {
+            sink.reset_epoch(route.topic)?;
+            self.reset_done.insert((link, header.wire_channel_id));
         }
         let key = StreamKey {
             epoch: header.stream_epoch,

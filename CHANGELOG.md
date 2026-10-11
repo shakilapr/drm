@@ -516,6 +516,28 @@ Sections are dated when tagged; dateless sections have not been tagged.
   `windows_section_name`/`windows_name_conforms`, `drm-core` `cfg(windows)` `windows-sys`
   dependency, and a `windows-smoke` CI job; POSIX-only suites are `cfg(unix)`-gated so
   `cargo test -p drm-core --lib` compiles on both hosts.
+- Week M10 W2 tranche: router import completion and two-host integration start —
+  `Router::link_up` now bumps the synthetic importer's epoch once per
+  `(link, wire_channel_id)` after a reconnect, mirroring `publisher_open`
+  ([data_path.rs](crates/drm-router/src/data_path.rs); I-RT4/I-RT9); the import
+  suite [import.rs](crates/drm-router/tests/import.rs) proves native
+  equivalence (bytes + timing probe), wire-header stripping, and the reconnect
+  epoch reset; publisher-lifecycle freshness
+  ([freshness.rs](crates/drm-core/src/channel/freshness.rs)) adds
+  `FreshnessTracker`/`StreamState` (`Active`/`Stale`/`Offline`,
+  epoch-change `NoCurrentSample`; I-L9); NEW whole-system package
+  [tests/conformance](tests/conformance) (excluded from the root workspace)
+  hosts the two-host router simulation
+  ([two_host.rs](tests/conformance/two_host.rs)) — two hosts as distinct
+  namespaces + loopback addresses exchanging structured/bulk/event topic classes
+  — and the route e2e
+  ([route_e2e.rs](tests/conformance/route_e2e.rs)) tying the derived forwarding
+  plan to the router filter (`V-RT` ↔ I-RT1); the runner
+  ([two_host.rs](xtask/src/two_host.rs)) adds `cargo xtask test --two-host` and
+  a nightly matrix job; gate evidence
+  [phase-29.md](docs/gates/phase-29.md), metrics
+  [metrics-m10.md](docs/metrics/metrics-m10.md) records `IMPORT_NATIVE = 1`,
+  `DISCONNECT_ISOLATION = 1`, `TWO_HOST_SIM = green`.
 - Week M10 W1 tranche: router UDP path completion and TCP streams —
   `Router::routes_on(link)` (I-RT1: egress scans only the serviced link's route
   bindings, so a local-only topic never egresses; [route_filter.rs](crates/drm-router/tests/route_filter.rs)
