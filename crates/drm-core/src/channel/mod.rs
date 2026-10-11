@@ -19,7 +19,7 @@ use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::canon::{CanonLayout, validate_sample};
-use crate::channel::ccb::ChannelControlBlock;
+use crate::channel::ccb::{ChannelControlBlock, ChannelCounters};
 use crate::channel::overflow::{RequiredSequential, allow_commit};
 use crate::channel::pool::{PoolLayout, slot_offset, write_checked};
 use crate::hazard::{AcquireErr, ConsumerRec, acquire, bump_generation, select_slot};
@@ -243,6 +243,26 @@ impl Channel {
     #[must_use]
     pub fn reclaim_requested(&self) -> bool {
         self.ccb.reclaim_requested.load(Ordering::Acquire)
+    }
+
+    /// Newest committed sequence (`write_seq - 1`; `0` until the first commit).
+    /// Relaxed observability read — never joins the publication handshake and
+    /// adds no per-message cost (channel-metadata I-M8). Derived, not stored
+    /// (architecture §MVP: tools derive the last sequence from `write_seq`).
+    /// REQ: REQ-CORE-093.
+    #[must_use]
+    pub fn last_sequence(&self) -> u64 {
+        self.ccb.write_seq.load(Ordering::Relaxed).saturating_sub(1)
+    }
+
+    /// Out-of-band diagnostic snapshot of every CCB counter (observability-plane
+    /// §Functions `diag_sample`; channel-metadata I-M8). All reads are Relaxed —
+    /// the snapshot never joins the publication handshake and adds no per-message
+    /// cost; `drm-diag` layers the epoch sandwich (I-OB7) for consistency.
+    /// REQ: REQ-CORE-093.
+    #[must_use]
+    pub fn counters(&self) -> ChannelCounters {
+        self.ccb.counters()
     }
 
     /// Oldest retained sequence for a snapshot `ws`.

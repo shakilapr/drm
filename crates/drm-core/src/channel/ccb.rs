@@ -127,6 +127,40 @@ const _: () = assert!(align_of::<ChannelControlBlock>() == 8);
 const _: () = assert!(offset_of!(ChannelControlBlock, first_valid_seq) % 8 == 0);
 const _: () = assert!(offset_of!(ChannelControlBlock, write_seq) % 8 == 0);
 
+/// Out-of-band diagnostic snapshot of the CCB counter surface
+/// (observability-plane.md §Data Structures `ChannelStats`, in-process subset;
+/// channel-metadata.md I-M8). `last_sequence` is derived from `write_seq` — the
+/// architecture §MVP drm-core counter list stores `write_seq` and has "tools
+/// derive the last sequence from `write_seq`", so the frozen 56-byte CCB layout
+/// (`descriptor_golden`) is unchanged.
+///
+/// Ordering: every field is a Relaxed observability load — the snapshot never
+/// joins the publication handshake and adds no per-message cost (I-M8, I-OB2).
+/// Fields are individually live but not mutually atomic; `drm-diag` applies the
+/// epoch sandwich (I-OB7) for a consistent sample. Underlying stores:
+/// `write_seq` commits with a Release store, the exhaustion `reclaim_requested`
+/// flag with a Release store, and the three diagnostic counters with Relaxed
+/// `fetch_add` (I-M8).
+/// REQ: REQ-CORE-093.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelCounters {
+    /// Next sequence to publish (CCB `write_seq`).
+    pub write_seq: u64,
+    /// Newest committed sequence (`write_seq - 1`; `0` until the first commit —
+    /// `write_seq == 0` distinguishes the never-published case).
+    pub last_sequence: u64,
+    /// Samples dropped inside DRM (pool exhaustion).
+    pub drop_count: u64,
+    /// Sequences reported missed by consumer `Gap` outcomes.
+    pub overrun_count: u64,
+    /// Pool-exhaustion event counter.
+    pub pool_exhausted: u64,
+    /// Publisher epoch.
+    pub publisher_epoch: u32,
+    /// Maintenance reclamation wakeup flag.
+    pub reclaim_requested: bool,
+}
+
 impl ChannelControlBlock {
     /// Zero-valued control block (activation-time initialization).
     /// REQ: REQ-CORE-014.
@@ -166,6 +200,25 @@ impl ChannelControlBlock {
             return Err(Status::SequenceExhausted);
         }
         Ok(())
+    }
+
+    /// Out-of-band diagnostic snapshot of every counter (observability-plane.md
+    /// §Functions `diag_sample`; channel-metadata.md I-M8). Relaxed reads only —
+    /// the snapshot never joins the publication handshake and adds no per-message
+    /// cost. `last_sequence` is derived from `write_seq`.
+    /// REQ: REQ-CORE-093.
+    #[must_use]
+    pub fn counters(&self) -> ChannelCounters {
+        let write_seq = self.write_seq.load(Ordering::Relaxed);
+        ChannelCounters {
+            write_seq,
+            last_sequence: write_seq.saturating_sub(1),
+            drop_count: self.drop_count.load(Ordering::Relaxed),
+            overrun_count: self.overrun_count.load(Ordering::Relaxed),
+            pool_exhausted: self.pool_exhausted.load(Ordering::Relaxed),
+            publisher_epoch: self.publisher_epoch.load(Ordering::Relaxed),
+            reclaim_requested: self.reclaim_requested.load(Ordering::Relaxed),
+        }
     }
 }
 
