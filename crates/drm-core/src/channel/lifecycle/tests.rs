@@ -17,6 +17,8 @@ use super::{
     publisher_open,
 };
 use crate::channel::ccb::ChannelControlBlock;
+use crate::channel::{Channel, OverflowPolicy, ReadOutcome, ReaderState};
+use crate::ring::LookupErr;
 use crate::shm::{LockHandle, Mapping, SegmentName};
 use drm_types::Status;
 
@@ -735,4 +737,102 @@ fn consumer_observes_epoch_reset() {
         9,
         "new window floor excludes prior-run sequences"
     );
+}
+
+/// Drains the bounded read loop (`Channel::next`) until `Empty`, asserting every
+/// delivery is a `Sample` matching `expected` in order; returns the sample count.
+/// REQ: REQ-CORE-013, REQ-CORE-018.
+fn drain(c: &Channel, reader: &mut ReaderState, expected: &[[u8; 16]]) -> usize {
+    let mut buf = [0_u8; 16];
+    let mut n = 0_usize;
+    loop {
+        match c.next(reader, 0, &mut buf) {
+            Ok(ReadOutcome::Sample) => match expected.get(n) {
+                Some(want) => assert_eq!(&buf, want, "delivered payload {n}"),
+                None => unreachable!("read loop delivered an unexpected extra sample {n}"),
+            },
+            Ok(ReadOutcome::Empty) => return n,
+            other => unreachable!("unexpected read outcome: {other:?}"),
+        }
+        n += 1;
+    }
+}
+
+/// REQ: REQ-CORE-018, REQ-CORE-038, REQ-CORE-010, REQ-CORE-019, REQ-CORE-026 —
+/// publisher-lifecycle e2e over the in-memory channel read path (no fork, no
+/// sleep): a consumer read loop spanning a publisher restart observes the epoch
+/// change, resets its cursor to the new window floor, never reads a pre-restart
+/// payload as new, and sees prior-run sequences excluded by the floor while the
+/// diagnostic counters stay surfaced (I-L4/I-L5/I-L6, REQ-CORE-093).
+#[test]
+fn consumer_read_loop_observes_publisher_restart() {
+    let c = fixture(
+        Channel::activate(4, 5, 16, 8, OverflowPolicy::Overwrite, 0, 2, None),
+        "activate",
+    );
+    let mut reader = c.reader();
+
+    // Run 1: a clean read loop drains four ordered samples.
+    for v in 0..4_u8 {
+        assert_eq!(c.publish(&[v; 16]), Ok(u64::from(v)), "run-1 publish {v}");
+    }
+    let run1 = [[0_u8; 16], [1; 16], [2; 16], [3; 16]];
+    assert_eq!(drain(&c, &mut reader, &run1), 4, "run-1 drained in order");
+
+    // Surface the overrun counter through the read path: the publisher advances
+    // past the retained window so the reader laps exactly once (REQ-CORE-093).
+    for v in 4..9_u8 {
+        assert!(c.publish(&[v; 16]).is_ok(), "run-1 publish {v}");
+    }
+    let mut buf = [0_u8; 16];
+    assert_eq!(
+        c.next(&mut reader, 0, &mut buf),
+        Ok(ReadOutcome::Gap { missed: 1 }),
+        "lapped reader reports an exact gap"
+    );
+    assert_eq!(
+        c.overrun_count(),
+        1,
+        "read path surfaces the overrun counter"
+    );
+
+    // Publisher restart: the epoch advances exactly once and the window floor is
+    // the preserved next sequence; prior-run sequences become unaddressable
+    // (I-L3/I-L6/I-L7).
+    let before = c.epoch();
+    assert_eq!(c.restart_run(), before + 1, "epoch advances exactly once");
+    assert_eq!(c.epoch(), before + 1, "read path observes the new epoch");
+    assert_eq!(c.ccb().first_valid(), 9, "floor = preserved next sequence");
+    assert_eq!(
+        c.ring().lookup(c.ccb(), 8),
+        Err(LookupErr::AgedOut),
+        "prior-run sequence excluded by the floor"
+    );
+
+    // No run-2 sample yet: the reset cursor must not surface a prior-run payload
+    // as new (I-L4/I-L5).
+    assert_eq!(
+        c.next(&mut reader, 0, &mut buf),
+        Ok(ReadOutcome::Empty),
+        "prior-run data is never read post-restart"
+    );
+
+    // Run 2 under the new epoch: the read loop resets to the floor and delivers
+    // the first run-2 sample, never a pre-restart payload as new.
+    for v in 40_u8..44_u8 {
+        assert!(c.publish(&[v; 16]).is_ok(), "run-2 publish {v}");
+    }
+    let run2 = [[40_u8; 16], [41; 16], [42; 16], [43; 16]];
+    assert_eq!(
+        drain(&c, &mut reader, &run2),
+        4,
+        "run-2 drained from the floor"
+    );
+
+    // Diagnostic counters stay surfaced across the restart; the epoch and the
+    // lifetime overrun counter are not cleared by restart (I-L7, REQ-CORE-093).
+    assert_eq!(c.epoch(), before + 1, "epoch surfaced");
+    assert_eq!(c.overrun_count(), 1, "lifetime overrun counter preserved");
+    assert_eq!(c.drop_count(), 0, "no drops");
+    assert_eq!(c.pool_exhausted(), 0, "no pool exhaustion");
 }
