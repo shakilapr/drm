@@ -184,6 +184,76 @@ fn fixture<T, E: std::fmt::Debug>(r: Result<T, E>, what: &str) -> T {
     }
 }
 
+/// Opens a publisher on the shared in-memory fixtures.
+/// REQ: REQ-CORE-054.
+fn open_publisher(
+    shm: &MemShm,
+    locks: &MemLock,
+    path: &Path,
+    n: &SegmentName,
+    e: &Expectation,
+) -> Publisher {
+    fixture(
+        publisher_open(shm, locks, path, n, e.topic_name.as_bytes(), e, &spec()),
+        "publisher open",
+    )
+}
+
+/// Segment-relative byte offset of a CCB field.
+fn ccb_field(ccb_offset: u64, field: usize) -> usize {
+    usize::try_from(ccb_offset).unwrap_or(0) + field
+}
+
+/// Writes a naturally aligned 8-byte CCB word (test instrumentation).
+/// REQ: REQ-CORE-020.
+fn write_u64(map: &Mapping, ccb_offset: u64, field: usize, v: u64) {
+    let base = map.ptr().as_ptr();
+    // SAFETY: `ccb_offset` is the validated CCB offset and `field` is a
+    // naturally aligned 8-byte field within the mapped segment.
+    let dst = unsafe { std::slice::from_raw_parts_mut(base.add(ccb_field(ccb_offset, field)), 8) };
+    dst.copy_from_slice(&v.to_ne_bytes());
+}
+
+/// Reads a naturally aligned 8-byte CCB word (test instrumentation).
+/// REQ: REQ-CORE-020.
+fn read_u64(map: &Mapping, ccb_offset: u64, field: usize) -> u64 {
+    let base = map.ptr().as_ptr();
+    // SAFETY: see `write_u64`.
+    let src = unsafe { std::slice::from_raw_parts(base.add(ccb_field(ccb_offset, field)), 8) };
+    let mut b = [0_u8; 8];
+    b.copy_from_slice(src);
+    u64::from_ne_bytes(b)
+}
+
+/// Reads a naturally aligned 4-byte CCB word (test instrumentation).
+/// REQ: REQ-CORE-019.
+fn read_u32(map: &Mapping, ccb_offset: u64, field: usize) -> u32 {
+    let base = map.ptr().as_ptr();
+    // SAFETY: validated CCB base plus a naturally aligned 4-byte field.
+    let src = unsafe { std::slice::from_raw_parts(base.add(ccb_field(ccb_offset, field)), 4) };
+    let mut b = [0_u8; 4];
+    b.copy_from_slice(src);
+    u32::from_ne_bytes(b)
+}
+
+/// Writes a CCB `AtomicBool` flag (test instrumentation).
+/// REQ: REQ-CORE-026.
+fn write_flag(map: &Mapping, ccb_offset: u64, field: usize, v: bool) {
+    let base = map.ptr().as_ptr();
+    // SAFETY: validated CCB base plus a 1-byte flag.
+    let dst = unsafe { std::slice::from_raw_parts_mut(base.add(ccb_field(ccb_offset, field)), 1) };
+    dst[0] = u8::from(v);
+}
+
+/// Reads a CCB `AtomicBool` flag (test instrumentation).
+/// REQ: REQ-CORE-026.
+fn read_flag(map: &Mapping, ccb_offset: u64, field: usize) -> bool {
+    let base = map.ptr().as_ptr();
+    // SAFETY: validated CCB base plus a 1-byte flag.
+    let src = unsafe { std::slice::from_raw_parts(base.add(ccb_field(ccb_offset, field)), 1) };
+    src[0] != 0
+}
+
 /// REQ: REQ-CORE-054, REQ-CORE-071 — a fresh publisher creates, publishes
 /// readiness, and a consumer opens the same segment afterwards.
 #[test]
@@ -499,4 +569,170 @@ fn publisher_epoch_exhaustion() {
         &spec(),
     );
     assert!(matches!(res, Err(Status::EpochExhausted)), "res: {res:?}");
+}
+
+/// REQ: REQ-CORE-019, REQ-CORE-020 — I-L3: the epoch is initialized to 1 on a
+/// fresh segment and advances by exactly one per authority acquisition (init
+/// exactly once, increment exactly once).
+#[test]
+fn publisher_epoch_init_and_increment_exactly_once() {
+    let shm = MemShm::default();
+    let locks = MemLock::default();
+    let n = name(&unique("epochonce"));
+    let e = expect("pkg/topic-a");
+    let path = PathBuf::from("/locks/t42");
+    for expected in 1..=5_u32 {
+        let p = open_publisher(&shm, &locks, &path, &n, &e);
+        assert_eq!(p.epoch, expected, "epoch advances exactly once per open");
+        drop(p);
+    }
+}
+
+/// REQ: REQ-CORE-019, REQ-CORE-020, REQ-CORE-026 — I-L2/I-L3/I-L6: a
+/// deterministic 100-cycle restart loop over the in-memory backends (no fork
+/// or OS churn): each acquisition advances the epoch by exactly one and
+/// republishes `first_valid_seq = write_seq` from the prior run, so the
+/// sequence continues at the preserved floor and the epoch disambiguates runs.
+#[test]
+fn publisher_restart_loop_100() {
+    let shm = MemShm::default();
+    let locks = MemLock::default();
+    let n = name(&unique("restartloop"));
+    let e = expect("pkg/topic-a");
+    let path = PathBuf::from("/locks/t42");
+    let mut floor = 0_u64;
+    for cycle in 0..100_u32 {
+        let p = open_publisher(&shm, &locks, &path, &n, &e);
+        assert_eq!(p.epoch, cycle + 1, "epoch advances exactly once per cycle");
+        assert_eq!(
+            read_u64(
+                p.mapping(),
+                p.view.ccb_offset,
+                offset_of!(ChannelControlBlock, first_valid_seq)
+            ),
+            floor,
+            "watermark = preserved next sequence of the prior run"
+        );
+        // This run publishes up to `floor`, then dies before the next cycle.
+        floor = u64::from(cycle) * 3 + 7;
+        write_u64(
+            p.mapping(),
+            p.view.ccb_offset,
+            offset_of!(ChannelControlBlock, write_seq),
+            floor,
+        );
+        drop(p);
+    }
+}
+
+/// REQ: REQ-CORE-020, REQ-CORE-026 — I-L6/I-L7: restart clears the prior run's
+/// transient state (`publish_busy`, `reclaim_requested`), moves the watermark
+/// to the preserved next sequence, and advances the epoch once.
+#[test]
+fn publisher_restart_resets_run_state() {
+    let shm = MemShm::default();
+    let locks = MemLock::default();
+    let n = name(&unique("resetrun"));
+    let e = expect("pkg/topic-a");
+    let path = PathBuf::from("/locks/t42");
+    {
+        let p = open_publisher(&shm, &locks, &path, &n, &e);
+        // Prior writer died mid-run: in-progress slot flagged, a stale
+        // maintenance wakeup pending, sequence advanced to 11.
+        write_flag(
+            p.mapping(),
+            p.view.ccb_offset,
+            offset_of!(ChannelControlBlock, publish_busy),
+            true,
+        );
+        write_flag(
+            p.mapping(),
+            p.view.ccb_offset,
+            offset_of!(ChannelControlBlock, reclaim_requested),
+            true,
+        );
+        write_u64(
+            p.mapping(),
+            p.view.ccb_offset,
+            offset_of!(ChannelControlBlock, write_seq),
+            11,
+        );
+    }
+    let p2 = open_publisher(&shm, &locks, &path, &n, &e);
+    assert_eq!(p2.epoch, 2, "one acquisition, one epoch advance");
+    assert!(
+        !read_flag(
+            p2.mapping(),
+            p2.view.ccb_offset,
+            offset_of!(ChannelControlBlock, publish_busy)
+        ),
+        "in-progress flag cleared on restart"
+    );
+    assert!(
+        !read_flag(
+            p2.mapping(),
+            p2.view.ccb_offset,
+            offset_of!(ChannelControlBlock, reclaim_requested)
+        ),
+        "stale reclaim wakeup cleared on restart"
+    );
+    assert_eq!(
+        read_u64(
+            p2.mapping(),
+            p2.view.ccb_offset,
+            offset_of!(ChannelControlBlock, first_valid_seq)
+        ),
+        11,
+        "watermark = preserved next sequence"
+    );
+}
+
+/// REQ: REQ-CORE-018, REQ-CORE-038 — I-L4/I-L5: a consumer attached before a
+/// restart observes the epoch change on the shared mapping and the new window
+/// floor excludes every prior-run sequence (no cross-epoch confusion).
+#[test]
+fn consumer_observes_epoch_reset() {
+    let shm = MemShm::default();
+    let locks = MemLock::default();
+    let n = name(&unique("epochreset"));
+    let e = expect("pkg/topic-a");
+    let path = PathBuf::from("/locks/t42");
+    let p = open_publisher(&shm, &locks, &path, &n, &e);
+    write_u64(
+        p.mapping(),
+        p.view.ccb_offset,
+        offset_of!(ChannelControlBlock, write_seq),
+        9,
+    );
+    let c: Consumer = fixture(consumer_open(&shm, &n, &e, &spec(), None), "consumer open");
+    assert_eq!(
+        read_u32(
+            c.mapping(),
+            c.view.ccb_offset,
+            offset_of!(ChannelControlBlock, publisher_epoch)
+        ),
+        1,
+        "fresh run observed as epoch 1"
+    );
+    drop(p); // simulated publisher death: authority released
+    let p2 = open_publisher(&shm, &locks, &path, &n, &e);
+    assert_eq!(p2.epoch, 2);
+    assert_eq!(
+        read_u32(
+            c.mapping(),
+            c.view.ccb_offset,
+            offset_of!(ChannelControlBlock, publisher_epoch)
+        ),
+        2,
+        "consumer mapping observes the epoch change"
+    );
+    assert_eq!(
+        read_u64(
+            c.mapping(),
+            c.view.ccb_offset,
+            offset_of!(ChannelControlBlock, first_valid_seq)
+        ),
+        9,
+        "new window floor excludes prior-run sequences"
+    );
 }
