@@ -11,6 +11,19 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M16 W1 tranche: RPC implementation start. NEW [drm-rpc](crates/drm-rpc)
+  ops crate (`#![forbid(unsafe_code)]`; depends on `drm-types` + `drm-core` only):
+  a bounded wire [codec](crates/drm-rpc/src/codec.rs) for
+  `Request`/`Cancel`/`RpcEvent`, a [client](crates/drm-rpc/src/client.rs)
+  (`call`/`submit`/`pump`, correlation table, `u64` cid that never wraps,
+  per-cid state machine, `RpcTimeout` + best-effort `Cancel`, late terminals
+  dropped stale), and a [server](crates/drm-rpc/src/server.rs) reactor
+  (`serve_step` reserve-then-consume admission, random `server_session`,
+  bounded per-client outboxes, `run_workers` bounded worker pool). Implements
+  rpc-actions I-RPC1/3/4/6/7/9/10 (REQ-OPS-011/012/013/020/021/022/023/025).
+  Replay E2E (`replay_roundtrip`, I-RC4) re-run as gate M16W4 evidence. Gate
+  evidence [m16w1.md](docs/gates/m16w1.md); [metrics-m16.md](docs/metrics/metrics-m16.md)
+  records `RPC_CALL_GREEN = 1`, `RPC_CID_GREEN = 1`, `REPLAY_E2E = 1`.
 - Week M15 W4 tranche: replay pipeline + record disk/MCAP stage. `drm-record`
   gains the from-scratch MCAP writer/reader ([mcap.rs](crates/drm-record/src/mcap.rs))
   and recorder-owned disk stage ([disk.rs](crates/drm-record/src/disk.rs)) —

@@ -14,8 +14,14 @@
 set -uo pipefail
 
 WEEK="${1:?usage: workplan-parallel-week.sh <week>  (e.g. m16w2)}"
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
 WT_ROOT="${DRM_WORKPLAN_WT_ROOT:-$REPO/../drm-wt-wt}"
+
+# Normalize BEFORE comparing: `git worktree list` prints resolved paths, and an unresolved
+# `<repo>/../drm-wt-wt/m16w2` never matches, so an existing worktree was re-added and the run
+# died on "fatal: 'plan/m16w2' is already used by worktree".
+mkdir -p "$WT_ROOT"
+WT_ROOT="$(cd "$WT_ROOT" && pwd -P)"
 WT="$WT_ROOT/$WEEK"
 BRANCH="plan/$WEEK"
 STEM="$(printf '%s' "$WEEK" | sed -E 's/^(m[0-9]+)w([0-9]+)$/\1-w\2/')"
@@ -23,9 +29,17 @@ FILE="work-plan-$STEM.md"
 LOG="$WT_ROOT/$WEEK.log"
 AGENT="${DRM_WORKPLAN_AGENT:-opencode}"
 ATTEMPTS="${DRM_WORKPLAN_ATTEMPTS:-3}"
+
+# `cargo xtask fmt --check` SKIPS a formatter that is not on PATH (xtask/README.md, main.rs:54),
+# and the serial driver runs without `prettier`. Hermes' own node_modules/.bin leaks into an
+# interactive shell's PATH and supplies one, which then fails the gate on 148 long-standing docs
+# for a reason that has nothing to do with the week under test. Keep the tool environment
+# identical to the driver's so "green" means the same thing in both.
+PATH="$(printf '%s' "$PATH" | tr ':' '\n' |
+  grep -v '^/root/.hermes/hermes-agent/node_modules/\.bin$' | paste -sd:)"
 export PATH="$HOME/.cargo/bin:$PATH"
 
-mkdir -p "$WT_ROOT"
+
 log() { printf '[%s] %s\n' "$(date -Is)" "$*" >>"$LOG"; }
 
 gates() {

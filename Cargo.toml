@@ -9,6 +9,7 @@ members = [
     "crates/drm-cli",
     "crates/drm-diag",
     "crates/drm-record",
+    "crates/drm-rpc",
     "crates/drm-ffi",
     "bindings/rust/crates/drm",
     "bindings/python/native",

@@ -223,6 +223,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "drm-rpc"
+version = "0.1.0"
+dependencies = [
+ "drm-core",
+ "drm-types",
+]
+
+[[package]]
 name = "drm-types"
 version = "0.1.0"
 

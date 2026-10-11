@@ -26,6 +26,8 @@ Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
 | Record disk stage + MCAP framing (DRM metadata, gaps) | `crates/drm-record/src/{mcap,disk}.rs`; `record_disk_mcap`/`record_mcap_drm_meta`/`record_mcap_zstd` (I-RC6, REQ-OPS-006); [m15w4.md](m15w4.md) | PASS |
 | Replay pipeline (faithful read/publish, scheduler, isolated namespace) | `crates/drm-record/src/replay.rs`; `replay_roundtrip`/`replay_publisher_faithful`/`replay_reader_epoch` (I-RC4, REQ-OPS-009); [m15w4.md](m15w4.md) | PASS |
 | RPC/actions, full diag daemon | scheduled M16–M18 | pending |
+| RPC request/response + cid dispatch + deadline (unary) | `crates/drm-rpc`; `call_round_trip`/`call_remote_failure`/`dispatch_concurrent_no_cross_correlation`/`dispatch_admission_busy`/`dispatch_timeout_expires_and_late_terminal_stale`/`server_session_stale_dropped`/`event_order_invalid_terminal_first` (I-RPC1/3/4/6/7/9/10, REQ-OPS-011/012/013/020/021/022/023/025); [m16w1.md](m16w1.md) | PASS (M16W1) |
+| RPC action phase machine + cancel protocol; dispatch ×16 | scheduled M16W2–M16W3 | pending |
 
 ## Notes
 
@@ -34,7 +36,10 @@ Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
   constrained-device data path) is tracked in the M16–M19 weekly plans.
 
 REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004, REQ-OPS-005,
-REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-009, REQ-OPS-014,
+REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-009, REQ-OPS-010,
+REQ-OPS-011, REQ-OPS-012, REQ-OPS-013, REQ-OPS-014,
 REQ-OPS-015, REQ-OPS-016, REQ-OPS-017, REQ-OPS-018, REQ-OPS-019,
+REQ-OPS-020, REQ-OPS-021, REQ-OPS-022, REQ-OPS-023, REQ-OPS-024,
+REQ-OPS-025,
 REQ-CORE-087, REQ-CORE-088, REQ-CORE-089, REQ-CORE-093, REQ-CORE-094,
 REQ-ROUTE-025, REQ-ROUTE-026, REQ-QAL-006.
