@@ -36,6 +36,19 @@ pub enum PathEdge {
     Dynamic(u32),
     /// An explicit bridge transform connecting two trees (`REQ-SPATIAL-039`).
     Bridge(Transform3),
+    /// A calibration-bound static edge: the effective transform is
+    /// `nominal × correction`, resolved live from slot `slot` (`I-Q11`). When
+    /// traversed in the reverse direction, the folded value is the inverse of
+    /// that effective transform, so the plan emits an `Invert` step rather than
+    /// inverting the nominal alone.
+    Calibrated {
+        /// The nominal static transform.
+        nominal: Transform3,
+        /// The shared calibration slot id.
+        slot: u32,
+        /// Whether this edge is traversed in the reverse direction.
+        inverted: bool,
+    },
 }
 
 /// A classified frame edge toward the frame's parent (`REQ-SPATIAL-048`).
@@ -48,6 +61,14 @@ pub enum FrameEdge {
     Static(Transform3),
     /// A dynamic edge owned by a single writer (`I-S11`).
     Dynamic(u32),
+    /// A calibration-bound static relationship: effective
+    /// `nominal × correction` from shared slot `slot` (`I-Q11`).
+    Calibrated {
+        /// The nominal static transform.
+        nominal: Transform3,
+        /// The shared calibration slot id.
+        slot: u32,
+    },
 }
 
 impl FrameEdge {
@@ -58,6 +79,11 @@ impl FrameEdge {
         match self {
             Self::Static(t) => PathEdge::Constant(t),
             Self::Dynamic(e) => PathEdge::Dynamic(e),
+            Self::Calibrated { nominal, slot } => PathEdge::Calibrated {
+                nominal,
+                slot,
+                inverted: false,
+            },
             Self::Root => PathEdge::Constant(Transform3::IDENTITY),
         }
     }
@@ -116,6 +142,30 @@ impl SpaceForest {
     pub fn add_dynamic(&mut self, frame: FrameId, parent: FrameId, edge: u32) {
         self.edges.insert(frame.clone(), FrameEdge::Dynamic(edge));
         self.parents.insert(frame, parent);
+    }
+
+    /// Registers a calibration-bound static frame whose effective offset is
+    /// `nominal × correction` from shared slot `slot` (`I-Q11`).
+    ///
+    /// # Errors
+    /// [`SpatialError::NonFinite`] when the nominal transform is not finite.
+    /// REQ: REQ-SPATIAL-003.
+    pub fn add_calibration(
+        &mut self,
+        frame: FrameId,
+        parent: FrameId,
+        nominal: Transform3,
+        slot: u32,
+    ) -> Result<(), SpatialError> {
+        if !nominal.translation.iter().all(|c| c.is_finite())
+            || !nominal.rotation.iter().all(|c| c.is_finite())
+        {
+            return Err(SpatialError::NonFinite);
+        }
+        self.edges
+            .insert(frame.clone(), FrameEdge::Calibrated { nominal, slot });
+        self.parents.insert(frame, parent);
+        Ok(())
     }
 
     /// Registers an explicit bridge transform connecting two frames (possibly in
@@ -344,6 +394,15 @@ fn invert_edge(edge: PathEdge) -> PathEdge {
     match edge {
         PathEdge::Constant(t) | PathEdge::Bridge(t) => PathEdge::Constant(invert(&t)),
         PathEdge::Dynamic(e) => PathEdge::Dynamic(e),
+        PathEdge::Calibrated {
+            nominal,
+            slot,
+            inverted,
+        } => PathEdge::Calibrated {
+            nominal,
+            slot,
+            inverted: !inverted,
+        },
     }
 }
 

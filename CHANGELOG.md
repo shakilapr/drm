@@ -11,6 +11,24 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M20 W3 tranche: live calibration slots, generational handles, and
+  single-writer edges (Phase 33). `drm-spatial` gains live calibration slots
+  (`CalibrationSlot` effective timestamp + jump-threshold discontinuity marker,
+  `QueryEngine::update_calibration_at`, `correction_jump`) that invalidate
+  dependent caches with no recompilation or restart (`I-Q11`); calibrated static
+  edges compile to a `PlanStep::CalibrationSlot` (with `PlanStep::Invert` for the
+  reverse direction so the fold is `(Nominal × Correction)⁻¹`); a generational
+  overlay-handle registry (`HandleRegistry`) whose delete invalidates outstanding
+  `SpatialHandle`s immediately (`I-Q12`/`I-S12`); and OS-backed single-writer edge
+  authority (`EdgeAuthority`, std `File` advisory lock) with pre-deployment
+  `V-SPAT` enforcement (`I-S11`)
+  ([spatial-queries.md](docs/algorithms/spatial/spatial-queries.md),
+  [spatial-core.md](docs/algorithms/spatial/spatial-core.md);
+  REQ-SPATIAL-003, REQ-SPATIAL-011, REQ-SPATIAL-030). The E4 oracle
+  (`tests/oracle/query_oracle.py`) gains calibration and generational fixtures;
+  `cargo test -p drm-spatial calibration` covers I-Q11/I-Q12/I-S11. Gate evidence
+  ([m20w3.md](docs/gates/m20w3.md), [phase-33.md](docs/gates/phase-33.md));
+  metrics [metrics-m20.md](docs/metrics/metrics-m20.md).
 - Week M20 W2 tranche: interpolation guard and transactional reparenting
   (Phase 33). `drm-spatial` gains per-edge discontinuity markers
   (`TimeHistory::mark_discontinuous_at`, `QueryEngine::mark_discontinuity`

@@ -34,6 +34,10 @@ pub enum PlanStep {
         /// The shared calibration slot id.
         slot: u32,
     },
+    /// Replaces the top of the stack with its inverse (`T⁻¹`). Emitted when a
+    /// calibration-bound edge is traversed in the reverse direction, so the
+    /// inverted effective value is exactly `(Nominal × Correction)⁻¹` (`I-Q11`).
+    Invert,
     /// Fold the top two stack transforms (`a ∘ b`).
     Multiply,
 }
@@ -65,6 +69,11 @@ impl TransformPlan {
                 | PlanStep::DynamicEdge(_)
                 | PlanStep::CalibrationSlot { .. } => {
                     depth += 1;
+                }
+                PlanStep::Invert => {
+                    if depth < 1 {
+                        return Err(SpatialError::NonFinite);
+                    }
                 }
                 PlanStep::Multiply => {
                     depth -= 1;
@@ -283,6 +292,12 @@ pub fn execute_steps(
                 top -= 1;
                 stack[top - 1] = crate::transform::compose(&a, &b);
             }
+            PlanStep::Invert => {
+                if top < 1 {
+                    return Err(SpatialError::NonFinite);
+                }
+                stack[top - 1] = crate::transform::invert(&stack[top - 1]);
+            }
         }
     }
     if top != 1 {
@@ -318,6 +333,11 @@ impl CompiledPlan {
                 PlanStep::Constant(_)
                 | PlanStep::DynamicEdge(_)
                 | PlanStep::CalibrationSlot { .. } => depth += 1,
+                PlanStep::Invert => {
+                    if depth < 1 {
+                        return Err(SpatialError::NonFinite);
+                    }
+                }
                 PlanStep::Multiply => {
                     depth -= 1;
                     if depth < 1 {
@@ -379,6 +399,19 @@ pub fn compile_plan(
                 steps.push(PlanStep::Constant(*t));
             }
             PathEdge::Dynamic(e) => steps.push(PlanStep::DynamicEdge(*e)),
+            PathEdge::Calibrated {
+                nominal,
+                slot,
+                inverted,
+            } => {
+                steps.push(PlanStep::CalibrationSlot {
+                    nominal: *nominal,
+                    slot: *slot,
+                });
+                if *inverted {
+                    steps.push(PlanStep::Invert);
+                }
+            }
         }
         if i != 0 {
             steps.push(PlanStep::Multiply);

@@ -44,8 +44,11 @@ use crate::types::{SpatialError, Transform3, Twist3};
 /// `CalibrationSlot`; [`spatial_architecture.md`] §Calibration Without
 /// Recompilation). The effective transform is `nominal × correction`; updating
 /// the correction invalidates dependent caches live with no recompilation
-/// (`I-Q11`).
-/// REQ: REQ-SPATIAL-003.
+/// (`I-Q11`). The slot carries the effective timestamp of its newest correction
+/// and a discontinuity marker set when an update's correction jump exceeds the
+/// declared threshold (`I-Q7` tie-in, [spatial-queries.md] §Protocols live
+/// calibration).
+/// REQ: REQ-SPATIAL-003, REQ-SPATIAL-016.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CalibrationSlot {
     /// The nominal static transform embedded in the plan.
@@ -54,6 +57,13 @@ pub struct CalibrationSlot {
     pub correction: Transform3,
     /// Version bumped on every update; a change invalidates dependent caches.
     pub version: u64,
+    /// Sample/effective timestamp of the newest correction (`I-Q11`).
+    pub effective_ns: u64,
+    /// Discontinuity marker set when a correction jump exceeded the threshold
+    /// (`I-Q7`); cleared by a subsequent sub-threshold update at a newer instant.
+    pub discontinuous: bool,
+    /// The effective instant of the flagged jump, when `discontinuous`.
+    pub jump_at_ns: u64,
 }
 
 impl CalibrationSlot {
@@ -65,8 +75,37 @@ impl CalibrationSlot {
             nominal,
             correction: Transform3::IDENTITY,
             version: 0,
+            effective_ns: 0,
+            discontinuous: false,
+            jump_at_ns: 0,
         }
     }
+
+    /// The effective transform `Nominal × Correction` (`I-Q11`).
+    /// REQ: REQ-SPATIAL-003.
+    #[must_use]
+    pub fn effective(&self) -> Transform3 {
+        compose(&self.nominal, &self.correction)
+    }
+}
+
+/// The magnitude of a correction jump: the translation delta norm plus the
+/// rotation delta in radians (`I-Q7` jump-threshold tie-in). Used to decide
+/// whether a calibration update marks its local edge discontinuous.
+/// REQ: REQ-SPATIAL-003, REQ-SPATIAL-016.
+#[must_use]
+pub fn correction_jump(before: &Transform3, after: &Transform3) -> f64 {
+    let dt = (0..3)
+        .map(|i| (after.translation[i] - before.translation[i]).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let qa = before.quat();
+    let qb = after.quat();
+    let dot = (qa.x * qb.x + qa.y * qb.y + qa.z * qb.z + qa.w * qb.w)
+        .abs()
+        .clamp(0.0, 1.0);
+    let angle = 2.0 * dot.acos();
+    dt + angle
 }
 
 /// Per-pair cached geometry + the exact observed input-version vector (`I-Q2`).
@@ -211,7 +250,8 @@ impl QueryEngine {
     }
 
     /// Updates a calibration slot's correction, bumping its version so dependent
-    /// caches invalidate live (`I-Q11`).
+    /// caches invalidate live (`I-Q11`). Equivalent to [`Self::update_calibration_at`]
+    /// with an infinite jump threshold (never flags a discontinuity).
     ///
     /// # Errors
     /// [`SpatialError::PathNotFound`] for an unregistered slot.
@@ -221,13 +261,58 @@ impl QueryEngine {
         slot: u32,
         correction: Transform3,
     ) -> Result<(), SpatialError> {
+        self.update_calibration_at(slot, correction, 0, f64::INFINITY)
+    }
+
+    /// Updates a calibration slot's correction at effective instant
+    /// `effective_ns`, bumping its version so dependent caches invalidate live
+    /// with no recompilation or restart (`I-Q11`). When the correction jump
+    /// (translation delta norm + rotation delta radians) exceeds `jump_threshold`,
+    /// the slot is marked discontinuous at `effective_ns` (`I-Q7` tie-in); a
+    /// subsequent sub-threshold update clears the marker.
+    ///
+    /// # Errors
+    /// [`SpatialError::PathNotFound`] for an unregistered slot.
+    /// REQ: REQ-SPATIAL-003, REQ-SPATIAL-016.
+    pub fn update_calibration_at(
+        &mut self,
+        slot: u32,
+        correction: Transform3,
+        effective_ns: u64,
+        jump_threshold: f64,
+    ) -> Result<(), SpatialError> {
         let entry = self
             .calibration
             .get_mut(&slot)
             .ok_or(SpatialError::PathNotFound)?;
+        let jump = correction_jump(&entry.correction, &correction);
         entry.correction = correction;
         entry.version += 1;
+        entry.effective_ns = effective_ns;
+        if jump > jump_threshold {
+            entry.discontinuous = true;
+            entry.jump_at_ns = effective_ns;
+        } else {
+            entry.discontinuous = false;
+        }
         Ok(())
+    }
+
+    /// The live calibration slot `slot`, if registered (`I-Q11`).
+    /// REQ: REQ-SPATIAL-003.
+    #[must_use]
+    pub fn calibration(&self, slot: u32) -> Option<&CalibrationSlot> {
+        self.calibration.get(&slot)
+    }
+
+    /// Whether calibration slot `slot` is currently flagged discontinuous and
+    /// `t_ns` lies in its jump window `[jump_at_ns, ∞)` (`I-Q7`).
+    /// REQ: REQ-SPATIAL-003, REQ-SPATIAL-016.
+    #[must_use]
+    pub fn calibration_discontinuous_at(&self, slot: u32, t_ns: u64) -> bool {
+        self.calibration
+            .get(&slot)
+            .is_some_and(|c| c.discontinuous && t_ns >= c.jump_at_ns)
     }
 
     /// Sets the freshness contract: a result older than `freshness_ns` is
@@ -351,6 +436,7 @@ impl QueryEngine {
     fn local_offset(forest: &SpaceForest, frame: &str) -> Option<Transform3> {
         match forest.edge(frame) {
             Some(crate::forest::FrameEdge::Static(t)) => Some(t),
+            Some(crate::forest::FrameEdge::Calibrated { nominal, .. }) => Some(nominal),
             _ => None,
         }
     }
@@ -447,17 +533,45 @@ impl QueryEngine {
         edges
     }
 
-    /// The exact observed-version vector for a plan's dynamic inputs (`I-Q2`).
-    /// REQ: REQ-SPATIAL-002.
-    fn versions(edges: &SpatialEdgeCache, plan: &CompiledPlan) -> Vec<u64> {
-        Self::plan_edges(plan)
+    /// The calibration slots referenced by `plan`, de-duplicated in first-use
+    /// order (`I-Q11`).
+    /// REQ: REQ-SPATIAL-003.
+    fn plan_slots(plan: &CompiledPlan) -> Vec<u32> {
+        let mut slots = Vec::new();
+        for step in plan.steps() {
+            if let PlanStep::CalibrationSlot { slot, .. } = step
+                && !slots.contains(slot)
+            {
+                slots.push(*slot);
+            }
+        }
+        slots
+    }
+
+    /// The exact observed-version vector for a plan's dynamic-edge and
+    /// calibration-slot inputs (`I-Q2`). A slot update bumps its version, so a
+    /// plan containing that slot misses the cache and re-executes — no
+    /// recompilation, no restart (`I-Q11`).
+    /// REQ: REQ-SPATIAL-002, REQ-SPATIAL-003.
+    fn versions(
+        edges: &SpatialEdgeCache,
+        calibration: &BTreeMap<u32, CalibrationSlot>,
+        plan: &CompiledPlan,
+    ) -> Vec<u64> {
+        let mut out: Vec<u64> = Self::plan_edges(plan)
             .iter()
             .map(|e| {
                 edges
                     .slot(*e as usize)
                     .map_or(0, crate::cache::EdgeSlot::version)
             })
-            .collect()
+            .collect();
+        out.extend(
+            Self::plan_slots(plan)
+                .iter()
+                .map(|s| calibration.get(s).map_or(0, |c| c.version)),
+        );
+        out
     }
 
     /// Resolves a dynamic edge at `t_ns` from its history ring, mapping a
@@ -493,16 +607,21 @@ impl QueryEngine {
     }
 
     /// Resolves a calibration slot's `correction` effective at or before `t_ns`
-    /// (`Effective = Nominal × Correction`, `I-Q11`).
-    /// REQ: REQ-SPATIAL-003.
+    /// (`Effective = Nominal × Correction`, `I-Q11`). A slot whose correction
+    /// jump was flagged discontinuous and whose jump instant is at or before
+    /// `t_ns` sets `DISCONTINUITY_NEARBY` on the query (`I-Q7` tie-in).
+    /// REQ: REQ-SPATIAL-003, REQ-SPATIAL-016.
     fn calibration_at(
         calibration: &BTreeMap<u32, CalibrationSlot>,
+        t_ns: u64,
+        flags: &mut QualityFlags,
         slot: u32,
     ) -> Result<Transform3, SpatialError> {
-        calibration
-            .get(&slot)
-            .map(|c| c.correction)
-            .ok_or(SpatialError::PathNotFound)
+        let entry = calibration.get(&slot).ok_or(SpatialError::PathNotFound)?;
+        if entry.discontinuous && t_ns >= entry.jump_at_ns {
+            *flags = flags.with(FLAG_DISCONTINUITY_NEARBY);
+        }
+        Ok(entry.correction)
     }
 
     /// Computes the newest common coherent timestamp `t* = min_i(t_newest,i)`
@@ -512,8 +631,15 @@ impl QueryEngine {
     fn newest_common_time(&self, plan: &CompiledPlan) -> Option<u64> {
         let edges = Self::plan_edges(plan);
         if edges.is_empty() {
-            // A fully static plan has no time-varying input; any instant works.
-            return Some(0);
+            // No dynamic input. A calibration-only plan is coherent at the newest
+            // slot effective instant; a fully static plan works at any instant.
+            let mut t_star = 0_u64;
+            for slot in Self::plan_slots(plan) {
+                if let Some(c) = self.calibration.get(&slot) {
+                    t_star = t_star.max(c.effective_ns);
+                }
+            }
+            return Some(t_star);
         }
         let mut t_star = u64::MAX;
         for edge in &edges {
@@ -603,7 +729,7 @@ impl QueryEngine {
         let Some(t_star) = self.newest_common_time(&plan) else {
             return TransformResult::err(TransformError::OutOfHistory);
         };
-        let versions = Self::versions(&self.edges, &plan);
+        let versions = Self::versions(&self.edges, &self.calibration, &plan);
         if let Some(cached) = self.cached.get(&key)
             && cached.versions == versions
         {
@@ -620,15 +746,16 @@ impl QueryEngine {
             ));
             return result;
         }
-        let mut flags = QualityFlags::NONE;
+        let flags = std::cell::RefCell::new(QualityFlags::NONE);
         let histories = &self.histories;
         let edges = &self.edges;
         let calibration = &self.calibration;
         let resolved = execute_steps(
             plan.steps(),
-            |edge| Self::edge_at(histories, edges, t_star, &mut flags, edge),
-            |slot| Self::calibration_at(calibration, slot),
+            |edge| Self::edge_at(histories, edges, t_star, &mut flags.borrow_mut(), edge),
+            |slot| Self::calibration_at(calibration, t_star, &mut flags.borrow_mut(), slot),
         );
+        let flags = flags.into_inner();
         let receive = self.newest_receive_ns(&plan);
         match resolved {
             Ok(transform) => {
@@ -674,15 +801,16 @@ impl QueryEngine {
         let Some(plan) = Self::plan_at(&self.plans, target, reference, t_ns).cloned() else {
             return TransformResult::err(TransformError::PathNotFound);
         };
-        let mut flags = QualityFlags::NONE;
+        let flags = std::cell::RefCell::new(QualityFlags::NONE);
         let histories = &self.histories;
         let edges = &self.edges;
         let calibration = &self.calibration;
         let resolved = execute_steps(
             plan.steps(),
-            |edge| Self::edge_at(histories, edges, t_ns, &mut flags, edge),
-            |slot| Self::calibration_at(calibration, slot),
+            |edge| Self::edge_at(histories, edges, t_ns, &mut flags.borrow_mut(), edge),
+            |slot| Self::calibration_at(calibration, t_ns, &mut flags.borrow_mut(), slot),
         );
+        let flags = flags.into_inner();
         match resolved {
             Ok(transform) => {
                 let mut result = TransformResult::ok(transform, 0);

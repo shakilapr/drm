@@ -13,7 +13,8 @@ Usage:
 Default output: tests/fixtures/spatial/query_vectors.json
 
 REQ: REQ-SPATIAL-022, REQ-SPATIAL-024, REQ-SPATIAL-025, REQ-SPATIAL-023,
-REQ-SPATIAL-016, REQ-SPATIAL-028, REQ-SPATIAL-029.
+REQ-SPATIAL-016, REQ-SPATIAL-028, REQ-SPATIAL-029, REQ-SPATIAL-003,
+REQ-SPATIAL-011.
 """
 
 from __future__ import annotations
@@ -213,6 +214,81 @@ def build_discontinuity() -> list[dict]:
     }
 
 
+def build_calibration() -> list[dict]:
+    """Live calibration ground truth (I-Q11, I-Q7 tie-in).
+
+    `Effective = Nominal x Correction`; each case carries the nominal transform,
+    a sequence of corrections with their effective instants, and the jump
+    magnitude (translation-delta norm + rotation-delta radians) between the
+    previous and new correction. The jump-threshold discontinuity marker is set
+    when the magnitude exceeds the case threshold.
+    """
+    rng = np.random.default_rng(20260514)
+    out = []
+    for _ in range(8):
+        q_nom = q_normalize(rng.uniform(-1.0, 1.0, 4))
+        nominal = {"t": rng.uniform(-3.0, 3.0, 3).tolist(), "q": q_nom.tolist()}
+        q_c0 = q_normalize(rng.uniform(-1.0, 1.0, 4))
+        q_c1 = q_normalize(rng.uniform(-1.0, 1.0, 4))
+        c0 = {"t": rng.uniform(-2.0, 2.0, 3).tolist(), "q": q_c0.tolist()}
+        c1 = {"t": rng.uniform(-2.0, 2.0, 3).tolist(), "q": q_c1.tolist()}
+        delta_t = float(np.linalg.norm(np.array(c1["t"]) - np.array(c0["t"])))
+        dot = abs(float(np.dot(np.array(c0["q"]), np.array(c1["q"]))))
+        angle = 2.0 * math.acos(min(1.0, dot))
+        jump = delta_t + angle
+        threshold = jump * 0.5
+        effective = t_compose(nominal, c1)
+        out.append(
+            {
+                "nominal": nominal,
+                "corrections": [
+                    {"effective_ns": 100, "correction": c0},
+                    {"effective_ns": 300, "correction": c1},
+                ],
+                "jump": jump,
+                "threshold": threshold,
+                "discontinuous": jump > threshold,
+                "effective": effective,
+            }
+        )
+    return out
+
+
+def build_generational() -> list[dict]:
+    """Generational-handle ground truth (I-Q12/I-S12).
+
+    Each case names a frame, its parent, a reuse frame, and how many
+    create/delete cycles precede the final allocation. The generation of an index
+    equals its delete count, so `expected_generation = cycles` after `cycles`
+    deletes; every handle from a previous incarnation must be dead.
+    """
+    return {
+        "cases": [
+            {
+                "frame": "object/42",
+                "parent": "map",
+                "reuse_frame": "object/43",
+                "cycles": 1,
+                "expected_generation": 1,
+            },
+            {
+                "frame": "obstacle/7",
+                "parent": "odom",
+                "reuse_frame": "obstacle/8",
+                "cycles": 2,
+                "expected_generation": 2,
+            },
+            {
+                "frame": "track/9",
+                "parent": "odom",
+                "reuse_frame": "track/10",
+                "cycles": 3,
+                "expected_generation": 3,
+            },
+        ]
+    }
+
+
 def main() -> int:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else (
         Path(__file__).resolve().parents[1] / "fixtures" / "spatial" / "query_vectors.json"
@@ -225,12 +301,15 @@ def main() -> int:
         "bracket": build_bracket(),
         "reparent": build_reparent(),
         "discontinuity": build_discontinuity(),
+        "calibration": build_calibration(),
+        "generational": build_generational(),
     }
     out.write_text(json.dumps(payload, indent=2) + "\n")
     print(
         f"wrote {out} ({len(payload['interp'])} interp, "
         f"{len(payload['predict'])} predict, "
-        f"{len(payload['reparent'])} reparent)"
+        f"{len(payload['reparent'])} reparent, "
+        f"{len(payload['calibration'])} calibration)"
     )
     return 0
 

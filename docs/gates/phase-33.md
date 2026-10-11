@@ -20,8 +20,10 @@ interpolation + discontinuity guard, and live calibration
 ([m20w1.md](m20w1.md)); M20W2 added per-edge discontinuity markers with the
 interpolation guard, the time-scoped plan registry, and transactional
 reparenting (Preserve World/Local/Snap) with atomic tree commit
-([m20w2.md](m20w2.md)). The dynamic hash grid, compiled BVH, and live
-calibration/overlay handles remain M20W3–M22.
+([m20w2.md](m20w2.md)); M20W3 added live calibration slots with a jump-threshold
+discontinuity marker, the generational overlay-handle registry, and OS-backed
+single-writer edge authority ([m20w3.md](m20w3.md)). The dynamic hash grid,
+compiled BVH, and exact memory verification remain M21–M22.
 
 ## Wave A (M19) — types, spaces, collapse
 
@@ -43,7 +45,7 @@ calibration/overlay handles remain M20W3–M22.
 | Coherent `latest`, `at`, `predict` (exp-map), `delayed_view` | `crates/drm-spatial/src/query.rs` + `src/history.rs` + `src/transform.rs` (`exp_twist`); `queries` suite + `query_oracle.py` (I-Q1..I-Q6, REQ-SPATIAL-022/023/024/025) | PASS (M20W1) |
 | Independent mathematical reference implementation | `tests/oracle/spatial_oracle.py`, `tests/oracle/clock_oracle.py`, `tests/oracle/conventions_oracle.py`, `tests/oracle/query_oracle.py` (NumPy); `math`/`clocks`/`conventions`/`queries` suites | PASS (M19W1–M20W1) |
 | Incremental dynamic hash grid; compiled BVH; proximity completeness | — | pending (M20+) |
-| Historical reparenting (Preserve World/Local/Snap, atomic commit); live calibration; generational overlay | `crates/drm-spatial/src/query.rs` (`ReparentMode`, `reparent`, time-scoped `PlanVersion`) + `src/forest.rs` (`TreeTxn`); `reparent` suite + `query_oracle.py` (I-Q7..I-Q10, REQ-SPATIAL-016/027/028/029) — landed M20W2; live calibration + generational overlay | partial (M20W2); pending M20W3 |
+| Historical reparenting (Preserve World/Local/Snap, atomic commit); live calibration; generational overlay | `crates/drm-spatial/src/query.rs` (`ReparentMode`, `reparent`, time-scoped `PlanVersion`, `CalibrationSlot`/`update_calibration_at`) + `src/forest.rs` (`TreeTxn`, `add_calibration`) + `src/handle.rs` (`HandleRegistry`) + `src/writer.rs` (`EdgeAuthority`); `reparent`/`calibration` suites + `query_oracle.py` (I-Q7..I-Q12, I-S11/I-S12, REQ-SPATIAL-003/011/016/027/028/029/030) | PASS (M20W2–M20W3) |
 | Exact spatial memory verification | — | pending (M21+) |
 
 ## Notes

@@ -25,6 +25,7 @@ fn fold(path: &[PathEdge]) -> Transform3 {
         let next = match edge {
             PathEdge::Constant(t) | PathEdge::Bridge(t) => *t,
             PathEdge::Dynamic(_) => Transform3::IDENTITY,
+            PathEdge::Calibrated { nominal, .. } => *nominal,
         };
         acc = drm_spatial::compose(&next, &acc);
     }

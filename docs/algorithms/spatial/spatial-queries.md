@@ -33,6 +33,7 @@ pub enum PlanStep {
     Constant(Transform3),                       // collapsed static run (build-time)
     CalibrationSlot { nominal: Transform3, slot: CalibrationSlotId },  // Effective = Nominal × Correction
     DynamicEdge { edge: EdgeId },               // runtime cache read (version-checked)
+    Invert,                                     // replace top of stack with its inverse; a reverse-traversed calibration edge is (Nominal × Correction)⁻¹
     Multiply,                                   // fold two top-of-stack transforms
 }
 pub struct TransformPlan { steps: &'static [PlanStep], max_stack: u16 } // generated fixed artifact
@@ -295,8 +296,8 @@ fn reparent(&self, obj: FrameId, new_parent: FrameId, mode: ReparentMode, at_ns:
 | `spatial_reparent_modes` ×3 vs oracle | I-Q9 |
 | `spatial_reparent_world_continuity` (Preserve World world-pose continuity) | I-Q9 |
 | `spatial_reparent_atomic` (concurrent readers) | I-Q10 |
-| `spatial_calibration_live` (slot bump → cache invalidation) | I-Q11 |
-| `spatial_generational_edges` | I-Q12 |
+| `spatial_calibration_live` (slot bump → cache invalidation; `cargo test -p drm-spatial calibration`) | I-Q11 |
+| `spatial_calibration_generational_edges` (delete invalidates outstanding handle; `... calibration`) | I-Q12 |
 | `spatial_history_sizing` (N ≥ ⌊H/P⌋ + 2 enforced; unsatisfiable rejected; faster-than-P ⇒ `DensityViolation`) | I-Q13 |
 | `spatial_history_order` (shuffled + duplicate timestamps vs oracle) | I-Q13 |
 | `spatial_slot_coherence` (writer/readers) | I-Q14: coherent or `ConcurrentUpdate` |
