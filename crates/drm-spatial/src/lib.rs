@@ -23,12 +23,23 @@
 pub mod cache;
 pub mod clock;
 pub mod geodetic;
+pub mod plan;
 pub mod transform;
 pub mod types;
 
-pub use cache::{EdgeSlot, SpatialEdgeCache, WriterClaim};
-pub use clock::{ClockDomain, ClockIdentity, ClockMapping, ClockTable, GlobalSource, TimePoint};
+pub use cache::{
+    CachedSample, EdgeSample, EdgeSlot, FLAG_DISCONTINUOUS, SpatialEdgeCache, WriterClaim,
+};
+pub use clock::{
+    ClockDomain, ClockIdentity, ClockMapping, ClockTable, GlobalSource, TimePoint, map_timestamp,
+    map_timestamp_with_uncertainty,
+};
 pub use geodetic::{Ecef, Enu, Lla, geodetic_to_enu, tangent_plane_enu, wgs84_to_ecef};
+pub use plan::{
+    FLAG_DISCONTINUITY_NEARBY, FLAG_EXTRAPOLATED, FLAG_STALE, MAX_PLAN_DEPTH, ObservedVersions,
+    PlanCache, PlanStep, QualityFlags, TransformError, TransformPlan, TransformResult,
+    execute_plan, observe_versions,
+};
 pub use transform::{compose, transform_direction, transform_point, transform_vector};
 pub use types::{
     Direction3, Point3, Pose3, SpatialError, SpatialHandle, SpatialId, Stamped, Transform3, Twist3,

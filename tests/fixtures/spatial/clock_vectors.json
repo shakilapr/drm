@@ -1,0 +1,275 @@
+{
+  "generated_by": "tests/oracle/clock_oracle.py",
+  "cases": [
+    {
+      "mapping": {
+        "to_ref_ns": 2000000,
+        "from_ref_ns": 1000000,
+        "rate_ratio": 1.000002,
+        "uncertainty_at_ref_ns": 50,
+        "uncertainty_growth": 1e-05,
+        "valid_from_ns": 0,
+        "valid_until_ns": 10000000
+      },
+      "t_from_ns": 1000000,
+      "resolved": true,
+      "t_to_ns": 2000000,
+      "uncertainty_ns": 50
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 2000000,
+        "from_ref_ns": 1000000,
+        "rate_ratio": 1.000002,
+        "uncertainty_at_ref_ns": 50,
+        "uncertainty_growth": 1e-05,
+        "valid_from_ns": 0,
+        "valid_until_ns": 10000000
+      },
+      "t_from_ns": 1000001,
+      "resolved": true,
+      "t_to_ns": 2000001,
+      "uncertainty_ns": 50
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 2000000,
+        "from_ref_ns": 1000000,
+        "rate_ratio": 1.000002,
+        "uncertainty_at_ref_ns": 50,
+        "uncertainty_growth": 1e-05,
+        "valid_from_ns": 0,
+        "valid_until_ns": 10000000
+      },
+      "t_from_ns": 1010000,
+      "resolved": true,
+      "t_to_ns": 2010000,
+      "uncertainty_ns": 50
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 2000000,
+        "from_ref_ns": 1000000,
+        "rate_ratio": 1.000002,
+        "uncertainty_at_ref_ns": 50,
+        "uncertainty_growth": 1e-05,
+        "valid_from_ns": 0,
+        "valid_until_ns": 10000000
+      },
+      "t_from_ns": 1100000,
+      "resolved": true,
+      "t_to_ns": 2100000,
+      "uncertainty_ns": 51
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 2000000,
+        "from_ref_ns": 1000000,
+        "rate_ratio": 1.000002,
+        "uncertainty_at_ref_ns": 50,
+        "uncertainty_growth": 1e-05,
+        "valid_from_ns": 0,
+        "valid_until_ns": 10000000
+      },
+      "t_from_ns": 2000000,
+      "resolved": true,
+      "t_to_ns": 3000002,
+      "uncertainty_ns": 60
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 2000000,
+        "from_ref_ns": 1000000,
+        "rate_ratio": 1.000002,
+        "uncertainty_at_ref_ns": 50,
+        "uncertainty_growth": 1e-05,
+        "valid_from_ns": 0,
+        "valid_until_ns": 10000000
+      },
+      "t_from_ns": 900000,
+      "resolved": true,
+      "t_to_ns": 1899999,
+      "uncertainty_ns": 51
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 0,
+        "from_ref_ns": 0,
+        "rate_ratio": 0.999998,
+        "uncertainty_at_ref_ns": 0,
+        "uncertainty_growth": 0.0,
+        "valid_from_ns": 0,
+        "valid_until_ns": 1000000000
+      },
+      "t_from_ns": 0,
+      "resolved": true,
+      "t_to_ns": 0,
+      "uncertainty_ns": 0
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 0,
+        "from_ref_ns": 0,
+        "rate_ratio": 0.999998,
+        "uncertainty_at_ref_ns": 0,
+        "uncertainty_growth": 0.0,
+        "valid_from_ns": 0,
+        "valid_until_ns": 1000000000
+      },
+      "t_from_ns": 1,
+      "resolved": true,
+      "t_to_ns": 0,
+      "uncertainty_ns": 0
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 0,
+        "from_ref_ns": 0,
+        "rate_ratio": 0.999998,
+        "uncertainty_at_ref_ns": 0,
+        "uncertainty_growth": 0.0,
+        "valid_from_ns": 0,
+        "valid_until_ns": 1000000000
+      },
+      "t_from_ns": 10000,
+      "resolved": true,
+      "t_to_ns": 9999,
+      "uncertainty_ns": 0
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 0,
+        "from_ref_ns": 0,
+        "rate_ratio": 0.999998,
+        "uncertainty_at_ref_ns": 0,
+        "uncertainty_growth": 0.0,
+        "valid_from_ns": 0,
+        "valid_until_ns": 1000000000
+      },
+      "t_from_ns": 100000,
+      "resolved": true,
+      "t_to_ns": 99999,
+      "uncertainty_ns": 0
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 0,
+        "from_ref_ns": 0,
+        "rate_ratio": 0.999998,
+        "uncertainty_at_ref_ns": 0,
+        "uncertainty_growth": 0.0,
+        "valid_from_ns": 0,
+        "valid_until_ns": 1000000000
+      },
+      "t_from_ns": 1000000,
+      "resolved": true,
+      "t_to_ns": 999998,
+      "uncertainty_ns": 0
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 0,
+        "from_ref_ns": 0,
+        "rate_ratio": 0.999998,
+        "uncertainty_at_ref_ns": 0,
+        "uncertainty_growth": 0.0,
+        "valid_from_ns": 0,
+        "valid_until_ns": 1000000000
+      },
+      "t_from_ns": -100000,
+      "resolved": false,
+      "t_to_ns": null,
+      "uncertainty_ns": null
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 500,
+        "from_ref_ns": 1000,
+        "rate_ratio": 1.0,
+        "uncertainty_at_ref_ns": 25,
+        "uncertainty_growth": 0.001,
+        "valid_from_ns": 500,
+        "valid_until_ns": 5000
+      },
+      "t_from_ns": 1000,
+      "resolved": true,
+      "t_to_ns": 500,
+      "uncertainty_ns": 25
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 500,
+        "from_ref_ns": 1000,
+        "rate_ratio": 1.0,
+        "uncertainty_at_ref_ns": 25,
+        "uncertainty_growth": 0.001,
+        "valid_from_ns": 500,
+        "valid_until_ns": 5000
+      },
+      "t_from_ns": 1001,
+      "resolved": true,
+      "t_to_ns": 501,
+      "uncertainty_ns": 25
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 500,
+        "from_ref_ns": 1000,
+        "rate_ratio": 1.0,
+        "uncertainty_at_ref_ns": 25,
+        "uncertainty_growth": 0.001,
+        "valid_from_ns": 500,
+        "valid_until_ns": 5000
+      },
+      "t_from_ns": 11000,
+      "resolved": false,
+      "t_to_ns": null,
+      "uncertainty_ns": null
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 500,
+        "from_ref_ns": 1000,
+        "rate_ratio": 1.0,
+        "uncertainty_at_ref_ns": 25,
+        "uncertainty_growth": 0.001,
+        "valid_from_ns": 500,
+        "valid_until_ns": 5000
+      },
+      "t_from_ns": 101000,
+      "resolved": false,
+      "t_to_ns": null,
+      "uncertainty_ns": null
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 500,
+        "from_ref_ns": 1000,
+        "rate_ratio": 1.0,
+        "uncertainty_at_ref_ns": 25,
+        "uncertainty_growth": 0.001,
+        "valid_from_ns": 500,
+        "valid_until_ns": 5000
+      },
+      "t_from_ns": 1001000,
+      "resolved": false,
+      "t_to_ns": null,
+      "uncertainty_ns": null
+    },
+    {
+      "mapping": {
+        "to_ref_ns": 500,
+        "from_ref_ns": 1000,
+        "rate_ratio": 1.0,
+        "uncertainty_at_ref_ns": 25,
+        "uncertainty_growth": 0.001,
+        "valid_from_ns": 500,
+        "valid_until_ns": 5000
+      },
+      "t_from_ns": -99000,
+      "resolved": false,
+      "t_to_ns": null,
+      "uncertainty_ns": null
+    }
+  ]
+}

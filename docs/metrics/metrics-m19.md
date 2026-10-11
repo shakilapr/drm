@@ -62,13 +62,67 @@ cargo xtask check-layering
 cargo xtask audit-traceability
 ```
 
+## M19W2 — Clock Domains, Versioned Cache Runtime
+
+| Variable | Target | Measured |
+|---|---|---|
+| `CLOCKS_GREEN` | four-domain mapping + drift/uncertainty + unresolved rejection (I-S6/I-S7) | 1 — `crates/drm-spatial/src/clock.rs`; `cargo test -p drm-spatial clocks` compares 18 oracle cases against `tests/oracle/clock_oracle.py` (independent offset/drift/uncertainty math); four-domain distinctness, epoch-bump invalidation, and monotonic-uncertainty suites green |
+| `CACHE_GREEN` | versioned cache read/write + generation guards green | 1 — `crates/drm-spatial/src/cache.rs` (versioned seqlock `EdgeSlot`, sample/receive `TimePoint`s, `FLAG_DISCONTINUOUS`) + `crates/drm-spatial/src/plan.rs` (`TransformPlan`, `execute_plan`, `PlanCache`); `cargo test -p drm-spatial cache` green (`spatial_cache_shortcircuit`, `spatial_cache_aging`, version semantics, discontinuity round trip, single-writer boundary) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- **Clock mapping** (`crates/drm-spatial/src/clock.rs`): the four exact domains
+  (`REQ-SPATIAL-004`), drift application via the affine rate ratio, bounded
+  uncertainty propagation into `TransformResult.clock_uncertainty_ns`
+  (`REQ-SPATIAL-041`), and unresolved/out-of-validity rejection as
+  `SpatialError::ClockUnresolved` (`I-S7`, `REQ-SPATIAL-051`).
+- **Cache runtime** (`crates/drm-spatial/src/cache.rs`): dynamic-edge SHM slots
+  (id, transform, sample + receive `TimePoint`, version, discontinuous flag)
+  with an odd/even seqlock version counter; generation-guarded delete
+  (`REQ-SPATIAL-050`/`REQ-SPATIAL-035`/`REQ-SPATIAL-011`); single-writer
+  authority (`REQ-SPATIAL-030`).
+- **Plan cache** (`crates/drm-spatial/src/plan.rs`): compiled
+  `TransformPlan`/`PlanStep` execution (fixed stack, zero heap, `I-Q1`/`I-Q15`),
+  the per-process `PlanCache` version-stamp geometry shortcircuit with an exact
+  observed-version vector (`I-Q2`, `REQ-SPATIAL-002`), and the `TransformResult`
+  status object (`REQ-SPATIAL-032`).
+- **E4 clock oracle** (`tests/oracle/clock_oracle.py`,
+  `tests/fixtures/spatial/clock_vectors.json`): an independent implementation of
+  the affine mapping and bounded uncertainty growth.
+- **Docs / evidence**: [m19w2.md](../gates/m19w2.md),
+  [phase-33.md](../gates/phase-33.md); registry rows promoted to `tested`.
+
+### Weekly gate checklist (chaired by E1, Friday)
+
+- [x] `CLOCKS_GREEN = 1`; `CACHE_GREEN = 1`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M19W2) = PASS`**
+
+### How to reproduce
+
+```text
+python3 tests/oracle/clock_oracle.py
+cargo test -p drm-spatial clocks
+cargo test -p drm-spatial cache
+cargo test -p drm-spatial
+cargo xtask fmt --check
+cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask test
+cargo xtask check-layering
+cargo xtask audit-traceability
+```
+
 ## Carry-over
 
-- Clock-domain resolution to full production (degradation paths) ⇒ M19W2 (E2).
-- Runtime edge-cache consumption by queries ⇒ M19W2 (E1).
-- `spaces/`/`index.drm` directory-layer wiring into `WorkspaceModel` ⇒ M19W2+.
+- Clock-domain degradation paths to full production ⇒ M20 (E2).
+- Coherent `latest`/`at`/`predict`/`delayed_view` query semantics ⇒ M20 (E1).
+- `spaces/`/`index.drm` directory-layer wiring into `WorkspaceModel` ⇒ M19W3+.
+- Geodetic boundary precision ⇒ M19W3 (E2); forest queries ⇒ M19W3 (E1).
 
-REQ: REQ-SPATIAL-004, REQ-SPATIAL-005, REQ-SPATIAL-009, REQ-SPATIAL-012,
-REQ-SPATIAL-017, REQ-SPATIAL-030, REQ-SPATIAL-031, REQ-SPATIAL-036,
-REQ-SPATIAL-038, REQ-SPATIAL-041, REQ-SPATIAL-047, REQ-SPATIAL-048,
-REQ-SPATIAL-049, REQ-SPATIAL-050, REQ-SPATIAL-051.
+REQ: REQ-SPATIAL-002, REQ-SPATIAL-004, REQ-SPATIAL-005, REQ-SPATIAL-009,
+REQ-SPATIAL-012, REQ-SPATIAL-017, REQ-SPATIAL-030, REQ-SPATIAL-031,
+REQ-SPATIAL-034, REQ-SPATIAL-035, REQ-SPATIAL-036, REQ-SPATIAL-038,
+REQ-SPATIAL-041, REQ-SPATIAL-047, REQ-SPATIAL-048, REQ-SPATIAL-049,
+REQ-SPATIAL-050, REQ-SPATIAL-051.

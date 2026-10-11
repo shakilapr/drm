@@ -160,6 +160,24 @@ pub fn map_timestamp(
     to: ClockDomain,
     table: &ClockTable,
 ) -> Result<TimePoint, SpatialError> {
+    map_timestamp_with_uncertainty(t, to, table).map(|(mapped, _)| mapped)
+}
+
+/// Maps a timestamp into target domain `to` and reports the mapping's propagated
+/// uncertainty in nanoseconds (`I-S7`). The affine relation
+/// `t_to = to_ref + r·(t_from − from_ref)` applies the drift rate; uncertainty
+/// at the source instant grows per the mapping's bounded
+/// `uncertainty_growth`.
+///
+/// # Errors
+/// [`SpatialError::ClockUnresolved`] for a missing mapping, a mapping outside
+/// its validity interval, a non-finite rate, or a non-representable result.
+/// REQ: REQ-SPATIAL-004, REQ-SPATIAL-041, REQ-SPATIAL-051.
+pub fn map_timestamp_with_uncertainty(
+    t: TimePoint,
+    to: ClockDomain,
+    table: &ClockTable,
+) -> Result<(TimePoint, u64), SpatialError> {
     let Some(m) = table.resolve(t.clock, to) else {
         return Err(SpatialError::ClockUnresolved);
     };
@@ -174,10 +192,13 @@ pub fn map_timestamp(
     if !mapped.is_finite() || mapped < 0.0 || mapped > u64::MAX as f64 {
         return Err(SpatialError::ClockUnresolved);
     }
-    Ok(TimePoint {
-        value_ns: mapped as u64,
-        clock: m.to,
-    })
+    Ok((
+        TimePoint {
+            value_ns: mapped as u64,
+            clock: m.to,
+        },
+        m.uncertainty_ns(from_ns),
+    ))
 }
 
 #[cfg(test)]
@@ -273,5 +294,53 @@ mod tests {
             .unwrap_or_else(|| unreachable!("mapping present"));
         assert_eq!(m.uncertainty_ns(0), 10);
         assert_eq!(m.uncertainty_ns(10_000), 20);
+    }
+
+    /// REQ: REQ-SPATIAL-041 — the drift rate scales the elapsed source interval
+    /// and the propagated uncertainty is the mapping's value at the source
+    /// instant.
+    #[test]
+    fn drift_and_uncertainty_propagated() {
+        let mut t = ClockTable::new();
+        t.insert(
+            ClockIdentity::new(ClockDomain::Global(crate::clock::GlobalSource::Ptp)),
+            ClockMapping {
+                to: ClockIdentity::new(ClockDomain::HostMonotonic),
+                from_ref_ns: 1_000_000,
+                to_ref_ns: 2_000_000,
+                rate_ratio: 1.000_002,
+                uncertainty_at_ref_ns: 50,
+                uncertainty_growth: 0.000_01,
+                valid_from_ns: 0,
+                valid_until_ns: 10_000_000,
+                generation: 1,
+            },
+        );
+        // Elapsed = 100_000 ns from ref ⇒ drift adds 0.2 ns.
+        let (out, unc) = super::map_timestamp_with_uncertainty(
+            TimePoint::new(
+                1_100_000,
+                ClockIdentity::new(ClockDomain::Global(crate::clock::GlobalSource::Ptp)),
+            ),
+            ClockDomain::HostMonotonic,
+            &t,
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(out.value_ns, 2_100_000);
+        // uncertainty = 50 + 0.00001 * 100_000 = 51.
+        assert_eq!(unc, 51);
+    }
+
+    /// REQ: REQ-SPATIAL-004 — a mapping outside its validity interval is
+    /// unresolved, never silently extrapolated (`I-S7`).
+    #[test]
+    fn out_of_validity_rejected() {
+        let t = table();
+        let out = map_timestamp(
+            TimePoint::new(50_000, ClockIdentity::new(ClockDomain::Device(7))),
+            ClockDomain::HostMonotonic,
+            &t,
+        );
+        assert_eq!(out, Err(SpatialError::ClockUnresolved));
     }
 }
