@@ -9,6 +9,8 @@ on:
       - "bindings/c/**"
       - "crates/drm-router/src/transport/serial.rs"
       - ".github/workflows/mcu-cross.yml"
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:

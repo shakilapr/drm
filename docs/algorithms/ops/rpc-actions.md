@@ -215,6 +215,27 @@ phase, and one `Terminal`; a cancel at boundary `k` observes exactly one
 
 REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-013, REQ-OPS-025.
 
+## Gate evidence (M17W1)
+
+Phase 32 close-out re-runs the RPC gate as executable evidence: `cargo test -p
+drm-rpc` 12/12 — `dispatch_concurrent_no_cross_correlation` (`I-RPC1`, `C ∈
+1..=16`: every client receives its own distinct response, zero stale),
+`cancel_at_each_phase_boundary` + `action_runs_all_phases` +
+`cancel_accepted_terminal_cancelled` (`I-RPC2`), and
+`dispatch_timeout_expires_and_late_terminal_stale` (`I-RPC3`: `RpcTimeout` plus a
+best-effort `Cancel`; the late terminal is dropped stale by cid). The `rpc_capacity`
+cell of the test matrix lands as `rpc_capacity_busy_gap_forward` (`I-RPC6`/
+`I-RPC7`): a full client correlation table returns `RpcError::Busy`; a full
+server operation table consumes nothing and the retained request is forwarded and
+served once a slot frees (`publish ≠ accepted`). No invariant changed.
+
+| Element | Location | Test |
+|---|---|---|
+| no cross-correlation, cancel, timeout | `crates/drm-rpc/src/tests.rs` | `dispatch_concurrent_no_cross_correlation`, `cancel_at_each_phase_boundary`, `dispatch_timeout_expires_and_late_terminal_stale` |
+| capacity + gap-forwarding (`RpcBusy`) | `crates/drm-rpc/src/tests.rs` | `rpc_capacity_busy_gap_forward` |
+
+REQ: REQ-OPS-011, REQ-OPS-013, REQ-OPS-021, REQ-OPS-022, REQ-OPS-023.
+
 ## Edge Cases & Errors
 
 | Case | Result |

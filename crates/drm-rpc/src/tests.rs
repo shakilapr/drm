@@ -4,7 +4,8 @@
 //! M16W2 adds the action phase machine with phase-boundary cancellation and the
 //! C ∈ 1..=16 dispatch fixture; M16W3 observes the per-phase state-transition
 //! sequence (`Accepted`→`Started`→`Progress`*→`Terminal`) and the `CancelAccepted`
-//! ack at the next phase boundary.
+//! ack at the next phase boundary; M17W1 adds `rpc_capacity_busy_gap_forward`
+//! (I-RPC6/I-RPC7 capacity + gap-forwarding).
 //! REQ: REQ-OPS-010, REQ-OPS-011, REQ-OPS-012, REQ-OPS-013, REQ-OPS-020,
 //! REQ-OPS-021, REQ-OPS-022, REQ-OPS-023, REQ-OPS-025.
 
@@ -390,6 +391,88 @@ fn dispatch_admission_busy() {
         1,
         "second request stays published, never consumed without a slot"
     );
+}
+
+/// REQ: REQ-OPS-021 — I-RPC6/I-RPC7 capacity: a full client correlation table
+/// returns [`RpcError::Busy`]; a full server operation table consumes nothing
+/// (the request stays published), and once a slot frees the retained request is
+/// forwarded and served (`publish ≠ accepted`).
+#[test]
+fn rpc_capacity_busy_gap_forward() {
+    // Client side: `max_in_flight = 1` ⇒ the second `submit` is `Busy` and the
+    // first stays in flight (nothing published without a reserved waiter).
+    let cr = topic();
+    let cc = topic();
+    let ce = topic();
+    let mut solo =
+        RpcClient::new(0, 1, &cr, &cc, &ce, 1).unwrap_or_else(|e| unreachable!("client: {e:?}"));
+    let _first = solo
+        .submit(b"a", None, 0)
+        .unwrap_or_else(|e| unreachable!("submit: {e:?}"));
+    assert_eq!(solo.submit(b"b", None, 0).err(), Some(RpcError::Busy));
+    assert_eq!(solo.in_flight(), 1, "rejected submit reserved nothing");
+
+    // Server side: operation-table capacity 1 with two clients.
+    let r0 = topic();
+    let c0 = topic();
+    let e0 = topic();
+    let r1 = topic();
+    let c1 = topic();
+    let e1 = topic();
+    let mut clients = [
+        RpcClient::new(0, 1, &r0, &c0, &e0, 2).unwrap_or_else(|e| unreachable!("c0: {e:?}")),
+        RpcClient::new(1, 1, &r1, &c1, &e1, 2).unwrap_or_else(|e| unreachable!("c1: {e:?}")),
+    ];
+    let links = vec![
+        ClientLink::new(0, &r0, &c0, &e0).unwrap_or_else(|e| unreachable!("l0: {e:?}")),
+        ClientLink::new(1, &r1, &c1, &e1).unwrap_or_else(|e| unreachable!("l1: {e:?}")),
+    ];
+    let mut server =
+        RpcServer::new(5, Echo, links, 1).unwrap_or_else(|e| unreachable!("server: {e:?}"));
+
+    let cid0 = clients[0]
+        .submit(b"first", None, 0)
+        .unwrap_or_else(|e| unreachable!("submit0: {e:?}"));
+    let cid1 = clients[1]
+        .submit(b"second", None, 0)
+        .unwrap_or_else(|e| unreachable!("submit1: {e:?}"));
+
+    server
+        .serve_step(0)
+        .unwrap_or_else(|e| unreachable!("serve: {e:?}"));
+    assert_eq!(server.operations_in_use(), 1, "one slot reserved");
+    assert_eq!(server.ready(), 1, "one operation scheduled");
+    assert_eq!(r1.write_seq(), 1, "second request stays published (gap)");
+
+    // Complete the admitted operation; the slot frees and the next reactor pass
+    // forwards the retained second request (gap-forwarding).
+    server.run_workers();
+    assert_eq!(server.served(), 1);
+    server
+        .serve_step(0)
+        .unwrap_or_else(|e| unreachable!("forward: {e:?}"));
+    assert_eq!(server.operations_in_use(), 1, "retained request admitted");
+    server.run_workers();
+    server
+        .serve_step(0)
+        .unwrap_or_else(|e| unreachable!("flush: {e:?}"));
+    assert_eq!(server.served(), 2, "both requests eventually served");
+
+    for client in &mut clients {
+        client
+            .pump(0)
+            .unwrap_or_else(|e| unreachable!("pump: {e:?}"));
+    }
+    let reply0 = clients[0]
+        .take(cid0)
+        .unwrap_or_else(|| unreachable!("reply0 missing"))
+        .unwrap_or_else(|e| unreachable!("reply0: {e:?}"));
+    let reply1 = clients[1]
+        .take(cid1)
+        .unwrap_or_else(|| unreachable!("reply1 missing"))
+        .unwrap_or_else(|e| unreachable!("reply1: {e:?}"));
+    assert_eq!(reply0, b"first");
+    assert_eq!(reply1, b"second");
 }
 
 /// REQ: REQ-OPS-020 — I-RPC9: a request carrying a stale non-zero session is

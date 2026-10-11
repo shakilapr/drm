@@ -114,6 +114,20 @@ jobs:
       - name: dev-mode smoke
         run: cargo test -p drm-cli --test dev_smoke
 
+  mcu:
+    # MCU host parity + zero-forbidden-heap audit, wired as a permanent blocking
+    # gate on every PR/push (regression permanence, AGENTS #14; work-plan
+    # M17W1-E3-T1). Cross-compilation against the pinned Arm toolchain stays in
+    # mcu-cross.yml; this job keeps the in-session-green host suites required.
+    # REQ: REQ-CORE-087, REQ-OPS-004.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: host parity self-test
+        run: make -C bindings/c/mcu host-test
+      - name: zero-forbidden-heap symbol audit
+        run: make -C bindings/c/mcu host-audit
+
   conformance:
     # Golden primitive parity across decoders (tests/conformance/README.md).
     runs-on: ubuntu-latest

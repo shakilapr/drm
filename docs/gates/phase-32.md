@@ -7,8 +7,8 @@ Normative sources: [work-plan.md](../../work-plan.md) W6 Phase 32;
 [serial-mcu.md](../algorithms/router/serial-mcu.md). Owner: E1 (trace/RPC),
 E2 (spatial parser groundwork), E3 (serial/MCU), E4 (introspection/diag).
 
-Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
-([tooling-design-lock.md](../spec/tooling-design-lock.md)).
+Status: **IN PROGRESS** (opens M15, Phase 32 gate at M17W2). Sub-designs locked
+at M14W4 ([tooling-design-lock.md](../spec/tooling-design-lock.md)).
 
 ## Wave A (M15) — introspection + trace + diag + MCU start
 
@@ -33,6 +33,10 @@ Status: **IN PROGRESS** (opens M15, closes M19). Sub-designs locked at M14W4
 | Serial host↔MCU interop matrix byte-exact | `serial_cobs_golden`/`mcu_host_interop_matrix`; `bindings/c/mcu/selftest.c` `test_interop_matrix` (I-SR3/I-SR4/I-SR6, REQ-OPS-004/REQ-ROUTE-025/026); [m16w3.md](m16w3.md) | PASS (M16W3) |
 | Record/replay sub-gate (borrow scope, bounded, policies, MCAP interop, replay faithful) | `crates/drm-record/src/{lib,mcap,replay}.rs`; `record_borrow_scope`/`record_bounded`/`record_policies`/`replay_roundtrip`/`record_mcap_interop` (I-RC1..I-RC4/I-RC6, REQ-OPS-005..009); [m16w4.md](m16w4.md) | PASS (M16W4) |
 | Serial/interop sub-gate (cross-decode, corruption, oversize, zero-heap audit) | `crates/drm-router/src/transport/serial.rs`; `mcu_host_interop_matrix`/`serial_corruption`/`serial_oversize`; `make -C bindings/c/mcu host-audit` (I-SR2/I-SR3/I-SR5/I-SR6, REQ-ROUTE-025/026/REQ-CORE-087); [m16w4.md](m16w4.md) | PASS (M16W4) |
+| Introspection gate (read-only, no-pin, rate tolerance) | `crates/drm-diag/src/tests.rs`; `introspect_no_pin`/`diag_observed_rate`/`observer_copies_owned_bytes`/`log_level_filter` (I-OB3/I-OB5, REQ-OPS-001/003); [m17w1.md](m17w1.md) | PASS (M17W1) |
+| Trace gate (never-blocks, drop transparency) | `crates/drm-core/tests/trace.rs`; `trace_never_blocks`/`trace_drop_counter`/`trace_lane_exhaustion` (I-OB1/I-OB6, REQ-OPS-015/017); [m17w1.md](m17w1.md) | PASS (M17W1) |
+| RPC gate (correlation, cancel, timeout, capacity) | `crates/drm-rpc/src/tests.rs`; `dispatch_concurrent_no_cross_correlation`/`cancel_at_each_phase_boundary`/`dispatch_timeout_expires_and_late_terminal_stale`/`rpc_capacity_busy_gap_forward` (I-RPC1..I-RPC3/I-RPC6/I-RPC7, REQ-OPS-011/013/021/023); [m17w1.md](m17w1.md) | PASS (M17W1) |
+| MCU regression gates wired permanently | `.github/workflows/ci.yml` `mcu` job (`host-test`/`host-audit`); `.github/workflows/mcu-cross.yml` `push: [main]` (I-SR5, REQ-CORE-087); [m17w1.md](m17w1.md) | PASS (M17W1) |
 
 ## Phase 32 submodule suite mapping (M16W2–M16W3)
 
@@ -48,6 +52,25 @@ and result. `PASS` = green in-session; `deferred` = hardware/CI-owned lane.
 | RPC / actions | `crates/drm-rpc/src/{lib,codec,client,server,action}.rs` | `call_round_trip`, `dispatch_concurrent_no_cross_correlation` (C ∈ 1..=16), `cancel_at_each_phase_boundary`, `action_runs_all_phases` | PASS |
 | Handles / toolchain | `crates/drm-workspace/src/model/handles.rs`; `crates/drm-cli/src/ids.rs` | `handle_compact_gate`, `handle_compact_scope`, `handle_compact_guidance`, `ids_report_is_deterministic`, `compact_guidance_checklist` | PASS |
 | Serial / MCU | `crates/drm-router/src/transport/serial.rs`; `bindings/c/mcu/` | `serial_cobs_golden`, `mcu_host_interop_matrix`; `make host-test host-audit` | PASS (host); 2 h target soak deferred |
+
+## Deferred Scope (post-1.0, per M14W4 lock)
+
+Appended at M17W1 ([tooling-design-lock.md](../spec/tooling-design-lock.md);
+[studio-prep-survey.md](../spec/studio-prep-survey.md) §5). Phase 32 is
+protocol-level; the following Studio UI items stay out of 1.0 scope.
+
+| Item | Disposition |
+|---|---|
+| Creation UI (wizards/forms) | deferred post-1.0 |
+| Editors (text/graph) | deferred post-1.0 |
+| Inspector panels | deferred post-1.0 |
+| Command palette / keyboard map | deferred post-1.0 |
+| DataStore UI | deferred post-1.0 |
+| Remote-web serving | deferred post-1.0; direct listening disabled until TLS, origin validation, authentication |
+| Extension platform | designed second phase (wasmtime fuel + memory caps) |
+| Native adapters | deferred post-1.0 |
+| `.drmx` packaging | deferred post-1.0 |
+| `drm-visual-schemas` | deferred post-1.0 |
 
 ## Notes
 
@@ -66,6 +89,13 @@ and result. `PASS` = green in-session; `deferred` = hardware/CI-owned lane.
   interop, I-RC6) and the serial/interop sub-gate (I-SR2/I-SR3/I-SR5/I-SR6);
   month-16 review ON_TRACK ([month-16.md](month-16.md)). Phase 32 close-out
   (introspection/trace/RPC gates) and Studio start carry to M17.
+- M17W1 closed the introspection gate (I-OB3/I-OB5, `introspect_no_pin`/
+  `diag_observed_rate`), the trace gate (I-OB1/I-OB6), and the RPC gate
+  (I-RPC1..I-RPC3 plus the I-RPC6/I-RPC7 capacity + gap-forwarding cell
+  `rpc_capacity_busy_gap_forward`); the MCU host parity + zero-forbidden-heap
+  suites are wired as permanent blocking CI gates. Deferred post-1.0 Studio UI
+  scope recorded above. The Phase 32 gate (all submodules) closes at M17W2
+  ([m17w1.md](m17w1.md)).
 
 REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-004, REQ-OPS-005,
 REQ-OPS-006, REQ-OPS-007, REQ-OPS-008, REQ-OPS-009, REQ-OPS-010,

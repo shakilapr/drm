@@ -162,6 +162,24 @@ reader, bounded tail cost; every excess emit counted once) and
 once) plus `trace_lane_exhaustion` (`no_lane_drops`, no growth). No invariant
 changed.
 
+### Gate evidence (M17W1)
+
+Phase 32 close-out re-runs the introspection and trace gates as executable
+evidence. Introspection: `cargo test -p drm-diag` 10/10 — `introspect_no_pin`
+(`I-OB5`: a continuous `copy_latest` observer leaves `rec0.hazard == HAZARD_NONE`
+and the pool stays exhaustible, since holding the sole free slot makes `publish`
+return `PoolExhausted`), `diag_observed_rate` (`I-OB3`: injected 10/100/1000 Hz
+matched within 1%; a burst window reports its own rate and decays to idle),
+`diag_no_overhead` (`I-OB2`), and `observer_copies_owned_bytes`/`log_level_filter`
+(the read-only `drm echo`/`log` semantics). Trace: `cargo test -p drm-core
+--test trace` 4/4 — `trace_never_blocks` (`I-OB1`: 1/2/4/16 producers under a
+stopped reader, bounded tail cost, `dropped = producers × (N − CAP)` exactly),
+`trace_drop_counter` (`I-OB6`), `trace_lane_exhaustion`, and `trace_dict_roundtrip`.
+No invariant changed.
+
+REQ: REQ-OPS-001, REQ-OPS-002, REQ-OPS-003, REQ-OPS-014, REQ-OPS-015,
+REQ-OPS-016, REQ-OPS-017.
+
 ## Edge Cases & Errors
 
 | Case | Result |

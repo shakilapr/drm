@@ -11,6 +11,23 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M17 W1 tranche: Phase 32 close-out gates — introspection, trace, RPC.
+  `drm-rpc` adds `rpc_capacity_busy_gap_forward` (the `rpc_capacity` cell): a full
+  client correlation table returns `RpcError::Busy`; a full server operation table
+  consumes nothing and the retained request is forwarded and served once a slot
+  frees (`publish ≠ accepted`, `I-RPC6`/`I-RPC7`). Introspection gate re-runs
+  `introspect_no_pin` (`I-OB5` no-pin) and `diag_observed_rate` (`I-OB3` rate
+  tolerance); trace gate re-runs `trace_never_blocks`/`trace_drop_counter`
+  (`I-OB1`/`I-OB6`); RPC gate re-runs `dispatch_concurrent_no_cross_correlation`
+  (`I-RPC1`, `C ∈ 1..=16`), `cancel_at_each_phase_boundary` (`I-RPC2`), and
+  `dispatch_timeout_expires_and_late_terminal_stale` (`I-RPC3`). The MCU host
+  parity + zero-forbidden-heap suites are wired as a permanent blocking `mcu` job
+  in [ci.yml](.github/workflows/ci.yml) on every PR/push, with `push: [main]`
+  added to [mcu-cross.yml](.github/workflows/mcu-cross.yml) (regression
+  permanence). Gate evidence [m17w1.md](docs/gates/m17w1.md); Phase 32 tracker
+  [phase-32.md](docs/gates/phase-32.md) records the deferred post-1.0 Studio UI
+  scope; [metrics-m17.md](docs/metrics/metrics-m17.md) records
+  `INTROSPECT_GATE = PASS`, `TRACE_GATE = PASS`, `RPC_GATE = PASS`.
 - Week M16 W4 tranche: record/replay gate + serial interop gate + month-16
   review. `drm-record` adds `record_mcap_interop`: a recorded session read back
   through the pinned third-party `mcap` crate — `Summary::read` reports the

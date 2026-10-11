@@ -142,6 +142,18 @@ audit on the MCU data path green.
 
 REQ: REQ-OPS-004, REQ-ROUTE-025, REQ-ROUTE-026, REQ-CORE-087.
 
+## Regression Gate (M17W1)
+
+The MCU host parity self-test (`make -C bindings/c/mcu host-test`) and the
+zero-forbidden-heap symbol audit (`make -C bindings/c/mcu host-audit`) are wired
+as permanent blocking CI gates: the `mcu` job in
+[ci.yml](../../../.github/workflows/ci.yml) runs on every PR/push, and
+[mcu-cross.yml](../../../.github/workflows/mcu-cross.yml) also triggers on
+`push: [main]` (regression permanence, AGENTS #14). The 2 h target soak stays
+deferred to the `mcu-cross` hardware lane. No invariant changed.
+
+REQ: REQ-CORE-087, REQ-OPS-004.
+
 ## Edge Cases & Errors
 
 | Case | Result |
