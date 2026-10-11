@@ -1013,4 +1013,80 @@ mod tests {
             .unwrap_or_else(|e| unreachable!("select: {e:?}"));
         assert_eq!(selection.reliability(), Reliability::BestEffort);
     }
+
+    /// REQ: REQ-ROUTE-025, REQ-ROUTE-026, REQ-OPS-004 — I-SR1/I-SR4/I-SR6: a
+    /// virtual pair (Unix socketpair) carries 10 000 encoded frames; the reader
+    /// reassembles each frame by its `0x00` delimiter and decodes it byte-exact,
+    /// proving the wire format survives a real streaming link.
+    #[cfg(unix)]
+    #[test]
+    fn serial_loopback_x10k() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+        use std::time::Duration;
+
+        let (mut tx, mut rx) = match UnixStream::pair() {
+            Ok(pair) => pair,
+            Err(e) => unreachable!("socketpair: {e:?}"),
+        };
+        if let Err(e) = rx.set_read_timeout(Some(Duration::from_secs(30))) {
+            unreachable!("set read timeout: {e:?}");
+        }
+        let cfg = link_config(115_200, 256);
+        let cfg_tx = cfg.clone();
+
+        let writer = std::thread::spawn(move || {
+            for i in 0..10_000_u32 {
+                let plen = usize::try_from(i % 33).unwrap_or(0);
+                let base = usize::try_from(i).unwrap_or(0);
+                let payload: Vec<u8> = (0..plen)
+                    .map(|k| u8::try_from((base + k) % 256).unwrap_or(0))
+                    .collect();
+                let frame = SerialFrame {
+                    header: WireHeader {
+                        flags: 0,
+                        wire_channel_id: i,
+                        stream_epoch: 3,
+                        source_seq: u64::from(i),
+                        payload_len: u32::try_from(payload.len()).unwrap_or(0),
+                    },
+                    e2e_crc: None,
+                    payload: &payload,
+                };
+                let mut wire = vec![0u8; cfg_tx.max_wire_bytes()];
+                let n = match frame_encode(&cfg_tx, &frame, &mut wire) {
+                    Ok(n) => n,
+                    Err(e) => unreachable!("encode {i}: {e:?}"),
+                };
+                if let Err(e) = tx.write_all(&wire[..n]) {
+                    unreachable!("write {i}: {e:?}");
+                }
+            }
+        });
+
+        let mut out = out_buf(&cfg);
+        let mut acc: Vec<u8> = Vec::new();
+        let mut byte = [0_u8; 1];
+        for i in 0..10_000_u32 {
+            acc.clear();
+            loop {
+                if let Err(e) = rx.read_exact(&mut byte) {
+                    unreachable!("read {i}: {e:?}");
+                }
+                acc.push(byte[0]);
+                if byte[0] == FRAME_DELIMITER {
+                    break;
+                }
+            }
+            let got = match frame_decode(&cfg, &acc, &mut out) {
+                Ok(f) => f,
+                Err(e) => unreachable!("decode {i}: {e:?}"),
+            };
+            assert_eq!(got.header.source_seq, u64::from(i), "frame {i} order");
+            assert_eq!(got.header.payload_len, i % 33, "frame {i} length");
+        }
+        writer
+            .join()
+            .unwrap_or_else(|_| unreachable!("writer join"));
+    }
 }

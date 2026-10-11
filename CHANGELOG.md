@@ -11,6 +11,20 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M13 W1 tranche: Windows platform completion + serial transport — Windows
+  publisher/consumer lifecycle over `LockFileEx` + pagefile sections with
+  in-place `Init` recovery ([lifecycle.rs](crates/drm-core/src/channel/lifecycle.rs)
+  `reinit_in_place`; pagefile sections have no unlink) and the real-backend
+  suite ([lifecycle/tests/windows.rs](crates/drm-core/src/channel/lifecycle/tests/windows.rs):
+  authority race, consumer open-only, 20-cycle restart epoch parity,
+  reclamation-authority and identity subsets); bounded serial COBS/CRC32C
+  socketpair loopback ×10k
+  ([serial.rs](crates/drm-router/src/transport/serial.rs) `serial_loopback_x10k`);
+  the cross-OS subset closes both M12W4 carry-overs (`win-race-create`,
+  `win-init-reinit` now green) and adds green `serial-codec` plus scheduled
+  `serial-loopback`; Windows CI jobs and the conformance matrix updated;
+  [metrics-m13.md](docs/metrics/metrics-m13.md) records `WIN_PLATFORM_FULL = 1`,
+  `SERIAL_FRAMES = 1`, `SPATIAL_REQ_MINT_START = 37`.
 - Week M12 W4 tranche: Windows conformance subset + month-12 review — the
   cross-OS subset manifest `xtask/src/cross_os.rs` (`SUBSET`,
   `covers_required_invariants`, `cargo xtask test --cross-os`; registered in

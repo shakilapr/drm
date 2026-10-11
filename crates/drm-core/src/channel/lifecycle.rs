@@ -304,16 +304,46 @@ fn acquire_segment<S: ShmBackend>(
                 if state == SEGMENT_READY {
                     return Ok((map, Freshness::Adopted));
                 }
-                // Init/incomplete image: the held authority proves no live
-                // writer; POSIX recovery is unlink + recreate (legal with the
-                // mapping still open; the view dies at arm end).
-                shm.unlink(name)?;
-                recreate(shm, name, name_bytes, size, layout)
+                // Init image: the held authority proves no live writer
+                // (publisher-lifecycle.md §Protocols "Init crash recovery").
+                #[cfg(unix)]
+                {
+                    // POSIX: unlink + recreate (legal with the mapping still
+                    // open; the stale view dies at arm end).
+                    shm.unlink(name)?;
+                    recreate(shm, name, name_bytes, size, layout)
+                }
+                #[cfg(windows)]
+                {
+                    // Windows: pagefile sections have no unlink, so an
+                    // exact-size `Init` section is reinitialized in place.
+                    // SAFETY: held authority; consumers never interpret `Init`.
+                    unsafe { reinit_in_place(&map, layout, name_bytes)? };
+                    Ok((map, Freshness::Created))
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    let _ = map;
+                    Err(Status::NotReady)
+                }
             }
             Err(ShmError::StaleIncomplete) => {
                 // Creation never completed; recoverable artifact.
-                shm.unlink(name)?;
-                recreate(shm, name, name_bytes, size, layout)
+                #[cfg(unix)]
+                {
+                    shm.unlink(name)?;
+                    recreate(shm, name, name_bytes, size, layout)
+                }
+                #[cfg(windows)]
+                {
+                    // No unlink for pagefile sections: an undersized section is
+                    // recreated once its last handle closes; retryable meanwhile.
+                    Err(ShmError::StaleIncomplete.into())
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    Err(Status::NotReady)
+                }
             }
             Err(e) => Err(e.into()),
         },
@@ -321,7 +351,9 @@ fn acquire_segment<S: ShmBackend>(
     }
 }
 
-/// Recreates a fresh image after unlink.
+/// Recreates a fresh image after unlink (POSIX recovery path; Windows
+/// reinitializes in place instead — [`reinit_in_place`]).
+#[cfg(unix)]
 fn recreate<S: ShmBackend>(
     shm: &S,
     name: &crate::shm::SegmentName,
@@ -333,6 +365,37 @@ fn recreate<S: ShmBackend>(
     // SAFETY: fresh mapping of exactly `size` bytes, exclusive writer.
     unsafe { init_fresh(&map, layout, name_bytes)? };
     Ok((map, Freshness::Created))
+}
+
+/// Reinitializes an exact-size `Init` section in place under the held publisher
+/// authority (windows-backends.md §Protocols "Stale `Init` recovery"): zero the
+/// CCB region, then rewrite the prefix, descriptor, and name; readiness is
+/// published later by [`publish_ready`]. Pagefile sections have no unlink, and
+/// consumers never interpret `Init` bytes, so no observer wait is required.
+/// REQ: REQ-CORE-098.
+///
+/// # Safety
+/// `map` covers `layout.segment_size` bytes and the caller holds the publisher
+/// authority (no live writer).
+#[cfg(windows)]
+unsafe fn reinit_in_place(
+    map: &Mapping,
+    layout: &SegmentLayout,
+    name: &[u8],
+) -> Result<(), Status> {
+    let ccb_off = usize::try_from(layout.descriptor.ccb_offset).map_err(|_| Status::InvalidArg)?;
+    {
+        // SAFETY: see function contract; the caller holds the publisher
+        // authority, so this mutable view aliases no live writer.
+        let bytes = unsafe { as_bytes_mut(map) };
+        // A never-ready image carries no valid CCB state; zero the region from
+        // the CCB onward so restart publication starts from a clean floor.
+        if let Some(tail) = bytes.get_mut(ccb_off..) {
+            tail.fill(0);
+        }
+    }
+    // SAFETY: same mapping and authority contract as the caller.
+    unsafe { init_fresh(map, layout, name) }
 }
 
 /// Held publisher authority: validated attachment, epoch after this

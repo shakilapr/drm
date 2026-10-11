@@ -1,12 +1,13 @@
-//! Cross-OS conformance subset (work-plan M12W4-E4-T1; windows-backends.md
-//! §Test Matrix). The Linux conformance suite rows that must run green on the
-//! Windows runner, or carry an explicit port note when a platform fixture is
-//! still scheduled. `cargo xtask test --cross-os` executes every green row on
-//! the current host — Windows-only rows are `cfg`-gated and no-op elsewhere — so
-//! the same manifest defines the nightly Windows subset and the local smoke,
-//! with no divergent lists. `PORT_GAPS_CLOSED` holds when no row is silently
-//! missing: each is either green or scheduled with a note.
-//! REQ: REQ-QAL-008, REQ-CORE-101.
+//! Cross-OS conformance subset (work-plan M12W4-E4-T1, closed out M13W1-E1/E3;
+//! windows-backends.md §Test Matrix). The Linux conformance suite rows that must
+//! run green on the Windows runner, or carry an explicit port note when a
+//! platform fixture is still scheduled. `cargo xtask test --cross-os` executes
+//! every green row on the current host — Windows-only rows are `cfg`-gated and
+//! no-op elsewhere — so the same manifest defines the nightly Windows subset and
+//! the local smoke, with no divergent lists. `PORT_GAPS_CLOSED` holds when no
+//! row is silently missing: each is either green or scheduled with a note. The
+//! M12W4 `win-race-create` and `win-init-reinit` carry-overs are green here.
+//! REQ: REQ-QAL-008, REQ-CORE-101, REQ-ROUTE-025, REQ-ROUTE-026.
 
 use anyhow::{Result, bail};
 
@@ -104,15 +105,35 @@ pub const SUBSET: &[SubsetRow] = &[
     },
     SubsetRow {
         id: "win-race-create",
-        invariants: &["I-W1"],
+        invariants: &["I-W1", "I-L1"],
         args: &["test", "-p", "drm-core", "--lib", "win_race_create"],
-        windows: WindowsState::Scheduled("multiprocess race fixture; M13W1 E1"),
+        windows: WindowsState::Green,
     },
     SubsetRow {
         id: "win-init-reinit",
         invariants: &["I-W1", "I-L8"],
         args: &["test", "-p", "drm-core", "--lib", "win_init_reinit"],
-        windows: WindowsState::Scheduled("channel lifecycle on Windows; M13W1 E1"),
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "serial-codec",
+        invariants: &["I-SR1", "I-SR2", "I-SR3", "I-SR4", "I-SR6"],
+        args: &["test", "-p", "drm-router", "--lib", "transport::serial"],
+        windows: WindowsState::Green,
+    },
+    SubsetRow {
+        id: "serial-loopback",
+        invariants: &["I-SR4", "I-SR6"],
+        args: &[
+            "test",
+            "-p",
+            "drm-router",
+            "--lib",
+            "transport::serial::tests::serial_loopback_x10k",
+        ],
+        windows: WindowsState::Scheduled(
+            "socketpair loopback is unix-only; Windows COM/named-pipe fixture M14",
+        ),
     },
 ];
 

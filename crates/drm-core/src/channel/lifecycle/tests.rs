@@ -4,6 +4,8 @@
 
 #[cfg(unix)]
 mod posix;
+#[cfg(windows)]
+mod windows;
 
 use std::collections::{HashMap, HashSet};
 use std::mem::offset_of;

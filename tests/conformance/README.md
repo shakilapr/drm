@@ -35,18 +35,20 @@ eventually cross a real link. Status: `R` runner present; `-` not yet wired.
 |---|---|---|---|
 | linux × c | - | - | - |
 | linux × cpp | - | - | - |
-| linux × rust | R | - | - |
+| linux × rust | R | R | R |
 | linux × python | - | - | - |
 | windows × c | - | - | - |
 | windows × cpp | - | - | - |
-| windows × rust | R | - | - |
+| windows × rust | R | R | R |
 | windows × python | - | - | - |
 
 - Rust UDP: `cargo test -p drm-router --lib udp`; `cargo run -p drm-router --example udp_pair` (10k loopback exchanges).
+- Rust TCP: `cargo test -p drm-router --lib transport::tcp` (length-framed records, reconnect session scope).
+- Rust serial: `cargo test -p drm-router --lib transport::serial` (bounded COBS + CRC32C codec, `serial_loopback_x10k` socketpair exchange on unix).
 - C++ cells land with the C++17/20 bindings work package (Phase 20, REQ-BIND-013).
-- TCP/serial transports land in later phases (`router-core.md`, `serial-mcu.md`).
+- C/C++/Python cells over TCP/serial land with the Phase 32 serial/MCU work (`serial-mcu.md`).
 
-## Windows conformance subset (defined M12W4)
+## Windows conformance subset (defined M12W4, extended M13W1)
 
 The Linux conformance suite rows that must run green on the Windows runner, or
 carry an explicit port note while a platform fixture is scheduled. The manifest
@@ -65,7 +67,9 @@ never diverge. `PORT_GAPS_CLOSED = 1` iff no row is silently missing.
 | `router-lanes` | I-LS1/I-LS2 | `cargo test -p drm-router --test lane` | green |
 | `router-shaping` | I-LS3/I-LS4 | `cargo test -p drm-router shaping` | green |
 | `verify-engine` | I-V1/I-V6 | `cargo test -p drm-workspace --test verify_engine` | green |
-| `win-race-create` | I-W1 | `cargo test -p drm-core --lib win_race_create` | scheduled (M13W1 E1) |
-| `win-init-reinit` | I-W1/I-L8 | `cargo test -p drm-core --lib win_init_reinit` | scheduled (M13W1 E1) |
+| `win-race-create` | I-W1/I-L1 | `cargo test -p drm-core --lib win_race_create` | green (M13W1 E1) |
+| `win-init-reinit` | I-W1/I-L8 | `cargo test -p drm-core --lib win_init_reinit` | green (M13W1 E1) |
+| `serial-codec` | I-SR1/I-SR2/I-SR3/I-SR4/I-SR6 | `cargo test -p drm-router --lib transport::serial` | green (M13W1 E3) |
+| `serial-loopback` | I-SR4/I-SR6 | `cargo test -p drm-router --lib transport::serial::tests::serial_loopback_x10k` | scheduled (unix socketpair; Windows COM fixture M14) |
 
-REQ: REQ-QAL-008, REQ-CORE-101.
+REQ: REQ-QAL-008, REQ-CORE-101, REQ-ROUTE-025, REQ-ROUTE-026.
