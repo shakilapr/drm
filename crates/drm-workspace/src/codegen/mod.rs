@@ -3,8 +3,7 @@
 //! stable shared output paths, content-compare writes (timestamp preservation),
 //! platform atomic replacement, and direct reconciliation against the complete
 //! expected tree. Generated bindings carry canonical identities/contracts only —
-//! never runtime numeric handles (I-G9). This slice renders C; C++/Rust/Python
-//! renderers land in later phases.
+//! never runtime numeric handles (I-G9). Renders C, C++, Rust, and Python.
 //! REQ: REQ-TOOL-024, REQ-TOOL-025, REQ-TOOL-026, REQ-TOOL-027, REQ-TOOL-028,
 //! REQ-TOOL-029, REQ-TOOL-030, REQ-TOOL-065.
 
@@ -43,11 +42,17 @@ const GEN_DIR: &str = ".drm/gen";
 pub enum Lang {
     /// C headers (`.drm/gen/c/...`).
     C,
+    /// C++20 headers (`.drm/gen/cpp/...`).
+    Cpp,
+    /// Rust modules (`.drm/gen/rust/...`).
+    Rust,
+    /// Python modules (`.drm/gen/python/...`).
+    Python,
 }
 
-/// Languages rendered by [`plan`]; grows as renderers land.
+/// Languages rendered by [`plan`] (I-G1: fixed order, sorted iteration).
 /// REQ: REQ-TOOL-029.
-pub const LANGS: [Lang; 1] = [Lang::C];
+pub const LANGS: [Lang; 4] = [Lang::C, Lang::Cpp, Lang::Rust, Lang::Python];
 
 impl Lang {
     /// Directory component under `.drm/gen/`. REQ: REQ-TOOL-029.
@@ -55,6 +60,9 @@ impl Lang {
     pub const fn dir(self) -> &'static str {
         match self {
             Self::C => "c",
+            Self::Cpp => "cpp",
+            Self::Rust => "rust",
+            Self::Python => "python",
         }
     }
 
@@ -63,6 +71,9 @@ impl Lang {
     pub const fn ext(self) -> &'static str {
         match self {
             Self::C => "h",
+            Self::Cpp => "hpp",
+            Self::Rust => "rs",
+            Self::Python => "py",
         }
     }
 
@@ -76,6 +87,9 @@ impl Lang {
     fn from_tag(tag: &str) -> Option<Self> {
         match tag {
             "c" => Some(Self::C),
+            "cpp" => Some(Self::Cpp),
+            "rust" => Some(Self::Rust),
+            "python" => Some(Self::Python),
             _ => None,
         }
     }

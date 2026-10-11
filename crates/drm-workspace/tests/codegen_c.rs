@@ -100,11 +100,16 @@ mod codegen_c {
         let dirty: Vec<&str> = plan_after
             .dirty_units
             .iter()
+            .filter(|u| u.lang == Lang::C)
             .map(|u| u.key.identity.as_str())
             .collect();
         assert_eq!(dirty, vec!["control/target"], "only the changed topic");
-        assert_eq!(plan_after.dirty_units[0].kind, GenKind::Topic);
-        assert_eq!(plan_after.dirty_units[0].lang, Lang::C);
+        let c_unit = plan_after
+            .dirty_units
+            .iter()
+            .find(|u| u.lang == Lang::C)
+            .unwrap_or_else(|| unreachable!("a C unit is dirty"));
+        assert_eq!(c_unit.kind, GenKind::Topic);
 
         execute(&plan_after, &mut db, &root).unwrap_or_else(|e| unreachable!("exec 2: {e:?}"));
         let state = out_path(&root, Lang::C, GenKind::Topic, "control/state");
@@ -155,7 +160,11 @@ mod codegen_c {
 
         let plan2 = plan_with(&m, &db, &root, "two");
         assert_eq!(
-            plan2.dirty_units.len(),
+            plan2
+                .dirty_units
+                .iter()
+                .filter(|u| u.lang == Lang::C)
+                .count(),
             1,
             "options tag moves the fingerprint"
         );
@@ -178,7 +187,10 @@ mod codegen_c {
         execute(&plan2, &mut db, &root).unwrap_or_else(|e| unreachable!("exec 2: {e:?}"));
         let state = out_path(&root, Lang::C, GenKind::Topic, "control/state");
         assert!(!state.exists(), "orphan output removed");
-        let files = generated_bytes(&root);
+        let files: Vec<_> = generated_bytes(&root)
+            .into_iter()
+            .filter(|(p, _)| p.to_string_lossy().contains(".drm/gen/c/"))
+            .collect();
         assert_eq!(files.len(), 1, "only the retained topic remains");
         let _ = fs::remove_dir_all(&root);
     }
@@ -401,7 +413,11 @@ mod codegen_c {
         let plan2 = plan(&m, &db, &root);
         assert!(plan2.dirty_units.is_empty());
         let expected: BTreeSet<PathBuf> = plan2.expected_outputs.clone();
-        assert_eq!(expected.len(), 1, "expected tree is complete");
+        let c_expected: Vec<_> = expected
+            .iter()
+            .filter(|p| p.to_string_lossy().contains("/.drm/gen/c/"))
+            .collect();
+        assert_eq!(c_expected.len(), 1, "expected tree is complete");
         assert!(expected.iter().all(|p| p.is_file()));
         let _ = fs::remove_dir_all(&root);
     }

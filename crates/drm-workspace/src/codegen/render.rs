@@ -1,6 +1,6 @@
-//! Language renderers for the codegen plan. This slice renders canonical C:
-//! per-topic `target.h` (byte layout struct + encode/decode inline functions)
-//! and node-scoped API headers exposing only manifest-declared topics.
+//! Language renderers for the codegen plan. Renders canonical C, C++20, Rust,
+//! and Python per-topic modules (byte layout type + encode/decode) and
+//! node-scoped API facades exposing only manifest-declared topics.
 //! Deterministic: sorted inputs, no timestamps, no absolute paths (I-G1).
 //! REQ: REQ-TOOL-029, REQ-TOOL-065, REQ-BIND-011, REQ-BIND-012.
 
@@ -47,6 +47,9 @@ pub fn file_ident(identity: &str) -> String {
 pub fn topic(lang: Lang, topic: &str, entry: &TopicEntry) -> String {
     match lang {
         Lang::C => topic_c(topic, entry),
+        Lang::Cpp => topic_cpp(topic, entry),
+        Lang::Rust => topic_rust(topic, entry),
+        Lang::Python => topic_python(topic, entry),
     }
 }
 
@@ -55,6 +58,9 @@ pub fn topic(lang: Lang, topic: &str, entry: &TopicEntry) -> String {
 pub fn node(lang: Lang, name: &str, entry: &NodeEntry, model: &WorkspaceModel) -> String {
     match lang {
         Lang::C => node_c(name, entry, model),
+        Lang::Cpp => node_cpp(name, entry, model),
+        Lang::Rust => node_rust(name, entry, model),
+        Lang::Python => node_python(name, entry, model),
     }
 }
 
@@ -106,103 +112,156 @@ fn emit_banner(s: &mut String, comment: &str) {
     let _ = writeln!(s, "/* {comment} */");
 }
 
+/// Type-name tokens for a C-family language (C or C++).
+/// REQ: REQ-TOOL-042.
+struct LangTypes {
+    u8: &'static str,
+    i8: &'static str,
+    u16: &'static str,
+    i16: &'static str,
+    u32: &'static str,
+    i32: &'static str,
+    u64: &'static str,
+    i64: &'static str,
+    f32: &'static str,
+    f64: &'static str,
+    size_t: &'static str,
+    memcpy: &'static str,
+}
+
+/// C11 type tokens. REQ: REQ-TOOL-042.
+const C_TYPES: LangTypes = LangTypes {
+    u8: "uint8_t",
+    i8: "int8_t",
+    u16: "uint16_t",
+    i16: "int16_t",
+    u32: "uint32_t",
+    i32: "int32_t",
+    u64: "uint64_t",
+    i64: "int64_t",
+    f32: "float",
+    f64: "double",
+    size_t: "size_t",
+    memcpy: "memcpy",
+};
+
+/// C++20 type tokens. REQ: REQ-TOOL-042.
+const CPP_TYPES: LangTypes = LangTypes {
+    u8: "std::uint8_t",
+    i8: "std::int8_t",
+    u16: "std::uint16_t",
+    i16: "std::int16_t",
+    u32: "std::uint32_t",
+    i32: "std::int32_t",
+    u64: "std::uint64_t",
+    i64: "std::int64_t",
+    f32: "float",
+    f64: "double",
+    size_t: "std::size_t",
+    memcpy: "std::memcpy",
+};
+
 /// Emits the per-topic endian/geometry helpers (all `static inline`, uniquely
 /// prefixed so multiple headers can be included together).
 /// REQ: REQ-TOOL-042.
-#[allow(clippy::too_many_lines)]
-fn emit_helpers(s: &mut String, p: &str) {
+#[allow(clippy::too_many_lines, clippy::similar_names)]
+fn emit_helpers(s: &mut String, p: &str, t: &LangTypes) {
+    let (ty_u8, ty_i8, ty_u16, ty_i16, ty_u32, ty_i32, ty_u64, ty_i64, ty_f32, ty_f64, ty_size) = (
+        t.u8, t.i8, t.u16, t.i16, t.u32, t.i32, t.u64, t.i64, t.f32, t.f64, t.size_t,
+    );
+    let ty_memcpy = t.memcpy;
     let _ = writeln!(
         s,
-        "static inline void {p}_put_u8(uint8_t *d, uint8_t v) {{ d[0] = v; }}"
+        "static inline void {p}_put_u8({ty_u8} *d, {ty_u8} v) {{ d[0] = v; }}"
     );
     let _ = writeln!(
         s,
-        "static inline void {p}_put_i8(uint8_t *d, int8_t v) {{ d[0] = (uint8_t)v; }}"
+        "static inline void {p}_put_i8({ty_u8} *d, {ty_i8} v) {{ d[0] = ({ty_u8})v; }}"
     );
     let _ = writeln!(
         s,
-        "static inline void {p}_put_u16(uint8_t *d, uint16_t v) {{ d[0] = (uint8_t)v; d[1] = (uint8_t)(v >> 8); }}"
+        "static inline void {p}_put_u16({ty_u8} *d, {ty_u16} v) {{ d[0] = ({ty_u8})v; d[1] = ({ty_u8})(v >> 8); }}"
     );
     let _ = writeln!(
         s,
-        "static inline void {p}_put_i16(uint8_t *d, int16_t v) {{ {p}_put_u16(d, (uint16_t)v); }}"
+        "static inline void {p}_put_i16({ty_u8} *d, {ty_i16} v) {{ {p}_put_u16(d, ({ty_u16})v); }}"
     );
     let _ = writeln!(
         s,
-        "static inline void {p}_put_u32(uint8_t *d, uint32_t v) {{ d[0] = (uint8_t)v; d[1] = (uint8_t)(v >> 8); d[2] = (uint8_t)(v >> 16); d[3] = (uint8_t)(v >> 24); }}"
+        "static inline void {p}_put_u32({ty_u8} *d, {ty_u32} v) {{ d[0] = ({ty_u8})v; d[1] = ({ty_u8})(v >> 8); d[2] = ({ty_u8})(v >> 16); d[3] = ({ty_u8})(v >> 24); }}"
     );
     let _ = writeln!(
         s,
-        "static inline void {p}_put_i32(uint8_t *d, int32_t v) {{ {p}_put_u32(d, (uint32_t)v); }}"
+        "static inline void {p}_put_i32({ty_u8} *d, {ty_i32} v) {{ {p}_put_u32(d, ({ty_u32})v); }}"
     );
     let _ = writeln!(
         s,
-        "static inline void {p}_put_u64(uint8_t *d, uint64_t v) {{ size_t i; for (i = 0u; i < 8u; i++) {{ d[i] = (uint8_t)(v >> (8u * i)); }} }}"
+        "static inline void {p}_put_u64({ty_u8} *d, {ty_u64} v) {{ {ty_size} i; for (i = 0u; i < 8u; i++) {{ d[i] = ({ty_u8})(v >> (8u * i)); }} }}"
     );
     let _ = writeln!(
         s,
-        "static inline void {p}_put_i64(uint8_t *d, int64_t v) {{ {p}_put_u64(d, (uint64_t)v); }}"
+        "static inline void {p}_put_i64({ty_u8} *d, {ty_i64} v) {{ {p}_put_u64(d, ({ty_u64})v); }}"
     );
     let _ = writeln!(
         s,
-        "static inline void {p}_put_f32(uint8_t *d, float v) {{ uint32_t b; memcpy(&b, &v, sizeof b); {p}_put_u32(d, b); }}"
+        "static inline void {p}_put_f32({ty_u8} *d, {ty_f32} v) {{ {ty_u32} b; {ty_memcpy}(&b, &v, sizeof b); {p}_put_u32(d, b); }}"
     );
     let _ = writeln!(
         s,
-        "static inline void {p}_put_f64(uint8_t *d, double v) {{ uint64_t b; memcpy(&b, &v, sizeof b); {p}_put_u64(d, b); }}"
+        "static inline void {p}_put_f64({ty_u8} *d, {ty_f64} v) {{ {ty_u64} b; {ty_memcpy}(&b, &v, sizeof b); {p}_put_u64(d, b); }}"
     );
     let _ = writeln!(
         s,
-        "static inline uint8_t {p}_get_u8(const uint8_t *d) {{ return d[0]; }}"
+        "static inline {ty_u8} {p}_get_u8(const {ty_u8} *d) {{ return d[0]; }}"
     );
     let _ = writeln!(
         s,
-        "static inline int8_t {p}_get_i8(const uint8_t *d) {{ return (int8_t)d[0]; }}"
+        "static inline {ty_i8} {p}_get_i8(const {ty_u8} *d) {{ return ({ty_i8})d[0]; }}"
     );
     let _ = writeln!(
         s,
-        "static inline uint16_t {p}_get_u16(const uint8_t *d) {{ return (uint16_t)((uint16_t)d[0] | ((uint16_t)d[1] << 8)); }}"
+        "static inline {ty_u16} {p}_get_u16(const {ty_u8} *d) {{ return ({ty_u16})(({ty_u16})d[0] | (({ty_u16})d[1] << 8)); }}"
     );
     let _ = writeln!(
         s,
-        "static inline int16_t {p}_get_i16(const uint8_t *d) {{ return (int16_t){p}_get_u16(d); }}"
+        "static inline {ty_i16} {p}_get_i16(const {ty_u8} *d) {{ return ({ty_i16}){p}_get_u16(d); }}"
     );
     let _ = writeln!(
         s,
-        "static inline uint32_t {p}_get_u32(const uint8_t *d) {{ return (uint32_t)d[0] | ((uint32_t)d[1] << 8) | ((uint32_t)d[2] << 16) | ((uint32_t)d[3] << 24); }}"
+        "static inline {ty_u32} {p}_get_u32(const {ty_u8} *d) {{ return ({ty_u32})d[0] | (({ty_u32})d[1] << 8) | (({ty_u32})d[2] << 16) | (({ty_u32})d[3] << 24); }}"
     );
     let _ = writeln!(
         s,
-        "static inline int32_t {p}_get_i32(const uint8_t *d) {{ return (int32_t){p}_get_u32(d); }}"
+        "static inline {ty_i32} {p}_get_i32(const {ty_u8} *d) {{ return ({ty_i32}){p}_get_u32(d); }}"
     );
     let _ = writeln!(
         s,
-        "static inline uint64_t {p}_get_u64(const uint8_t *d) {{ uint64_t v = 0u; size_t i; for (i = 0u; i < 8u; i++) {{ v |= (uint64_t)d[i] << (8u * i); }} return v; }}"
+        "static inline {ty_u64} {p}_get_u64(const {ty_u8} *d) {{ {ty_u64} v = 0u; {ty_size} i; for (i = 0u; i < 8u; i++) {{ v |= ({ty_u64})d[i] << (8u * i); }} return v; }}"
     );
     let _ = writeln!(
         s,
-        "static inline int64_t {p}_get_i64(const uint8_t *d) {{ return (int64_t){p}_get_u64(d); }}"
+        "static inline {ty_i64} {p}_get_i64(const {ty_u8} *d) {{ return ({ty_i64}){p}_get_u64(d); }}"
     );
     let _ = writeln!(
         s,
-        "static inline float {p}_get_f32(const uint8_t *d) {{ uint32_t b = {p}_get_u32(d); float f; memcpy(&f, &b, sizeof f); return f; }}"
+        "static inline {ty_f32} {p}_get_f32(const {ty_u8} *d) {{ {ty_u32} b = {p}_get_u32(d); {ty_f32} f; {ty_memcpy}(&f, &b, sizeof f); return f; }}"
     );
     let _ = writeln!(
         s,
-        "static inline double {p}_get_f64(const uint8_t *d) {{ uint64_t b = {p}_get_u64(d); double f; memcpy(&f, &b, sizeof f); return f; }}"
+        "static inline {ty_f64} {p}_get_f64(const {ty_u8} *d) {{ {ty_u64} b = {p}_get_u64(d); {ty_f64} f; {ty_memcpy}(&f, &b, sizeof f); return f; }}"
     );
     let _ = writeln!(
         s,
-        "static inline size_t {p}_align_up(size_t x, size_t a) {{ return (x + (a - 1u)) & ~(a - 1u); }}"
+        "static inline {ty_size} {p}_align_up({ty_size} x, {ty_size} a) {{ return (x + (a - 1u)) & ~(a - 1u); }}"
     );
     let _ = writeln!(
         s,
-        "static inline int {p}_utf8_valid(const uint8_t *s, size_t n) {{"
+        "static inline int {p}_utf8_valid(const {ty_u8} *s, {ty_size} n) {{"
     );
-    let _ = writeln!(s, "    size_t i = 0u;");
+    let _ = writeln!(s, "    {ty_size} i = 0u;");
     let _ = writeln!(s, "    while (i < n) {{");
-    let _ = writeln!(s, "        uint8_t c = s[i];");
-    let _ = writeln!(s, "        size_t need;");
+    let _ = writeln!(s, "        {ty_u8} c = s[i];");
+    let _ = writeln!(s, "        {ty_size} need;");
     let _ = writeln!(s, "        if (c < 0x80u) {{ i += 1u; continue; }}");
     let _ = writeln!(s, "        if (c >= 0xC2u && c <= 0xDFu) {{ need = 2u; }}");
     let _ = writeln!(
@@ -217,7 +276,7 @@ fn emit_helpers(s: &mut String, p: &str) {
     let _ = writeln!(s, "        if (i + need > n) {{ return 0; }}");
     let _ = writeln!(
         s,
-        "        {{ size_t k; for (k = 1u; k < need; k++) {{ if ((s[i + k] & 0xC0u) != 0x80u) {{ return 0; }} }} }}"
+        "        {{ {ty_size} k; for (k = 1u; k < need; k++) {{ if ((s[i + k] & 0xC0u) != 0x80u) {{ return 0; }} }} }}"
     );
     let _ = writeln!(
         s,
@@ -283,25 +342,26 @@ fn header_offset(entry: &TopicEntry, name: &str) -> u64 {
         .map_or(0, |m| m.offset)
 }
 
-/// Emits the encode write for one fixed field. REQ: REQ-TOOL-042.
-fn fixed_write(s: &mut String, p: &str, field: &crate::parser::Field, off: u64) {
+/// Emits the encode write for one fixed field. `acc` is the value accessor
+/// (`v->` for C, `v.` for C++). REQ: REQ-TOOL-042.
+fn fixed_write(s: &mut String, p: &str, field: &crate::parser::Field, off: u64, acc: &str) {
     match &field.ty {
         Type::Prim(prim) => {
             let _ = writeln!(
                 s,
-                "    {p}_put_{}(dst + {off}u, v->{});",
+                "    {p}_put_{}(dst + {off}u, {acc}{});",
                 prim_suffix(*prim),
                 field.name
             );
         }
         Type::Enum { .. } => {
-            let _ = writeln!(s, "    dst[{off}u] = v->{};", field.name);
+            let _ = writeln!(s, "    dst[{off}u] = {acc}{};", field.name);
         }
         Type::FixedArray { elem, n } => {
             let es = canon::prim_layout(*elem).size;
             let _ = writeln!(
                 s,
-                "    {{ size_t i; for (i = 0u; i < {n}u; i++) {{ {p}_put_{}(dst + {off}u + i * {es}u, v->{}[i]); }} }}",
+                "    {{ size_t i; for (i = 0u; i < {n}u; i++) {{ {p}_put_{}(dst + {off}u + i * {es}u, {acc}{}[i]); }} }}",
                 prim_suffix(*elem),
                 field.name
             );
@@ -310,25 +370,26 @@ fn fixed_write(s: &mut String, p: &str, field: &crate::parser::Field, off: u64) 
     }
 }
 
-/// Emits the decode read for one fixed field. REQ: REQ-TOOL-042.
-fn fixed_read(s: &mut String, p: &str, field: &crate::parser::Field, off: u64) {
+/// Emits the decode read for one fixed field. `oacc` is the output accessor
+/// (`out->` for C, `out.` for C++). REQ: REQ-TOOL-042.
+fn fixed_read(s: &mut String, p: &str, field: &crate::parser::Field, off: u64, oacc: &str) {
     match &field.ty {
         Type::Prim(prim) => {
             let _ = writeln!(
                 s,
-                "    out->{} = {p}_get_{}(src + {off}u);",
+                "    {oacc}{} = {p}_get_{}(src + {off}u);",
                 field.name,
                 prim_suffix(*prim)
             );
             if *prim == Prim::Bool {
-                let _ = writeln!(s, "    if (out->{} > 1u) {{ return 0u; }}", field.name);
+                let _ = writeln!(s, "    if ({oacc}{} > 1u) {{ return 0u; }}", field.name);
             }
         }
         Type::Enum { variants } => {
-            let _ = writeln!(s, "    out->{} = src[{off}u];", field.name);
+            let _ = writeln!(s, "    {oacc}{} = src[{off}u];", field.name);
             let _ = writeln!(
                 s,
-                "    if (out->{} >= {}u) {{ return 0u; }}",
+                "    if ({oacc}{} >= {}u) {{ return 0u; }}",
                 field.name,
                 variants.len()
             );
@@ -337,14 +398,14 @@ fn fixed_read(s: &mut String, p: &str, field: &crate::parser::Field, off: u64) {
             let es = canon::prim_layout(*elem).size;
             let _ = writeln!(
                 s,
-                "    {{ size_t i; for (i = 0u; i < {n}u; i++) {{ out->{}[i] = {p}_get_{}(src + {off}u + i * {es}u); }} }}",
+                "    {{ size_t i; for (i = 0u; i < {n}u; i++) {{ {oacc}{}[i] = {p}_get_{}(src + {off}u + i * {es}u); }} }}",
                 field.name,
                 prim_suffix(*elem)
             );
             if *elem == Prim::Bool {
                 let _ = writeln!(
                     s,
-                    "    {{ size_t i; for (i = 0u; i < {n}u; i++) {{ if (out->{}[i] > 1u) {{ return 0u; }} }} }}",
+                    "    {{ size_t i; for (i = 0u; i < {n}u; i++) {{ if ({oacc}{}[i] > 1u) {{ return 0u; }} }} }}",
                     field.name
                 );
             }
@@ -396,8 +457,15 @@ fn variables(entry: &TopicEntry) -> Vec<VarInfo> {
         .collect()
 }
 
-/// Emits the variable-member encode block. REQ: REQ-TOOL-042.
-fn variable_write(s: &mut String, p: &str, v: &VarInfo) {
+/// `"mut "` when variable members require a mutable cursor; empty otherwise.
+/// REQ: REQ-TOOL-042.
+fn mut_kw(vars: &[VarInfo]) -> &'static str {
+    if vars.is_empty() { "" } else { "mut " }
+}
+
+/// Emits the variable-member encode block. `acc` is the value accessor
+/// (`v->` for C, `v.` for C++). REQ: REQ-TOOL-042.
+fn variable_write(s: &mut String, p: &str, v: &VarInfo, acc: &str) {
     let _ = writeln!(s, "    {{");
     let _ = writeln!(
         s,
@@ -406,12 +474,12 @@ fn variable_write(s: &mut String, p: &str, v: &VarInfo) {
     );
     let _ = writeln!(
         s,
-        "        if (v->{}_len > {}u) {{ return 0u; }}",
+        "        if ({acc}{}_len > {}u) {{ return 0u; }}",
         v.name, v.max
     );
     let _ = writeln!(
         s,
-        "        {p}_put_u32(dst + {}u, v->{}_len);",
+        "        {p}_put_u32(dst + {}u, {acc}{}_len);",
         v.desc_off, v.name
     );
     if v.multi {
@@ -425,26 +493,26 @@ fn variable_write(s: &mut String, p: &str, v: &VarInfo) {
         Type::String { .. } => {
             let _ = writeln!(
                 s,
-                "        if (!{p}_utf8_valid((const uint8_t *)v->{}, (size_t)v->{}_len)) {{ return 0u; }}",
+                "        if (!{p}_utf8_valid((const uint8_t *){acc}{}, (size_t){acc}{}_len)) {{ return 0u; }}",
                 v.name, v.name
             );
             let _ = writeln!(
                 s,
-                "        memcpy(dst + off, v->{}, (size_t)v->{}_len);",
+                "        memcpy(dst + off, {acc}{}, (size_t){acc}{}_len);",
                 v.name, v.name
             );
         }
         Type::Bytes { .. } => {
             let _ = writeln!(
                 s,
-                "        memcpy(dst + off, v->{}, (size_t)v->{}_len);",
+                "        memcpy(dst + off, {acc}{}, (size_t){acc}{}_len);",
                 v.name, v.name
             );
         }
         Type::Bounded { elem, .. } => {
             let _ = writeln!(
                 s,
-                "        {{ size_t i; for (i = 0u; i < (size_t)v->{}_len; i++) {{ {p}_put_{}(dst + off + i * {}u, v->{}[i]); }} }}",
+                "        {{ size_t i; for (i = 0u; i < (size_t){acc}{}_len; i++) {{ {p}_put_{}(dst + off + i * {}u, {acc}{}[i]); }} }}",
                 v.name,
                 prim_suffix(*elem),
                 v.esize,
@@ -455,14 +523,15 @@ fn variable_write(s: &mut String, p: &str, v: &VarInfo) {
     }
     let _ = writeln!(
         s,
-        "        cursor = off + (size_t)v->{}_len * {}u;",
+        "        cursor = off + (size_t){acc}{}_len * {}u;",
         v.name, v.esize
     );
     let _ = writeln!(s, "    }}");
 }
 
-/// Emits the variable-member decode block. REQ: REQ-TOOL-042.
-fn variable_read(s: &mut String, p: &str, v: &VarInfo) {
+/// Emits the variable-member decode block. `oacc` is the output accessor
+/// (`out->` for C, `out.` for C++). REQ: REQ-TOOL-042.
+fn variable_read(s: &mut String, p: &str, v: &VarInfo, oacc: &str) {
     let _ = writeln!(s, "    {{");
     let _ = writeln!(
         s,
@@ -487,7 +556,7 @@ fn variable_read(s: &mut String, p: &str, v: &VarInfo) {
         "        if (off > len || (size_t)cnt * {}u > len - off) {{ return 0u; }}",
         v.esize
     );
-    let _ = writeln!(s, "        out->{}_len = cnt;", v.name);
+    let _ = writeln!(s, "        {oacc}{}_len = cnt;", v.name);
     match &v.ty {
         Type::String { .. } => {
             let _ = writeln!(
@@ -496,21 +565,21 @@ fn variable_read(s: &mut String, p: &str, v: &VarInfo) {
             );
             let _ = writeln!(
                 s,
-                "        memcpy(out->{}, src + off, (size_t)cnt);",
+                "        memcpy({oacc}{}, src + off, (size_t)cnt);",
                 v.name
             );
         }
         Type::Bytes { .. } => {
             let _ = writeln!(
                 s,
-                "        memcpy(out->{}, src + off, (size_t)cnt);",
+                "        memcpy({oacc}{}, src + off, (size_t)cnt);",
                 v.name
             );
         }
         Type::Bounded { elem, .. } => {
             let _ = writeln!(
                 s,
-                "        {{ size_t i; for (i = 0u; i < (size_t)cnt; i++) {{ out->{}[i] = {p}_get_{}(src + off + i * {}u); }} }}",
+                "        {{ size_t i; for (i = 0u; i < (size_t)cnt; i++) {{ {oacc}{}[i] = {p}_get_{}(src + off + i * {}u); }} }}",
                 v.name,
                 prim_suffix(*elem),
                 v.esize
@@ -518,7 +587,7 @@ fn variable_read(s: &mut String, p: &str, v: &VarInfo) {
             if *elem == Prim::Bool {
                 let _ = writeln!(
                     s,
-                    "        {{ size_t i; for (i = 0u; i < (size_t)cnt; i++) {{ if (out->{}[i] > 1u) {{ return 0u; }} }} }}",
+                    "        {{ size_t i; for (i = 0u; i < (size_t)cnt; i++) {{ if ({oacc}{}[i] > 1u) {{ return 0u; }} }} }}",
                     v.name
                 );
             }
@@ -547,7 +616,7 @@ fn topic_c(topic: &str, entry: &TopicEntry) -> String {
     s.push('\n');
     let _ = writeln!(s, "#define {}_SAMPLE_MAX {max}u", p.to_ascii_uppercase());
     s.push('\n');
-    emit_helpers(&mut s, &p);
+    emit_helpers(&mut s, &p, &C_TYPES);
     s.push('\n');
     emit_struct(&mut s, &p, entry);
     s.push('\n');
@@ -559,12 +628,12 @@ fn topic_c(topic: &str, entry: &TopicEntry) -> String {
     let _ = writeln!(s, "    memset(dst, 0, {max}u);");
     for field in &entry.schema.fields {
         if canon::variable_parts(&field.ty).is_none() {
-            fixed_write(&mut s, &p, field, header_offset(entry, &field.name));
+            fixed_write(&mut s, &p, field, header_offset(entry, &field.name), "v->");
         }
     }
     let _ = writeln!(s, "    {{ size_t cursor = {header_end}u;");
     for v in &vars {
-        variable_write(&mut s, &p, v);
+        variable_write(&mut s, &p, v, "v->");
     }
     let _ = writeln!(s, "    return cursor; }}");
     let _ = writeln!(s, "}}");
@@ -576,12 +645,18 @@ fn topic_c(topic: &str, entry: &TopicEntry) -> String {
     let _ = writeln!(s, "    if (len < {header_end}u) {{ return 0u; }}");
     for field in &entry.schema.fields {
         if canon::variable_parts(&field.ty).is_none() {
-            fixed_read(&mut s, &p, field, header_offset(entry, &field.name));
+            fixed_read(
+                &mut s,
+                &p,
+                field,
+                header_offset(entry, &field.name),
+                "out->",
+            );
         }
     }
     let _ = writeln!(s, "    {{ size_t cursor = {header_end}u;");
     for v in &vars {
-        variable_read(&mut s, &p, v);
+        variable_read(&mut s, &p, v, "out->");
     }
     let _ = writeln!(s, "    if (cursor != len) {{ return 0u; }}");
     let _ = writeln!(s, "    return len; }}");
@@ -662,5 +737,1043 @@ fn node_c(name: &str, entry: &NodeEntry, model: &WorkspaceModel) -> String {
         let _ = writeln!(s, "}}");
     }
     let _ = writeln!(s, "#endif");
+    s
+}
+
+/// `PascalCase` identifier derived from a topic path or node name (`control/target`
+/// → `ControlTarget`). REQ: REQ-TOOL-029.
+#[must_use]
+pub fn ident_pascal(identity: &str) -> String {
+    let mut out = String::new();
+    let mut upper = true;
+    for ch in identity.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if upper {
+                out.push(ch.to_ascii_uppercase());
+            } else {
+                out.push(ch);
+            }
+            upper = false;
+        } else {
+            upper = true;
+        }
+    }
+    out
+}
+
+/// C++ storage type for a canonical primitive. REQ: REQ-TOOL-042.
+const fn cpp_type(p: Prim) -> &'static str {
+    match p {
+        Prim::Bool | Prim::U8 => "std::uint8_t",
+        Prim::I8 => "std::int8_t",
+        Prim::I16 => "std::int16_t",
+        Prim::U16 => "std::uint16_t",
+        Prim::I32 => "std::int32_t",
+        Prim::U32 => "std::uint32_t",
+        Prim::I64 => "std::int64_t",
+        Prim::U64 => "std::uint64_t",
+        Prim::F32 => "float",
+        Prim::F64 => "double",
+    }
+}
+
+/// Emits the C++ struct definition (one member per schema field, variable
+/// members carry a `_len` count plus a fixed-capacity buffer).
+/// REQ: REQ-BIND-011.
+fn emit_struct_cpp(s: &mut String, ty: &str, entry: &TopicEntry) {
+    let _ = writeln!(s, "struct {ty} {{");
+    for field in &entry.schema.fields {
+        match &field.ty {
+            Type::Prim(prim) => {
+                let _ = writeln!(s, "    {} {} = 0;", cpp_type(*prim), field.name);
+            }
+            Type::Enum { .. } => {
+                let _ = writeln!(s, "    std::uint8_t {} = 0;", field.name);
+            }
+            Type::FixedArray { elem, n } => {
+                let _ = writeln!(
+                    s,
+                    "    std::array<{}, {}> {} = {{}};",
+                    cpp_type(*elem),
+                    n,
+                    field.name
+                );
+            }
+            Type::String { max } => {
+                let _ = writeln!(s, "    std::uint32_t {}_len = 0;", field.name);
+                let _ = writeln!(s, "    char {}[{}] = {{}};", field.name, max);
+            }
+            Type::Bytes { max } => {
+                let _ = writeln!(s, "    std::uint32_t {}_len = 0;", field.name);
+                let _ = writeln!(s, "    std::uint8_t {}[{}] = {{}};", field.name, max);
+            }
+            Type::Bounded { elem, max } => {
+                let _ = writeln!(s, "    std::uint32_t {}_len = 0;", field.name);
+                let _ = writeln!(
+                    s,
+                    "    std::array<{}, {}> {} = {{}};",
+                    cpp_type(*elem),
+                    max,
+                    field.name
+                );
+            }
+        }
+    }
+    let _ = writeln!(s, "}};");
+}
+
+/// Renders a per-topic C++20 header: banner, include guard, helpers, struct, and
+/// the canonical two-region encode/decode. Includes the RAII hook header
+/// (`drm/drm.hpp`). REQ: REQ-TOOL-029, REQ-BIND-011.
+#[allow(clippy::too_many_lines)]
+fn topic_cpp(topic: &str, entry: &TopicEntry) -> String {
+    let p = file_ident(topic);
+    let ty = ident_pascal(topic);
+    let max = entry.layout.sample_max;
+    let header_end = entry.layout.header_end;
+    let vars = variables(entry);
+    let mut s = String::new();
+    emit_banner(&mut s, &format!("topic: {topic}"));
+    let _ = writeln!(s, "#pragma once");
+    let _ = writeln!(s, "#include <array>");
+    let _ = writeln!(s, "#include <cstddef>");
+    let _ = writeln!(s, "#include <cstdint>");
+    let _ = writeln!(s, "#include <cstring>");
+    let _ = writeln!(s, "#include <drm/drm.hpp>");
+    s.push('\n');
+    let _ = writeln!(s, "namespace drm::gen::{p} {{");
+    let _ = writeln!(s, "using std::int8_t;");
+    let _ = writeln!(s, "using std::int16_t;");
+    let _ = writeln!(s, "using std::int32_t;");
+    let _ = writeln!(s, "using std::int64_t;");
+    let _ = writeln!(s, "using std::uint8_t;");
+    let _ = writeln!(s, "using std::uint16_t;");
+    let _ = writeln!(s, "using std::uint32_t;");
+    let _ = writeln!(s, "using std::uint64_t;");
+    let _ = writeln!(s, "using std::size_t;");
+    let _ = writeln!(s, "using std::memcpy;");
+    s.push('\n');
+    let _ = writeln!(s, "inline constexpr size_t SAMPLE_MAX = {max}u;");
+    s.push('\n');
+    emit_struct_cpp(&mut s, &ty, entry);
+    s.push('\n');
+    emit_helpers(&mut s, &p, &CPP_TYPES);
+    s.push('\n');
+    let _ = writeln!(
+        s,
+        "inline size_t encode(const {ty}& v, uint8_t* dst, size_t cap) {{"
+    );
+    let _ = writeln!(s, "    if (cap < {max}u) {{ return 0u; }}");
+    let _ = writeln!(s, "    memset(dst, 0, {max}u);");
+    for field in &entry.schema.fields {
+        if canon::variable_parts(&field.ty).is_none() {
+            fixed_write(&mut s, &p, field, header_offset(entry, &field.name), "v.");
+        }
+    }
+    let _ = writeln!(s, "    {{ size_t cursor = {header_end}u;");
+    for v in &vars {
+        variable_write(&mut s, &p, v, "v.");
+    }
+    let _ = writeln!(s, "    return cursor; }}");
+    let _ = writeln!(s, "}}");
+    s.push('\n');
+    let _ = writeln!(
+        s,
+        "inline size_t decode({ty}* out, const uint8_t* src, size_t len) {{"
+    );
+    let _ = writeln!(s, "    if (len < {header_end}u) {{ return 0u; }}");
+    for field in &entry.schema.fields {
+        if canon::variable_parts(&field.ty).is_none() {
+            fixed_read(
+                &mut s,
+                &p,
+                field,
+                header_offset(entry, &field.name),
+                "out->",
+            );
+        }
+    }
+    let _ = writeln!(s, "    {{ size_t cursor = {header_end}u;");
+    for v in &vars {
+        variable_read(&mut s, &p, v, "out->");
+    }
+    let _ = writeln!(s, "    if (cursor != len) {{ return 0u; }}");
+    let _ = writeln!(s, "    return len; }}");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "}} // namespace drm::gen::{p}");
+    s
+}
+
+/// Renders a node-scoped C++ API header: includes only the node's declared
+/// topic headers and exposes typed publish/read wrappers (the sole endpoint
+/// layer). REQ: REQ-TOOL-028, REQ-BIND-012.
+fn node_cpp(name: &str, entry: &NodeEntry, model: &WorkspaceModel) -> String {
+    let p = file_ident(name);
+    let mut s = String::new();
+    emit_banner(&mut s, &format!("node: {name}"));
+    let _ = writeln!(s, "#pragma once");
+    let _ = writeln!(s, "#include <cstddef>");
+    let _ = writeln!(s, "#include <cstdint>");
+    let _ = writeln!(s, "#include <optional>");
+    let _ = writeln!(s, "#include <drm/drm.hpp>");
+    let mut topics: Vec<&String> = entry
+        .publishes
+        .iter()
+        .chain(entry.consumes.iter())
+        .collect();
+    topics.sort_unstable();
+    topics.dedup();
+    for topic in &topics {
+        let rel = out_path(std::path::Path::new(""), Lang::Cpp, GenKind::Topic, topic);
+        let rel = rel.to_str().map_or_else(String::new, |r| {
+            format!("../{}", r.replace(".drm/gen/cpp/", ""))
+        });
+        let _ = writeln!(s, "#include \"{rel}\"");
+    }
+    s.push('\n');
+    let _ = writeln!(s, "namespace drm::gen::node_{p} {{");
+    for topic in &entry.publishes {
+        if !model.topics.contains_key(topic) {
+            continue;
+        }
+        let tp = file_ident(topic);
+        let tt = ident_pascal(topic);
+        let _ = writeln!(
+            s,
+            "inline drm_status publish_{tp}(const drm::Publisher& pub, const {tp}::{tt}& v) {{"
+        );
+        let _ = writeln!(s, "    std::uint8_t buf[{tp}::SAMPLE_MAX];");
+        let _ = writeln!(s, "    std::size_t n = {tp}::encode(v, buf, sizeof buf);");
+        let _ = writeln!(s, "    if (n == 0u) {{ return DRM_ERR_INVALID_DATA; }}");
+        let _ = writeln!(s, "    return pub.publish(buf, n);");
+        let _ = writeln!(s, "}}");
+    }
+    for topic in &entry.consumes {
+        if !model.topics.contains_key(topic) {
+            continue;
+        }
+        let tp = file_ident(topic);
+        let tt = ident_pascal(topic);
+        let _ = writeln!(
+            s,
+            "inline std::optional<{tp}::{tt}> read_{tp}(const drm::Consumer& con) {{"
+        );
+        let _ = writeln!(s, "    std::uint8_t buf[{tp}::SAMPLE_MAX];");
+        let _ = writeln!(
+            s,
+            "    std::optional<std::size_t> n = con.read_latest(buf);"
+        );
+        let _ = writeln!(s, "    if (!n.has_value()) {{ return std::nullopt; }}");
+        let _ = writeln!(s, "    {tp}::{tt} out{{}};");
+        let _ = writeln!(
+            s,
+            "    if ({tp}::decode(&out, buf, *n) == 0u) {{ return std::nullopt; }}"
+        );
+        let _ = writeln!(s, "    return out;");
+        let _ = writeln!(s, "}}");
+    }
+    let _ = writeln!(s, "}} // namespace drm::gen::node_{p}");
+    s
+}
+
+/// Rust storage type for a canonical primitive. REQ: REQ-TOOL-042.
+const fn rust_type(p: Prim) -> &'static str {
+    match p {
+        Prim::Bool | Prim::U8 => "u8",
+        Prim::I8 => "i8",
+        Prim::I16 => "i16",
+        Prim::U16 => "u16",
+        Prim::I32 => "i32",
+        Prim::U32 => "u32",
+        Prim::I64 => "i64",
+        Prim::U64 => "u64",
+        Prim::F32 => "f32",
+        Prim::F64 => "f64",
+    }
+}
+
+/// Emits the Rust endian/geometry helper functions for a topic module.
+/// REQ: REQ-TOOL-042.
+#[allow(clippy::too_many_lines)]
+fn emit_helpers_rust(s: &mut String) {
+    let _ = writeln!(s, "fn put_u8(dst: &mut [u8], v: u8) {{ dst[0] = v; }}");
+    let _ = writeln!(
+        s,
+        "fn put_i8(dst: &mut [u8], v: i8) {{ dst[0] = v as u8; }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn put_u16(dst: &mut [u8], v: u16) {{ dst[0] = v as u8; dst[1] = (v >> 8) as u8; }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn put_i16(dst: &mut [u8], v: i16) {{ put_u16(dst, v as u16); }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn put_u32(dst: &mut [u8], v: u32) {{ dst[0] = v as u8; dst[1] = (v >> 8) as u8; dst[2] = (v >> 16) as u8; dst[3] = (v >> 24) as u8; }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn put_i32(dst: &mut [u8], v: i32) {{ put_u32(dst, v as u32); }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn put_u64(dst: &mut [u8], v: u64) {{ let mut i = 0; while i < 8 {{ dst[i] = (v >> (8 * i)) as u8; i += 1; }} }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn put_i64(dst: &mut [u8], v: i64) {{ put_u64(dst, v as u64); }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn put_f32(dst: &mut [u8], v: f32) {{ put_u32(dst, v.to_bits()); }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn put_f64(dst: &mut [u8], v: f64) {{ put_u64(dst, v.to_bits()); }}"
+    );
+    let _ = writeln!(s, "fn get_u8(src: &[u8]) -> u8 {{ src[0] }}");
+    let _ = writeln!(s, "fn get_i8(src: &[u8]) -> i8 {{ src[0] as i8 }}");
+    let _ = writeln!(
+        s,
+        "fn get_u16(src: &[u8]) -> u16 {{ (src[0] as u16) | ((src[1] as u16) << 8) }}"
+    );
+    let _ = writeln!(s, "fn get_i16(src: &[u8]) -> i16 {{ get_u16(src) as i16 }}");
+    let _ = writeln!(
+        s,
+        "fn get_u32(src: &[u8]) -> u32 {{ (src[0] as u32) | ((src[1] as u32) << 8) | ((src[2] as u32) << 16) | ((src[3] as u32) << 24) }}"
+    );
+    let _ = writeln!(s, "fn get_i32(src: &[u8]) -> i32 {{ get_u32(src) as i32 }}");
+    let _ = writeln!(
+        s,
+        "fn get_u64(src: &[u8]) -> u64 {{ let mut v = 0u64; let mut i = 0; while i < 8 {{ v |= (src[i] as u64) << (8 * i); i += 1; }} v }}"
+    );
+    let _ = writeln!(s, "fn get_i64(src: &[u8]) -> i64 {{ get_u64(src) as i64 }}");
+    let _ = writeln!(
+        s,
+        "fn get_f32(src: &[u8]) -> f32 {{ f32::from_bits(get_u32(src)) }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn get_f64(src: &[u8]) -> f64 {{ f64::from_bits(get_u64(src)) }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn align_up(x: usize, a: usize) -> usize {{ (x + (a - 1)) & !(a - 1) }}"
+    );
+    let _ = writeln!(
+        s,
+        "fn utf8_valid(s: &[u8]) -> bool {{ core::str::from_utf8(s).is_ok() }}"
+    );
+}
+
+/// Emits the Rust encode write for one fixed field. REQ: REQ-TOOL-042.
+fn rust_fixed_write(s: &mut String, field: &crate::parser::Field, off: u64) {
+    match &field.ty {
+        Type::Prim(prim) => {
+            let _ = writeln!(
+                s,
+                "    put_{}(&mut dst[{off}..], v.{});",
+                prim_suffix(*prim),
+                field.name
+            );
+        }
+        Type::Enum { .. } => {
+            let _ = writeln!(s, "    dst[{off}] = v.{};", field.name);
+        }
+        Type::FixedArray { elem, n } => {
+            let es = canon::prim_layout(*elem).size;
+            let _ = writeln!(
+                s,
+                "    for i in 0..{n} {{ put_{}(&mut dst[{off} + i * {es}..], v.{}[i]); }}",
+                prim_suffix(*elem),
+                field.name
+            );
+        }
+        _ => {}
+    }
+}
+
+/// Emits the Rust decode read for one fixed field. REQ: REQ-TOOL-042.
+fn rust_fixed_read(s: &mut String, field: &crate::parser::Field, off: u64) {
+    match &field.ty {
+        Type::Prim(prim) => {
+            let _ = writeln!(
+                s,
+                "    out.{} = get_{}(&src[{off}..]);",
+                field.name,
+                prim_suffix(*prim)
+            );
+            if *prim == Prim::Bool {
+                let _ = writeln!(s, "    if out.{} > 1 {{ return None; }}", field.name);
+            }
+        }
+        Type::Enum { variants } => {
+            let _ = writeln!(s, "    out.{} = src[{off}];", field.name);
+            let _ = writeln!(
+                s,
+                "    if out.{} >= {} {{ return None; }}",
+                field.name,
+                variants.len()
+            );
+        }
+        Type::FixedArray { elem, n } => {
+            let es = canon::prim_layout(*elem).size;
+            let _ = writeln!(
+                s,
+                "    for i in 0..{n} {{ out.{}[i] = get_{}(&src[{off} + i * {es}..]); }}",
+                field.name,
+                prim_suffix(*elem)
+            );
+            if *elem == Prim::Bool {
+                let _ = writeln!(
+                    s,
+                    "    for i in 0..{n} {{ if out.{}[i] > 1 {{ return None; }} }}",
+                    field.name
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Emits the Rust variable-member encode block. REQ: REQ-TOOL-042.
+fn rust_var_write(s: &mut String, v: &VarInfo) {
+    let _ = writeln!(s, "    {{");
+    let _ = writeln!(s, "        let off = align_up(cursor, {});", v.ealign);
+    let _ = writeln!(s, "        let n = v.{}_len as usize;", v.name);
+    let _ = writeln!(s, "        if n > {} {{ return None; }}", v.max);
+    let _ = writeln!(
+        s,
+        "        put_u32(&mut dst[{}..], v.{}_len);",
+        v.desc_off, v.name
+    );
+    if v.multi {
+        let _ = writeln!(
+            s,
+            "        put_u32(&mut dst[{}..], off as u32);",
+            v.desc_off + 4
+        );
+    }
+    match &v.ty {
+        Type::String { .. } => {
+            let _ = writeln!(
+                s,
+                "        if !utf8_valid(&v.{}[..n]) {{ return None; }}",
+                v.name
+            );
+            let _ = writeln!(
+                s,
+                "        dst[off..off + n].copy_from_slice(&v.{}[..n]);",
+                v.name
+            );
+        }
+        Type::Bytes { .. } => {
+            let _ = writeln!(
+                s,
+                "        dst[off..off + n].copy_from_slice(&v.{}[..n]);",
+                v.name
+            );
+        }
+        Type::Bounded { elem, .. } => {
+            let _ = writeln!(
+                s,
+                "        for i in 0..n {{ put_{}(&mut dst[off + i * {}..], v.{}[i]); }}",
+                prim_suffix(*elem),
+                v.esize,
+                v.name
+            );
+        }
+        _ => {}
+    }
+    let _ = writeln!(s, "        cursor = off + n * {};", v.esize);
+    let _ = writeln!(s, "    }}");
+}
+
+/// Emits the Rust variable-member decode block. REQ: REQ-TOOL-042.
+fn rust_var_read(s: &mut String, v: &VarInfo) {
+    let _ = writeln!(s, "    {{");
+    let _ = writeln!(
+        s,
+        "        let cnt = get_u32(&src[{}..]) as usize;",
+        v.desc_off
+    );
+    let _ = writeln!(s, "        if cnt > {} {{ return None; }}", v.max);
+    let _ = writeln!(s, "        let off = align_up(cursor, {});", v.ealign);
+    if v.multi {
+        let _ = writeln!(
+            s,
+            "        if get_u32(&src[{}..]) as usize != off {{ return None; }}",
+            v.desc_off + 4
+        );
+    }
+    let _ = writeln!(
+        s,
+        "        if off > len || cnt * {} > len - off {{ return None; }}",
+        v.esize
+    );
+    match &v.ty {
+        Type::String { .. } => {
+            let _ = writeln!(
+                s,
+                "        if !utf8_valid(&src[off..off + cnt]) {{ return None; }}"
+            );
+            let _ = writeln!(
+                s,
+                "        out.{}[..cnt].copy_from_slice(&src[off..off + cnt]);",
+                v.name
+            );
+            let _ = writeln!(s, "        out.{}_len = cnt as u32;", v.name);
+        }
+        Type::Bytes { .. } => {
+            let _ = writeln!(
+                s,
+                "        out.{}[..cnt].copy_from_slice(&src[off..off + cnt]);",
+                v.name
+            );
+            let _ = writeln!(s, "        out.{}_len = cnt as u32;", v.name);
+        }
+        Type::Bounded { elem, .. } => {
+            let _ = writeln!(
+                s,
+                "        for i in 0..cnt {{ out.{}[i] = get_{}(&src[off + i * {}..]); }}",
+                v.name,
+                prim_suffix(*elem),
+                v.esize
+            );
+            let _ = writeln!(s, "        out.{}_len = cnt as u32;", v.name);
+            if *elem == Prim::Bool {
+                let _ = writeln!(
+                    s,
+                    "        for i in 0..cnt {{ if out.{}[i] > 1 {{ return None; }} }}",
+                    v.name
+                );
+            }
+        }
+        _ => {}
+    }
+    let _ = writeln!(s, "        cursor = off + cnt * {};", v.esize);
+    let _ = writeln!(s, "    }}");
+}
+
+/// Renders a per-topic Rust module: safe types plus the canonical two-region
+/// `encode`/`decode` builder. REQ: REQ-TOOL-029, REQ-BIND-011.
+#[allow(clippy::too_many_lines)]
+fn topic_rust(topic: &str, entry: &TopicEntry) -> String {
+    let ty = ident_pascal(topic);
+    let max = entry.layout.sample_max;
+    let header_end = entry.layout.header_end;
+    let vars = variables(entry);
+    let mut s = String::new();
+    let _ = writeln!(s, "//! @generated by drm codegen; do not edit.");
+    let _ = writeln!(s, "//! topic: {topic}");
+    s.push('\n');
+    let _ = writeln!(s, "#![allow(dead_code)]");
+    s.push('\n');
+    let _ = writeln!(s, "pub const SAMPLE_MAX: usize = {max};");
+    let _ = writeln!(s, "const HEADER_END: usize = {header_end};");
+    s.push('\n');
+    let _ = writeln!(s, "#[derive(Clone, Debug, Default, PartialEq)]");
+    let _ = writeln!(s, "pub struct {ty} {{");
+    for field in &entry.schema.fields {
+        match &field.ty {
+            Type::Prim(prim) => {
+                let _ = writeln!(s, "    pub {}: {},", field.name, rust_type(*prim));
+            }
+            Type::Enum { .. } => {
+                let _ = writeln!(s, "    pub {}: u8,", field.name);
+            }
+            Type::FixedArray { elem, n } => {
+                let _ = writeln!(s, "    pub {}: [{}; {}],", field.name, rust_type(*elem), n);
+            }
+            Type::String { max } | Type::Bytes { max } => {
+                let _ = writeln!(s, "    pub {}_len: u32,", field.name);
+                let _ = writeln!(s, "    pub {}: [u8; {}],", field.name, max);
+            }
+            Type::Bounded { elem, max } => {
+                let _ = writeln!(s, "    pub {}_len: u32,", field.name);
+                let _ = writeln!(
+                    s,
+                    "    pub {}: [{}; {}],",
+                    field.name,
+                    rust_type(*elem),
+                    max
+                );
+            }
+        }
+    }
+    let _ = writeln!(s, "}}");
+    s.push('\n');
+    emit_helpers_rust(&mut s);
+    s.push('\n');
+    let _ = writeln!(
+        s,
+        "pub fn encode(v: &{ty}, dst: &mut [u8]) -> Option<usize> {{"
+    );
+    let _ = writeln!(s, "    if dst.len() < SAMPLE_MAX {{ return None; }}");
+    let _ = writeln!(s, "    for b in dst[..SAMPLE_MAX].iter_mut() {{ *b = 0; }}");
+    for field in &entry.schema.fields {
+        if canon::variable_parts(&field.ty).is_none() {
+            rust_fixed_write(&mut s, field, header_offset(entry, &field.name));
+        }
+    }
+    let _ = writeln!(s, "    let {}cursor = HEADER_END;", mut_kw(&vars));
+    for v in &vars {
+        rust_var_write(&mut s, v);
+    }
+    let _ = writeln!(s, "    Some(cursor)");
+    let _ = writeln!(s, "}}");
+    s.push('\n');
+    let _ = writeln!(s, "pub fn decode(src: &[u8]) -> Option<{ty}> {{");
+    let _ = writeln!(s, "    if src.len() < HEADER_END {{ return None; }}");
+    let _ = writeln!(s, "    let len = src.len();");
+    let _ = writeln!(s, "    let mut out = {ty}::default();");
+    for field in &entry.schema.fields {
+        if canon::variable_parts(&field.ty).is_none() {
+            rust_fixed_read(&mut s, field, header_offset(entry, &field.name));
+        }
+    }
+    let _ = writeln!(s, "    let {}cursor = HEADER_END;", mut_kw(&vars));
+    for v in &vars {
+        rust_var_read(&mut s, v);
+    }
+    let _ = writeln!(s, "    if cursor != len {{ return None; }}");
+    let _ = writeln!(s, "    Some(out)");
+    let _ = writeln!(s, "}}");
+    s
+}
+
+/// Renders a node-scoped Rust module: capability facade over the node's declared
+/// topic modules (the sole endpoint layer). REQ: REQ-TOOL-028, REQ-BIND-012.
+fn node_rust(name: &str, entry: &NodeEntry, model: &WorkspaceModel) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "//! @generated by drm codegen; do not edit.");
+    let _ = writeln!(s, "//! node: {name}");
+    s.push('\n');
+    let mut topics: Vec<&String> = entry
+        .publishes
+        .iter()
+        .chain(entry.consumes.iter())
+        .collect();
+    topics.sort_unstable();
+    topics.dedup();
+    for topic in &topics {
+        let tp = file_ident(topic);
+        let tt = ident_pascal(topic);
+        let _ = writeln!(s, "use super::{tp}::{{{tt}, encode as {tp}_encode}};");
+    }
+    s.push('\n');
+    for topic in &entry.publishes {
+        if !model.topics.contains_key(topic) {
+            continue;
+        }
+        let tp = file_ident(topic);
+        let tt = ident_pascal(topic);
+        let _ = writeln!(
+            s,
+            "pub fn publish_{tp}(publisher: &drm::Publisher, v: &{tt}) -> Result<(), drm::Error> {{"
+        );
+        let _ = writeln!(s, "    let mut buf = [0u8; {tp}::SAMPLE_MAX];");
+        let _ = writeln!(
+            s,
+            "    let n = {tp}_encode(v, &mut buf).ok_or(drm::Error::InvalidData)?;"
+        );
+        let _ = writeln!(s, "    publisher.publish(&buf[..n])");
+        let _ = writeln!(s, "}}");
+    }
+    for topic in &entry.consumes {
+        if !model.topics.contains_key(topic) {
+            continue;
+        }
+        let tp = file_ident(topic);
+        let tt = ident_pascal(topic);
+        let _ = writeln!(
+            s,
+            "pub fn read_{tp}(consumer: &drm::Consumer) -> Result<Option<{tt}>, drm::Error> {{"
+        );
+        let _ = writeln!(s, "    let mut buf = [0u8; {tp}::SAMPLE_MAX];");
+        let _ = writeln!(s, "    let n = consumer.read_latest(&mut buf)?;");
+        let _ = writeln!(s, "    Ok(super::{tp}::decode(&buf[..n]))");
+        let _ = writeln!(s, "}}");
+    }
+    s
+}
+
+/// Python `struct` format character for a canonical primitive.
+/// REQ: REQ-TOOL-042.
+const fn py_fmt(p: Prim) -> &'static str {
+    match p {
+        Prim::Bool | Prim::U8 => "B",
+        Prim::I8 => "b",
+        Prim::I16 => "h",
+        Prim::U16 => "H",
+        Prim::I32 => "i",
+        Prim::U32 => "I",
+        Prim::I64 => "q",
+        Prim::U64 => "Q",
+        Prim::F32 => "f",
+        Prim::F64 => "d",
+    }
+}
+
+/// Python type annotation for a schema field. REQ: REQ-TOOL-042.
+const fn py_annot(ty: &Type) -> &'static str {
+    match ty {
+        Type::Prim(Prim::F32 | Prim::F64) => "float",
+        Type::Prim(_) | Type::Enum { .. } => "int",
+        Type::String { .. } => "str",
+        Type::Bytes { .. } => "bytes",
+        Type::FixedArray { .. } | Type::Bounded { .. } => "list",
+    }
+}
+
+/// Python default value expression for a schema field. REQ: REQ-TOOL-042.
+const fn py_default(ty: &Type) -> &'static str {
+    match ty {
+        Type::Prim(Prim::F32 | Prim::F64) => "0.0",
+        Type::Prim(_) | Type::Enum { .. } => "0",
+        Type::String { .. } => "\"\"",
+        Type::Bytes { .. } => "b\"\"",
+        Type::FixedArray { .. } | Type::Bounded { .. } => "field(default_factory=list)",
+    }
+}
+
+/// Emits the Python encode write for one fixed field. REQ: REQ-TOOL-042.
+fn py_fixed_write(s: &mut String, field: &crate::parser::Field, off: u64) {
+    match &field.ty {
+        Type::Prim(prim) => {
+            let _ = writeln!(
+                s,
+                "    struct.pack_into(\"<{}\", buf, {off}, v.{})",
+                py_fmt(*prim),
+                field.name
+            );
+        }
+        Type::Enum { .. } => {
+            let _ = writeln!(
+                s,
+                "    struct.pack_into(\"<B\", buf, {off}, v.{})",
+                field.name
+            );
+        }
+        Type::FixedArray { elem, n } => {
+            let es = canon::prim_layout(*elem).size;
+            let _ = writeln!(s, "    for _i in range({n}):");
+            let _ = writeln!(
+                s,
+                "        struct.pack_into(\"<{}\", buf, {off} + _i * {es}, v.{}[_i])",
+                py_fmt(*elem),
+                field.name
+            );
+        }
+        _ => {}
+    }
+}
+
+/// Emits the Python decode read for one fixed field. REQ: REQ-TOOL-042.
+fn py_fixed_read(s: &mut String, field: &crate::parser::Field, off: u64) {
+    match &field.ty {
+        Type::Prim(prim) => {
+            let _ = writeln!(
+                s,
+                "    out.{} = struct.unpack_from(\"<{}\", data, {off})[0]",
+                field.name,
+                py_fmt(*prim)
+            );
+            if *prim == Prim::Bool {
+                let _ = writeln!(s, "    if out.{} > 1:", field.name);
+                let _ = writeln!(s, "        raise ValueError(\"bool field {}\")", field.name);
+            }
+        }
+        Type::Enum { variants } => {
+            let _ = writeln!(s, "    out.{} = data[{off}]", field.name);
+            let _ = writeln!(s, "    if out.{} >= {}:", field.name, variants.len());
+            let _ = writeln!(s, "        raise ValueError(\"enum field {}\")", field.name);
+        }
+        Type::FixedArray { elem, n } => {
+            let es = canon::prim_layout(*elem).size;
+            let _ = writeln!(
+                s,
+                "    out.{} = [struct.unpack_from(\"<{}\", data, {off} + _i * {es})[0] for _i in range({n})]",
+                field.name,
+                py_fmt(*elem)
+            );
+            if *elem == Prim::Bool {
+                let _ = writeln!(s, "    for _i in range({n}):");
+                let _ = writeln!(s, "        if out.{}[_i] > 1:", field.name);
+                let _ = writeln!(
+                    s,
+                    "            raise ValueError(\"bool field {}\")",
+                    field.name
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Emits the Python variable-member encode block. REQ: REQ-TOOL-042.
+fn py_var_write(s: &mut String, v: &VarInfo) {
+    match &v.ty {
+        Type::String { .. } => {
+            let _ = writeln!(s, "    _b = v.{}.encode(\"utf-8\")", v.name);
+            let _ = writeln!(s, "    if len(_b) > {}:", v.max);
+            let _ = writeln!(
+                s,
+                "        raise ValueError(\"string too long: {}\")",
+                v.name
+            );
+        }
+        Type::Bytes { .. } => {
+            let _ = writeln!(s, "    _b = bytes(v.{})", v.name);
+            let _ = writeln!(s, "    if len(_b) > {}:", v.max);
+            let _ = writeln!(
+                s,
+                "        raise ValueError(\"bytes too long: {}\")",
+                v.name
+            );
+        }
+        Type::Bounded { .. } => {
+            let _ = writeln!(s, "    if len(v.{}) > {}:", v.name, v.max);
+            let _ = writeln!(
+                s,
+                "        raise ValueError(\"array too long: {}\")",
+                v.name
+            );
+        }
+        _ => {}
+    }
+    let _ = writeln!(s, "    _off = _align_up(cursor, {})", v.ealign);
+    match &v.ty {
+        Type::String { .. } | Type::Bytes { .. } => {
+            let _ = writeln!(
+                s,
+                "    struct.pack_into(\"<I\", buf, {}, len(_b))",
+                v.desc_off
+            );
+            if v.multi {
+                let _ = writeln!(
+                    s,
+                    "    struct.pack_into(\"<I\", buf, {}, _off)",
+                    v.desc_off + 4
+                );
+            }
+            let _ = writeln!(s, "    buf[_off:_off + len(_b)] = _b");
+            let _ = writeln!(s, "    cursor = _off + len(_b) * {}", v.esize);
+        }
+        Type::Bounded { elem, .. } => {
+            let _ = writeln!(
+                s,
+                "    struct.pack_into(\"<I\", buf, {}, len(v.{}))",
+                v.desc_off, v.name
+            );
+            if v.multi {
+                let _ = writeln!(
+                    s,
+                    "    struct.pack_into(\"<I\", buf, {}, _off)",
+                    v.desc_off + 4
+                );
+            }
+            let _ = writeln!(s, "    for _i in range(len(v.{})):", v.name);
+            let _ = writeln!(
+                s,
+                "        struct.pack_into(\"<{}\", buf, _off + _i * {}, v.{}[_i])",
+                py_fmt(*elem),
+                v.esize,
+                v.name
+            );
+            let _ = writeln!(s, "    cursor = _off + len(v.{}) * {}", v.name, v.esize);
+        }
+        _ => {}
+    }
+}
+
+/// Emits the Python variable-member decode block. REQ: REQ-TOOL-042.
+fn py_var_read(s: &mut String, v: &VarInfo) {
+    let _ = writeln!(
+        s,
+        "    _cnt = struct.unpack_from(\"<I\", data, {})[0]",
+        v.desc_off
+    );
+    let _ = writeln!(s, "    if _cnt > {}:", v.max);
+    let _ = writeln!(
+        s,
+        "        raise ValueError(\"count too large: {}\")",
+        v.name
+    );
+    let _ = writeln!(s, "    _off = _align_up(cursor, {})", v.ealign);
+    if v.multi {
+        let _ = writeln!(
+            s,
+            "    if struct.unpack_from(\"<I\", data, {})[0] != _off:",
+            v.desc_off + 4
+        );
+        let _ = writeln!(
+            s,
+            "        raise ValueError(\"offset mismatch: {}\")",
+            v.name
+        );
+    }
+    let _ = writeln!(
+        s,
+        "    if _off > len(data) or _cnt * {} > len(data) - _off:",
+        v.esize
+    );
+    let _ = writeln!(
+        s,
+        "        raise ValueError(\"body out of range: {}\")",
+        v.name
+    );
+    match &v.ty {
+        Type::String { .. } => {
+            let _ = writeln!(
+                s,
+                "    out.{} = data[_off:_off + _cnt].decode(\"utf-8\", \"strict\")",
+                v.name
+            );
+        }
+        Type::Bytes { .. } => {
+            let _ = writeln!(s, "    out.{} = bytes(data[_off:_off + _cnt])", v.name);
+        }
+        Type::Bounded { elem, .. } => {
+            let _ = writeln!(
+                s,
+                "    out.{} = [struct.unpack_from(\"<{}\", data, _off + _i * {})[0] for _i in range(_cnt)]",
+                v.name,
+                py_fmt(*elem),
+                v.esize
+            );
+            if *elem == Prim::Bool {
+                let _ = writeln!(s, "    for _i in range(_cnt):");
+                let _ = writeln!(s, "        if out.{}[_i] > 1:", v.name);
+                let _ = writeln!(s, "            raise ValueError(\"bool field {}\")", v.name);
+            }
+        }
+        _ => {}
+    }
+    let _ = writeln!(s, "    cursor = _off + _cnt * {}", v.esize);
+}
+
+/// Renders a per-topic Python module: dataclass plus the canonical two-region
+/// `encode`/`decode` codec. REQ: REQ-TOOL-029, REQ-BIND-011.
+#[allow(clippy::too_many_lines)]
+fn topic_python(topic: &str, entry: &TopicEntry) -> String {
+    let ty = ident_pascal(topic);
+    let max = entry.layout.sample_max;
+    let header_end = entry.layout.header_end;
+    let vars = variables(entry);
+    let mut s = String::new();
+    let _ = writeln!(s, "# @generated by drm codegen; do not edit.");
+    let _ = writeln!(s, "# topic: {topic}");
+    s.push('\n');
+    let _ = writeln!(s, "from __future__ import annotations");
+    s.push('\n');
+    let _ = writeln!(s, "import struct");
+    let _ = writeln!(s, "from dataclasses import dataclass, field");
+    s.push('\n');
+    let _ = writeln!(s, "SAMPLE_MAX = {max}");
+    let _ = writeln!(s, "HEADER_END = {header_end}");
+    s.push('\n');
+    let _ = writeln!(s, "def _align_up(x: int, a: int) -> int:");
+    let _ = writeln!(s, "    return (x + (a - 1)) & ~(a - 1)");
+    s.push('\n');
+    let _ = writeln!(s, "@dataclass");
+    let _ = writeln!(s, "class {ty}:");
+    if entry.schema.fields.is_empty() {
+        let _ = writeln!(s, "    pass");
+    }
+    for field in &entry.schema.fields {
+        let _ = writeln!(
+            s,
+            "    {}: {} = {}",
+            field.name,
+            py_annot(&field.ty),
+            py_default(&field.ty)
+        );
+    }
+    s.push('\n');
+    let _ = writeln!(s, "def encode(v: \"{ty}\") -> bytes:");
+    let _ = writeln!(s, "    buf = bytearray(SAMPLE_MAX)");
+    for field in &entry.schema.fields {
+        if canon::variable_parts(&field.ty).is_none() {
+            py_fixed_write(&mut s, field, header_offset(entry, &field.name));
+        }
+    }
+    let _ = writeln!(s, "    cursor = HEADER_END");
+    for v in &vars {
+        py_var_write(&mut s, v);
+    }
+    let _ = writeln!(s, "    return bytes(buf[:cursor])");
+    s.push('\n');
+    let _ = writeln!(s, "def decode(data: bytes) -> \"{ty}\":");
+    let _ = writeln!(s, "    if len(data) < HEADER_END:");
+    let _ = writeln!(
+        s,
+        "        raise ValueError(\"sample shorter than header\")"
+    );
+    let _ = writeln!(s, "    out = {ty}()");
+    for field in &entry.schema.fields {
+        if canon::variable_parts(&field.ty).is_none() {
+            py_fixed_read(&mut s, field, header_offset(entry, &field.name));
+        }
+    }
+    let _ = writeln!(s, "    cursor = HEADER_END");
+    for v in &vars {
+        py_var_read(&mut s, v);
+    }
+    let _ = writeln!(s, "    if cursor != len(data):");
+    let _ = writeln!(s, "        raise ValueError(\"trailing bytes\")");
+    let _ = writeln!(s, "    return out");
+    s
+}
+
+/// Renders a node-scoped Python module: capability facade over the node's
+/// declared topic modules (the sole endpoint layer).
+/// REQ: REQ-TOOL-028, REQ-BIND-012.
+fn node_python(name: &str, entry: &NodeEntry, model: &WorkspaceModel) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "# @generated by drm codegen; do not edit.");
+    let _ = writeln!(s, "# node: {name}");
+    s.push('\n');
+    let mut topics: Vec<&String> = entry
+        .publishes
+        .iter()
+        .chain(entry.consumes.iter())
+        .collect();
+    topics.sort_unstable();
+    topics.dedup();
+    for topic in &topics {
+        let module = file_ident(topic);
+        let pkg = topic.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let stem = topic.rsplit_once('/').map_or(topic.as_str(), |(_, s)| s);
+        let _ = writeln!(s, "from {pkg} import {stem} as {module}");
+    }
+    s.push('\n');
+    for topic in &entry.publishes {
+        if !model.topics.contains_key(topic) {
+            continue;
+        }
+        let module = file_ident(topic);
+        let _ = writeln!(
+            s,
+            "def publish_{module}(publisher, value: {module}.{}) -> None:",
+            ident_pascal(topic)
+        );
+        let _ = writeln!(s, "    publisher.publish({module}.encode(value))");
+        s.push('\n');
+    }
+    for topic in &entry.consumes {
+        if !model.topics.contains_key(topic) {
+            continue;
+        }
+        let module = file_ident(topic);
+        let _ = writeln!(s, "def read_{module}(consumer):");
+        let _ = writeln!(s, "    raw = consumer.latest()");
+        let _ = writeln!(s, "    if raw is None:");
+        let _ = writeln!(s, "        return None");
+        let _ = writeln!(s, "    return {module}.decode(raw.bytes())");
+        s.push('\n');
+    }
     s
 }
