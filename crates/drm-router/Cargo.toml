@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+drm-core = { path = "../drm-core" }
 drm-types = { path = "../drm-types" }
 toml.workspace = true
 
