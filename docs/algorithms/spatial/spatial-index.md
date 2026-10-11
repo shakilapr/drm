@@ -142,6 +142,27 @@ fn cell_of(coord: f64, cell_size: f64) -> Result<i32, Status>
 
 fn region(&self, frame: FrameId, aabb: TypedAabb) -> Result<CandidateSet, Status> { /* same two-source union */ }
 
+// ---- Two-source union runtime (§Proximity Query Semantics) ----
+// `ProximityIndex` owns the dynamic `HashGrid` plus the compiled static BVH and
+// evaluates the union in the anchor frame; a query frame != anchor is a typed
+// conversion through the standard path, else `PathNotFound` (I-X5). The static
+// source contributes AABB-overlap hits, the grid contributes superset cells;
+// duplicates collapse and neither source may be dropped (I-X6). Grid handles
+// index the fixed object table `[0, max_objects)`, so static handles are lifted
+// by `STATIC_ENTITY_BASE` into a disjoint id range — otherwise a dynamic and a
+// static candidate could share a handle and the dedup would silently miss. The
+// grid epoch is re-read after both scans, so a racing move yields
+// `CONCURRENT_UPDATE`.
+fn union_nearby(&self, frame: FrameId, p: TypedPoint, radius: f64) -> Result<CandidateSet, Status> {
+    if p.frame != self.anchor { return Err(status_of(convert(p, frame)?)); } // standard path (I-X5)
+    let e1 = self.grid.stable_epoch()?;
+    let mut set = CandidateSet::from_caller_scratch()?;
+    self.grid.merge_cells(p, radius, &mut set);           // superset cells (I-X13 fallback inside)
+    self.bvh.merge_aabb_overlap(aabb_of(p, radius), &mut set);  // static handles = entity + STATIC_ENTITY_BASE
+    if self.grid.epoch() != e1 { return Err(ConcurrentUpdate); }  // coherent union (I-X11)
+    Ok(set)
+}
+
 // ---- Compiled BVH (§Compiled Static BVH) ----
 fn compile_bvh(static_frames: &StaticEnv) -> CompiledBvh { /* SAH split, deterministic ordering; build-time */ }
 
@@ -214,8 +235,10 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 | `spatial_rebucket_scaling` (capacity 256→8192, one mover; p99 flat) | I-X12: O(k) updates |
 | `spatial_huge_radius` (fallback decided before enumeration) | I-X13 |
 | `spatial_numeric_grid` (±ULP boundaries, NaN, huge values) | I-X14 |
-| code audit | I-X10 |
+| `spatial_proximity_union` (grid ∪ BVH two-source union) | I-X5/I-X6 |
+| `spatial_proximity_complete` (10k random scenes vs brute force, grid+BVH union) | I-X6: 0 misses |
 | perf: candidate factor vs brute force | documented |
+| code audit | I-X10 |
 
 ## Implementation Status (M21W1)
 
@@ -240,6 +263,28 @@ two-bank live calibration slots. `drm verify` (`V-SPAT`) rejects a declared
 slack envelope whose span exceeds `max_cells_per_object`, and the memory-budget
 math adds `spatial_index_cost` under `I-MB9`.
 
+### Implementation Status (M21W2)
+
+Proximity completeness and spatial memory verification. `ProximityIndex`
+(`crates/drm-spatial/src/proximity.rs`) owns a dynamic `HashGrid` plus a
+runtime-compiled static BVH and evaluates the two-source union required by
+I-X6: grid superset cells plus static AABB overlap, deduplicated, all in the
+anchor frame. A query whose typed frame is not the anchor is rejected through
+the standard frame path (`PathNotFound`), so naked coordinates never enter the
+index API (I-X5). Candidates are a set: an object whose fat envelope spans many
+cell enumerations is delivered exactly once, so the scratch bound is the
+declared object count, never the query cell span (`I-X6`). The grid epoch is
+re-read after both scans, so a racing move
+yields `WriterConflict` (`CONCURRENT_UPDATE`) rather than a partial union
+(I-X11). A deterministic scene generator with a brute-force oracle proves zero
+misses over 10k random scenes and measures the false-positive factor
+(`PROX_COMPLETE`). `spatial_index_cost` now folds `⌈M/α_max⌉` cell-hash slots,
+the `max_objects × max_cells_per_object` membership pool, object records at
+`max_objects`, compiled BVH nodes, and query scratch into the compute budget
+under `I-MB9`/`REQ-SPATIAL-018`, and `drm verify` `V-SPAT` rejects an
+`index.drm` declaration whose computed cost exceeds its declared memory budget
+(over-budget ⇒ verify error).
+
 | Element | Location | Test |
 |---|---|---|
 | fixed-capacity incremental grid | `crates/drm-spatial/src/grid.rs` | `grid`, `insert_query_remove`, `capacity_refused` |
@@ -256,12 +301,14 @@ math adds `spatial_index_cost` under `I-MB9`.
 | live calibration slots | `crates/drm-workspace/src/spatial/bvh.rs` | `live_calibration_swap` |
 | slack-span verify rejection | `crates/drm-workspace/src/verify/engine.rs` | `verify_spatial_index_slack_span` |
 | index memory in the budget | `crates/drm-workspace/src/budget.rs` | `spatial_index_cost` |
+| two-source union runtime | `crates/drm-spatial/src/proximity.rs` | `spatial_proximity_union`, `proximity_union_overlap` |
+| completeness property (10k scenes) | `crates/drm-spatial/tests/proximity.rs` | `spatial_proximity_complete`, `proximity_false_positive_factor` |
+| budget math at `max_objects` | `crates/drm-workspace/tests/spatial_memory.rs` | `spatial_index_memory_verified`, `spatial_memory_budget_row` |
 
 REQ: REQ-SPATIAL-013, REQ-SPATIAL-014, REQ-SPATIAL-019, REQ-SPATIAL-006,
 REQ-SPATIAL-042, REQ-SPATIAL-043, REQ-SPATIAL-045, REQ-SPATIAL-046,
 REQ-SPATIAL-020, REQ-SPATIAL-018, REQ-SPATIAL-052.
 
 **Carry-over**: the multi-round probe occupancy campaign
-(`spatial_hash_occupancy`, I-X2), explicit crash/fault injection
-(`spatial_update_atomic`, I-X12), and the I-X5/I-X10 API/code audits land in
-M21W2 (completeness property) per the work-plan.
+(`spatial_hash_occupancy`, I-X2) and the I-X10 code audit land in M21W3
+(MCU/host reference suite) per the work-plan.

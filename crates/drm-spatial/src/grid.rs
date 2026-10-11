@@ -151,6 +151,21 @@ impl CandidateSet {
         self.dropped = 0;
     }
 
+    /// Merges `handle` into the scratch, recording a drop when full. Returns
+    /// `true` when accepted, `false` on overflow (`OutputTooSmall`). Used by the
+    /// two-source proximity union so grid and static hits share one scratch
+    /// (`I-X6`). REQ: REQ-SPATIAL-020.
+    pub(crate) fn merge(&mut self, handle: SpatialHandle) -> bool {
+        self.push(handle)
+    }
+
+    /// Whether `handle` is already present in the scratch (union
+    /// deduplication). REQ: REQ-SPATIAL-020.
+    #[must_use]
+    pub(crate) fn contains(&self, handle: SpatialHandle) -> bool {
+        self.handles.contains(&handle)
+    }
+
     /// Pushes a candidate, or records a drop when full. Returns `false` on
     /// overflow (the caller surfaces `OutputTooSmall`).
     /// REQ: REQ-SPATIAL-020.
@@ -863,7 +878,6 @@ impl HashGrid {
     ///
     /// # Errors
     /// [`SpatialError::InvalidArg`] for a non-finite/out-of-range query;
-    /// [`SpatialError::PathNotFound`] when `point.frame` is not the anchor;
     /// [`SpatialError::WriterConflict`] when the epoch changed across the scan.
     /// REQ: REQ-SPATIAL-046, REQ-SPATIAL-043, REQ-SPATIAL-045.
     pub fn nearby(
@@ -921,19 +935,24 @@ impl HashGrid {
         ))
     }
 
-    /// Scans the fixed object table into `scratch` (bounded fallback).
-    /// REQ: REQ-SPATIAL-046.
+    /// Scans the fixed object table into `scratch` (bounded fallback). The
+    /// result is a candidate set: each live object contributes exactly one
+    /// handle, so the scratch bound is the declared object count, never the
+    /// cell span (`I-X6`). REQ: REQ-SPATIAL-046.
     fn scan_objects(&self, scratch: &mut CandidateSet) -> bool {
         let mut overflow = false;
         for rec in &self.objects {
-            if rec.live {
+            if rec.live && !scratch.contains(rec.handle) {
                 overflow |= !scratch.push(rec.handle);
             }
         }
         overflow
     }
 
-    /// Scans the cells in `lo..=hi` into `scratch`. REQ: REQ-SPATIAL-046.
+    /// Scans the cells in `lo..=hi` into `scratch`. An object whose fat envelope
+    /// spans many cells is delivered once — cells are deduplicated against the
+    /// existing scratch so the candidate bound is the declared object count, not
+    /// the query cell span (`I-X6`). REQ: REQ-SPATIAL-046.
     fn scan_cells(&self, lo: CellKey, hi: CellKey, scratch: &mut CandidateSet) -> bool {
         let mut overflow = false;
         let mut cx = lo.cx;
@@ -946,8 +965,9 @@ impl HashGrid {
                         let mut cur = self.cells[cell].head;
                         while cur != NODE_NONE {
                             let obj = self.nodes[cur as usize].object as usize;
-                            if self.objects[obj].live {
-                                overflow |= !scratch.push(self.objects[obj].handle);
+                            let rec = &self.objects[obj];
+                            if rec.live && !scratch.contains(rec.handle) {
+                                overflow |= !scratch.push(rec.handle);
                             }
                             cur = self.nodes[cur as usize].next;
                         }
@@ -1015,6 +1035,136 @@ impl HashGrid {
             return Err(SpatialError::WriterConflict);
         }
         Ok(finish(path, scratch, overflow))
+    }
+
+    /// Merges the grid's candidate superset within `radius` of a typed point
+    /// into an existing scratch without clearing it, for the two-source union
+    /// (`I-X6`). Applies the checked cell-count bound and object-table fallback
+    /// (`I-X13`) and honors the per-cell version handshake. The caller owns the
+    /// epoch handshake. Returns the enumeration path.
+    ///
+    /// # Errors
+    /// [`SpatialError::InvalidArg`] for a non-finite/out-of-range query.
+    /// REQ: REQ-SPATIAL-020, REQ-SPATIAL-046.
+    pub(crate) fn merge_nearby(
+        &self,
+        point: TypedPoint,
+        radius: f64,
+        scratch: &mut CandidateSet,
+    ) -> Result<QueryPath, SpatialError> {
+        if !radius.is_finite() || radius < 0.0 {
+            return Err(SpatialError::InvalidArg);
+        }
+        let (lo_c, hi_c) = self.sphere_bounds(point, radius)?;
+        if cell_count(lo_c, hi_c)? > i64::from(self.config.max_query_cells) {
+            self.merge_objects(scratch);
+            Ok(QueryPath::ObjectFallback)
+        } else {
+            self.merge_cells(lo_c, hi_c, scratch);
+            Ok(QueryPath::Cells)
+        }
+    }
+
+    /// Merges the grid's candidate superset overlapping a typed AABB into an
+    /// existing scratch (`I-X6`). REQ: REQ-SPATIAL-020.
+    ///
+    /// # Errors
+    /// As [`Self::merge_nearby`].
+    pub(crate) fn merge_region(
+        &self,
+        aabb: TypedAabb,
+        scratch: &mut CandidateSet,
+    ) -> Result<QueryPath, SpatialError> {
+        if !aabb.min.x.is_finite()
+            || !aabb.min.y.is_finite()
+            || !aabb.min.z.is_finite()
+            || !aabb.max.x.is_finite()
+            || !aabb.max.y.is_finite()
+            || !aabb.max.z.is_finite()
+        {
+            return Err(SpatialError::InvalidArg);
+        }
+        let lo_c = CellKey {
+            cx: cell_of(aabb.min.x, self.config.cell_size)?,
+            cy: cell_of(aabb.min.y, self.config.cell_size)?,
+            cz: cell_of(aabb.min.z, self.config.cell_size)?,
+        };
+        let hi_c = CellKey {
+            cx: cell_of(aabb.max.x, self.config.cell_size)?,
+            cy: cell_of(aabb.max.y, self.config.cell_size)?,
+            cz: cell_of(aabb.max.z, self.config.cell_size)?,
+        };
+        if cell_count(lo_c, hi_c)? > i64::from(self.config.max_query_cells) {
+            self.merge_objects(scratch);
+            Ok(QueryPath::ObjectFallback)
+        } else {
+            self.merge_cells(lo_c, hi_c, scratch);
+            Ok(QueryPath::Cells)
+        }
+    }
+
+    /// Merges `lo..=hi` cell memberships into an existing scratch, deduplicating
+    /// against handles already present. REQ: REQ-SPATIAL-020.
+    fn merge_cells(&self, lo: CellKey, hi: CellKey, scratch: &mut CandidateSet) {
+        let mut cx = lo.cx;
+        loop {
+            let mut cy = lo.cy;
+            loop {
+                let mut cz = lo.cz;
+                loop {
+                    if let Some(cell) = self.find_cell(CellKey { cx, cy, cz }) {
+                        let mut cur = self.cells[cell].head;
+                        while cur != NODE_NONE {
+                            let obj = self.nodes[cur as usize].object as usize;
+                            let rec = &self.objects[obj];
+                            if rec.live && !scratch.contains(rec.handle) {
+                                scratch.merge(rec.handle);
+                            }
+                            cur = self.nodes[cur as usize].next;
+                        }
+                    }
+                    if cz == hi.cz {
+                        break;
+                    }
+                    cz += 1;
+                }
+                if cy == hi.cy {
+                    break;
+                }
+                cy += 1;
+            }
+            if cx == hi.cx {
+                break;
+            }
+            cx += 1;
+        }
+    }
+
+    /// Merges every live object into an existing scratch (bounded fallback),
+    /// deduplicating. REQ: REQ-SPATIAL-020.
+    fn merge_objects(&self, scratch: &mut CandidateSet) {
+        for rec in &self.objects {
+            if rec.live && !scratch.contains(rec.handle) {
+                scratch.merge(rec.handle);
+            }
+        }
+    }
+
+    /// The grid's current stable epoch, for a caller performing an epoch
+    /// handshake around an external union scan (`I-X11`).
+    /// REQ: REQ-SPATIAL-043.
+    ///
+    /// # Errors
+    /// [`SpatialError::WriterConflict`] when an update is in flight.
+    pub(crate) fn begin_query(&self) -> Result<u64, SpatialError> {
+        self.stable_epoch()
+    }
+
+    /// Whether the epoch still equals `observed` (coherent union view).
+    /// REQ: REQ-SPATIAL-043.
+    #[must_use]
+    pub(crate) fn epoch_unchanged(&self, observed: u64) -> bool {
+        self.cell_epoch.load(Ordering::Acquire) == observed
     }
 
     /// Reads `grid_epoch`, returning it only when even (stable). `I-X11`.

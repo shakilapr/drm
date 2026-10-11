@@ -38,6 +38,7 @@ pub mod handle;
 pub mod historical;
 pub mod history;
 pub mod plan;
+pub mod proximity;
 pub mod query;
 pub mod transform;
 pub mod types;
@@ -70,6 +71,10 @@ pub use plan::{
     ObservedVersions, OverlayPlanCache, PlanCache, PlanStep, QualityFlags, TransformError,
     TransformPlan, TransformResult, compile_overlay_plan, compile_plan, execute_plan,
     execute_steps, observe_versions,
+};
+pub use proximity::{
+    ProximityIndex, STATIC_ENTITY_BASE, STATIC_LEAF, StaticAabb, StaticBvh, StaticNode,
+    StaticObject, compile_static_bvh,
 };
 pub use query::{CalibrationSlot, QueryEngine, ReparentMode, correction_jump};
 pub use transform::{
