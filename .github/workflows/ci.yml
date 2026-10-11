@@ -164,7 +164,9 @@ jobs:
 
   fuzz-pr:
     # 2-minute libFuzzer smoke per PR (work-plan M01W3-E4-T2); full budget in
-    # fuzz-nightly.yml. Linux-only: libFuzzer does not build on MSVC.
+    # fuzz-nightly.yml. Linux-only: libFuzzer does not build on MSVC. The
+    # hazard/serial/verify targets (work-plan M18W1-E1-T1/E2-T2/E3-T1) smoke
+    # here and soak nightly.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -178,6 +180,18 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: nightly
         run: cargo fuzz run --fuzz-dir tests/fuzz datagram -- -max_total_time=120 -timeout=5
+      - name: fuzz smoke (hazard, 120s)
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+        run: cargo fuzz run --fuzz-dir tests/fuzz hazard -- -max_total_time=120 -timeout=5
+      - name: fuzz smoke (serial, 120s)
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+        run: cargo fuzz run --fuzz-dir tests/fuzz serial -- -max_total_time=120 -timeout=5
+      - name: fuzz smoke (verify, 120s)
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+        run: cargo fuzz run --fuzz-dir tests/fuzz verify -- -max_total_time=120 -timeout=5
 
   frontend:
     if: false

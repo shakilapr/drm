@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 libfuzzer-sys = "0.4"
+drm-core = { path = "../../crates/drm-core" }
 drm-workspace = { path = "../../crates/drm-workspace" }
 drm-router = { path = "../../crates/drm-router" }
 
@@ -32,6 +33,27 @@ bench = false
 [[bin]]
 name = "datagram"
 path = "fuzz_targets/datagram.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hazard"
+path = "fuzz_targets/hazard.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "serial"
+path = "fuzz_targets/serial.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verify"
+path = "fuzz_targets/verify.rs"
 test = false
 doc = false
 bench = false

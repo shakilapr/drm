@@ -38,6 +38,7 @@ fn kill_during(scenario: &str, step: &str, tag: &str) {
     let exe = ok(std::env::current_exe(), "current_exe");
     let out = ok(
         std::process::Command::new(exe)
+            .arg("--ignored")
             .arg("--exact")
             .arg("stress_shm_kill_child_driver")
             .arg("--test-threads=1")

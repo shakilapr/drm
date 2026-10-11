@@ -11,6 +11,25 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M18 W1 tranche: hardening — fuzz expansion + chaos suites. The fuzz
+  fleet grows to `FUZZ_TARGETS_LIVE = 5/5` core targets plus a verify-fixture
+  target: `hazard` (a structured storm through the public publish/read/reclaim
+  surface), `serial` (one-shot decode, streaming `0x00` resync, COBS
+  reversibility), and `verify` (malformed topic bytes + node/topology manifests
+  through `model::build` and `verify_lite`, diagnostics-only). All six targets
+  run nightly at 3600 s and the three new ones smoke per PR
+  (`.github/workflows/fuzz-nightly.yml`, `.github/workflows/ci.yml`). The chaos
+  suites (`crates/drm-core/tests/stress/chaos_kill_matrix.rs`,
+  `crates/drm-router/tests/link_storm.rs`) kill every borrow/publish stage,
+  exercise PID reuse and pool-exhaustion storms, and flap links × routers under
+  I-RT6/I-RT5 — recovery holds every time (`CHAOS_GREEN = 1`). `shm_kill`'s
+  child driver is repaired to invoke the ignored test (`--ignored`), so the 8
+  real `SIGKILL` cells actually run. Evidence: chaos inventory
+  [chaos-inventory.md](docs/spec/chaos-inventory.md), triage board
+  [fuzz-triage-board.md](docs/spec/fuzz-triage-board.md), coverage
+  [fuzz-coverage.md](docs/spec/fuzz-coverage.md), gate
+  [m18w1.md](docs/gates/m18w1.md); [metrics-m18.md](docs/metrics/metrics-m18.md)
+  records `FUZZ_TARGETS_LIVE = 5/5`, `CHAOS_GREEN = 1`, `FUZZ_CRASHES = 0`.
 - Week M17 W4 tranche: Studio inspectors + run-session supervisor, month-17
   review. The run-session supervisor
   (`crates/drm-cli/src/studio/supervisor.rs`) owns `RunSession`s independently

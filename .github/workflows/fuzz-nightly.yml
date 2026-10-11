@@ -1,6 +1,8 @@
-# Nightly deep fuzz (work-plan M01W3-E4-T2): 1-hour libFuzzer budget per target,
-# new target types graduate to permanent gates only when two consecutive
-# nightly runs find no issues (codebase.md 4.1).
+# Nightly deep fuzz + chaos (work-plan M18W1-E4-T1): every live libFuzzer target
+# gets a 1-hour budget, and the chaos suites (kill matrix, PID reuse,
+# exhaustion storms, link storms) run under an extended iteration budget. New
+# target types graduate to permanent PR gates only when two consecutive nightly
+# runs find no issues (codebase.md 4.1). Triage: docs/spec/fuzz-triage-board.md.
 name: fuzz-nightly
 
 on:
@@ -9,16 +11,45 @@ on:
   workflow_dispatch:
 
 jobs:
-  schema:
+  fuzz:
+    # FUZZ_TARGETS_LIVE = 5/5 core targets + the verify-fixture target, nightly.
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [schema, framing, datagram, hazard, serial, verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz
-      - name: schema (3600s)
+      - name: ${{ matrix.target }} (3600s)
         env:
           RUSTUP_TOOLCHAIN: nightly
-        run: cargo fuzz run --fuzz-dir tests/fuzz schema -- -max_total_time=3600 -timeout=5
+        run: >-
+          cargo fuzz run --fuzz-dir tests/fuzz ${{ matrix.target }}
+          -- -max_total_time=3600 -timeout=5
+
+  chaos:
+    # CHAOS_GREEN: kill matrix + PID reuse + exhaustion storms + link storms
+    # recover every time (work-plan M18W1-E1-T2/E3-T2).
+    runs-on: ubuntu-latest
+    env:
+      DRM_STRESS_ITERS: "200"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: channel kill matrix + PID reuse + exhaustion storms
+        run: >-
+          cargo test --release -p drm-core --test stress
+          -- --ignored stress_chaos --nocapture
+      - name: process/segment SIGKILL stages
+        run: >-
+          cargo test --release -p drm-core --test shm_kill
+          -- --ignored stress_shm_kill --nocapture
+      - name: link storms + session flapping
+        run: >-
+          cargo test --release -p drm-router --test link_storm
+          -- --ignored stress_link_storm --nocapture
 
   udp-pair:
     # Nightly loopback matrix (work-plan M10W1-E4-T2): the UDP pair example runs
