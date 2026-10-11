@@ -1,9 +1,12 @@
-//! Verify-lite — the V-SW single-writer slice of `drm verify`
-//! ([verify-engine.md](../../docs/algorithms/toolchain/verify-engine.md)
-//! §Checks): a consumed topic must have exactly one publisher. Model
-//! construction enforces structural/referential integrity only; single-writer
-//! is a policy check and therefore lives here (workspace-model.md I-D12).
-//! REQ: REQ-TOOL-064, REQ-TOOL-070.
+//! Verify — `drm verify` static checks
+//! ([verify-engine.md](../../docs/algorithms/toolchain/verify-engine.md)):
+//! the V-SW single-writer slice ([`verify_lite`]) plus the full deterministic
+//! engine ([`engine`]) covering V-SCH, V-SW, V-PLC, V-RT, V-REL, V-MEM, V-CMP,
+//! and V-ID. Model construction enforces structural/referential integrity only;
+//! architectural policy is a verify check and therefore lives here
+//! (workspace-model.md I-D12). REQ: REQ-TOOL-064, REQ-TOOL-070.
+
+pub mod engine;
 
 use std::collections::BTreeMap;
 use std::fmt;

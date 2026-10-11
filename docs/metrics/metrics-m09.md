@@ -49,3 +49,43 @@ Notes:
   toolchain required in the gate environment).
 - `drm build` persists the stable handle table to `.drm/ids.json`; normal builds
   preserve assigned handles (REQ-TOOL-036).
+
+## M09W2 — Verify Engine v1, Watch Completion
+
+| Variable | Target | Measured |
+|---|---|---|
+| `DEV_STALE_PROOF` | I-BO4 rapid-edits test green | `cargo test -p drm-workspace --test watch_dispatch`: 9/9 green; `cargo test -p drm-workspace dev` selects the 4 I-BO2..I-BO4 cases — `dev_affected_nodes`, `dev_no_source_tracking`, `dev_rapid_edits_final_state` (50 edits ⇒ final state), `dev_rapid_edits_coalesced` (50 edits ⇒ 1 reload); plus `watch_reload_before_dispatch`, `watch_pending_dirty_dispatch`, `watch_overflow_rescan`, `watch_binary_source`, `no_source_tracking_probe` |
+| `VERIFY_NEGATIVES_V1` | single-writer + schema + placement negatives green | `cargo test -p drm-workspace --test verify_engine`: 8/8 green — `verify_catalogue` (one negative per `V-SCH`/`V-SW`/`V-PLC`/`V-RT`/`V-REL`/`V-MEM`/`V-CMP`/`V-ID`), `verify_positive_full_workspace`, `verify_msg_citations`, `verify_determinism` (×100), `verify_boundary_labels`, `verify_no_shortcircuit`, `verify_deadlines_independent`, `verify_handle_conflict` |
+| `LANE_FREEZE` | lanes-shaping.md design confirmed | frozen in [lanes-shaping.md](../algorithms/router/lanes-shaping.md) — `§Data Structures`/`§Functions` confirmed final against the M03–M05 `drm-router::priority` drafts; no divergence |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Verify engine `crates/drm-workspace/src/verify/engine.rs`
+  ([verify-engine.md](../algorithms/toolchain/verify-engine.md)): `CheckId`,
+  `VerifyReport` (facts/warnings/estimates), `DeploymentConfig`, and the
+  deterministic checks `V-SCH`, `V-SW`, `V-PLC`, `V-RT` (route-derivation +
+  framing fit), `V-REL` (transport capability), `V-MEM` (memory-budget
+  `verify_deployment`), `V-CMP` (reject-policy + independent deadlines), `V-ID`
+  (canonical paths, name collisions, handle conflicts). No short-circuit
+  (I-V5); estimates labeled `ESTIMATE` (I-V4).
+- Model hook `channel_expectations` (`crates/drm-workspace/src/model/runtime.rs`):
+  per-topic pool/bounds exposed for the `V-MEM`/`V-RT` checks (interfaces only).
+- Watch completion: `drm dev` rapid-edits behaviour proven (I-BO4) on the
+  existing `watch::apply_batch` dispatch core.
+- CI job `toolchain` (`.github/workflows/ci.yml`) runs both suites blocking
+  (E4-T1).
+- Tests `crates/drm-workspace/tests/verify_engine.rs` and the two new
+  `watch_dispatch.rs` rapid-edit cases.
+
+Notes:
+
+- `V-SCH`/`V-PLC`/`V-ID` re-validate structural invariants over the built model
+  (belt-and-braces): negative fixtures build a model and then mutate a `pub`
+  field, proving the verifier rejects a hand-built model the builder would
+  normally refuse.
+- `V-RT` consumes `topology::derive` and appends its `{plans, errors}` without
+  aborting the remaining checks; route ambiguity/override conflicts surface as
+  `V-RT` facts.
+- Full Phase 26 gate (all `V-*` families incl. `V-SPAT`/`V-RPC`/`V-REC`) lands at
+  M09W3.

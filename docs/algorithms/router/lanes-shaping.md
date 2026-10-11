@@ -3,6 +3,8 @@
 Normative terminology follows [docs/standards.md](../../standards.md).
 Scope: per-link scheduler spanning all transports — admission, class queues, a dedicated safety budget isolated from non-safety token state, control/status deficit round robin, a non-safety shaper, route export limits; ordered realtime/bulk lanes only for reliable ordered streams (never socket-per-topic). Unit-correct shaping of DRM traffic with a declared charge; safety latency includes non-preemptible transmission as an explicit verifier term. Implements architecture.md §The Boundary Router (Ordered-Stream Traffic Classes, Priority Scheduling, Traffic Shaping), §Transport Metadata. Owner: E3 (crate `drm-router::{lane, shaping}`). Phase 30. Depends on [router-core.md](router-core.md).
 
+> **Design freeze (M09W2):** `§Data Structures` and `§Functions` are confirmed final against the M03–M05 `drm-router::priority` drafts (REQ-ROUTE-020/021 pre-stream class queues). No divergence recorded; the Phase 30 scheduler implements these signatures verbatim.
+
 ## REQ Bindings
 
 | Provisional slug | Architecture anchor | Numeric ID |

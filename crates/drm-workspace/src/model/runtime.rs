@@ -97,11 +97,51 @@ pub fn topic_runtime(topic: &str, entry: &TopicEntry) -> TopicRuntime {
     }
 }
 
+/// Per-channel verification expectations exposed from the model for the
+/// verifier's `V-MEM`/`V-RT` checks (interfaces only — no runtime behavior
+/// change). REQ: REQ-TOOL-057, REQ-TOOL-062.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelExpectation {
+    /// Canonical topic path.
+    pub topic: String,
+    /// Payload-pool slots the model derives (explicit `@pool_size` or `R + 1`).
+    pub pool_size: u64,
+    /// Max sample size in bytes (`StructLayout::sample_max`) — the framing-fit
+    /// input for `V-RT`. REQ: REQ-TOOL-062.
+    pub payload_capacity: u64,
+    /// History depth `R` (`@history: latest` ⇒ `1`).
+    pub history_depth: u64,
+    /// Slot alignment in bytes.
+    pub slot_align: u64,
+}
+
+/// Derives per-topic verification expectations from the model, sorted by
+/// canonical path (`BTreeMap`, I-D1). The verifier consumes these so declared
+/// pool sizing and payload bounds cannot drift from the model.
+/// REQ: REQ-TOOL-057, REQ-TOOL-062.
+#[must_use]
+pub fn channel_expectations(model: &WorkspaceModel) -> BTreeMap<String, ChannelExpectation> {
+    runtime_plan(model)
+        .topics
+        .into_iter()
+        .map(|(topic, rt)| {
+            let expectation = ChannelExpectation {
+                topic: topic.clone(),
+                pool_size: rt.pool_size,
+                payload_capacity: rt.payload_capacity,
+                history_depth: rt.history_depth,
+                slot_align: rt.slot_align,
+            };
+            (topic, expectation)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::model::{PackageInput, TreeInput, WorkspaceModel, build};
 
-    use super::{RuntimeOverflow, RuntimePlan, TopicRuntime, runtime_plan};
+    use super::{RuntimeOverflow, RuntimePlan, TopicRuntime, channel_expectations, runtime_plan};
 
     /// Builds a one-package model from `(stem, source)` topics.
     fn model(topics: &[(&str, &str)]) -> WorkspaceModel {
@@ -176,5 +216,23 @@ mod tests {
             crate::model::layout_hash(&entry.layout)
         );
         assert_eq!(expectations.payload_capacity, entry.layout.sample_max);
+    }
+
+    /// REQ: REQ-TOOL-057 — `channel_expectations` mirrors the runtime plan's
+    /// pool/bounds for each topic (the V-MEM/V-RT model hook).
+    #[test]
+    fn channel_expectations_mirror_runtime_plan() {
+        let m = model(&[("sized", "@pool_size: 9\n@history: 4\nx: u8\n")]);
+        let expectations = channel_expectations(&m);
+        let e = expectations
+            .get("control/sized")
+            .unwrap_or_else(|| unreachable!("fixture topic present"));
+        assert_eq!(e.topic, "control/sized");
+        assert_eq!(e.pool_size, 9);
+        assert_eq!(e.history_depth, 4);
+        assert_eq!(
+            e.payload_capacity,
+            m.topics["control/sized"].layout.sample_max
+        );
     }
 }

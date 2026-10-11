@@ -230,3 +230,76 @@ fn no_source_tracking_probe() {
         .count();
     assert_eq!(dispatches, 1);
 }
+
+/// REQ: REQ-TOOL-014 — I-BO2: one application-source change invokes exactly one
+/// owning-node adapter; DRM performs no dependency analysis (dev-suite alias of
+/// the no-source-tracking probe).
+#[test]
+fn dev_no_source_tracking() {
+    let nodes: &[(&str, &[&str], &[&str])] = &[("controller", &["pkg/t1"], &[])];
+    let mut st = state(nodes);
+    let source = PathBuf::from("/ws/packages/pkg/nodes/controller/src/main.cpp");
+    let next = model(nodes);
+    let events = apply_batch(&mut st, &[source], WatchControl::Normal, &mut || {
+        Ok(next.clone())
+    });
+    let dispatches = events
+        .iter()
+        .filter(|e| matches!(e, WatchEvent::AppSourceChanged { .. }))
+        .count();
+    assert_eq!(
+        dispatches, 1,
+        "exactly one adapter invocation per source change"
+    );
+}
+
+/// REQ: REQ-TOOL-015 — I-BO4: 50 rapid declaration edits reload the model on
+/// each event and leave the final state applied; no stale cache.
+#[test]
+fn dev_rapid_edits_final_state() {
+    let initial: &[(&str, &[&str], &[&str])] = &[("controller", &["pkg/t1"], &[])];
+    let changed: &[(&str, &[&str], &[&str])] = &[("controller", &["pkg/t1"], &["pkg/t2"])];
+    let mut st = state(initial);
+    let final_model = model(changed);
+    let mut reloads = 0_usize;
+    for i in 0..50 {
+        let decl = PathBuf::from(format!("/ws/packages/pkg/topics/t{i}.drm"));
+        let events = apply_batch(&mut st, &[decl], WatchControl::Normal, &mut || {
+            reloads += 1;
+            Ok(final_model.clone())
+        });
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, WatchEvent::DrmDeclarationChanged(_))),
+            "declaration dispatched at edit {i}"
+        );
+    }
+    assert_eq!(reloads, 50, "one reload per declaration event");
+    assert_eq!(st.model, final_model, "final state applied, no stale cache");
+}
+
+/// REQ: REQ-TOOL-015 — I-BO4: 50 declaration edits coalesced into one debounced
+/// batch reload once and apply the final state.
+#[test]
+fn dev_rapid_edits_coalesced() {
+    let initial: &[(&str, &[&str], &[&str])] = &[("controller", &["pkg/t1"], &[])];
+    let changed: &[(&str, &[&str], &[&str])] = &[("controller", &["pkg/t1"], &["pkg/t2"])];
+    let mut st = state(initial);
+    let final_model = model(changed);
+    let batch: Vec<PathBuf> = (0..50)
+        .map(|i| PathBuf::from(format!("/ws/packages/pkg/topics/t{i}.drm")))
+        .collect();
+    let mut reloads = 0_usize;
+    let events = apply_batch(&mut st, &batch, WatchControl::Normal, &mut || {
+        reloads += 1;
+        Ok(final_model.clone())
+    });
+    assert_eq!(reloads, 1, "debounce coalesces to one reload (I-BO4)");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, WatchEvent::DrmDeclarationChanged(_)))
+    );
+    assert_eq!(st.model, final_model);
+}

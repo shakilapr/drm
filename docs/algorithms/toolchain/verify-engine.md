@@ -1,7 +1,7 @@
 # Static Verification Engine Algorithms
 
 Normative terminology follows [docs/standards.md](../../standards.md).
-Scope: `drm verify` — the complete catalogue of deterministic configuration checks (facts), their negative fixtures, and the strict boundary to feasibility estimates (Phase 27, [feasibility-estimation.md](feasibility-estimation.md)). Implements architecture.md §Verification and Runtime Observation: Facts, Feasibility, and Reality. Owner: E2 (crate `drm-workspace::verifier`). Phase 26. Depends on [workspace-model.md](workspace-model.md), [memory-budget.md](../memory-budget.md), [route-derivation.md](route-derivation.md), [handle-system.md](handle-system.md), [payload-pool.md](../runtime/payload-pool.md).
+Scope: `drm verify` — the complete catalogue of deterministic configuration checks (facts), their negative fixtures, and the strict boundary to feasibility estimates (Phase 27, [feasibility-estimation.md](feasibility-estimation.md)). Implements architecture.md §Verification and Runtime Observation: Facts, Feasibility, and Reality. Owner: E2 (crate `drm-workspace::verify::engine`). Phase 26. Depends on [workspace-model.md](workspace-model.md), [memory-budget.md](../memory-budget.md), [route-derivation.md](route-derivation.md), [handle-system.md](handle-system.md), [payload-pool.md](../runtime/payload-pool.md).
 
 ## REQ Bindings
 
