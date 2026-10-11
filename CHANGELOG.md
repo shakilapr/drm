@@ -11,6 +11,23 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M22 W2 tranche: Phase 33 final gate (DRM Spatial). The final gate closes
+  with `GATE_STATUS(Phase 33) = PASS`: every work-plan #33 criterion and every
+  entry of the three spatial algorithm-doc §Test Matrices
+  ([spatial-core.md](docs/algorithms/spatial/spatial-core.md) `I-S1`..`I-S13`,
+  [spatial-queries.md](docs/algorithms/spatial/spatial-queries.md)
+  `I-Q1`..`I-Q16`, [spatial-index.md](docs/algorithms/spatial/spatial-index.md)
+  `I-X1`..`I-X14`) maps to a named test or oracle-checked property and re-runs
+  green together against mathematical references. The Phase 33 status flips to
+  `PASS` ([phase-33.md](docs/gates/phase-33.md)); the remaining spatial registry
+  rows resolve from the algorithm-doc test-matrix anchor to the concrete
+  crate/`tests` path and are promoted to `tested`
+  ([registry.csv](docs/req/registry.csv)); and the E4 falsification SPIKE ranks
+  the Phase 33 falsifiers (grid completeness at density extremes; BVH live
+  subtree swaps under a calibration storm; cache version races; MCU constant
+  drift) to seed the W8 qualification spike plan. Gate evidence
+  ([m22w2.md](docs/gates/m22w2.md)); metrics
+  [metrics-m22.md](docs/metrics/metrics-m22.md).
 - Week M20 W4 tranche: Phase 33 Gate B close and month-20 review. `drm-spatial`
   gains bounded generation-cached overlay plans (`OverlayPlanCache`,
   `compile_overlay_plan` in `plan.rs`; `add_overlay`/`overlay_depth`/

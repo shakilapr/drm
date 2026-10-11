@@ -7,7 +7,9 @@ Normative sources: [work-plan.md](../../work-plan.md) W7 Phase 33;
 [spatial-index.md](../algorithms/spatial/spatial-index.md). Owner: E2
 (compiler/graph), E1 (runtime caches), E3 (router/REQ reviews), E4 (tests).
 
-Status: **IN PROGRESS** — M19W1 landed the spatial type system, math library,
+Status: **PASS** (M22W2) — every spatial requirement is evidenced; the final
+gate ledger is [m22w2.md](m22w2.md), chaired by E1 and presented by E2. M19W1
+landed the spatial type system, math library,
 grammar extensions, static-collapse v0, and runtime edge-cache groundwork
 ([m19w1.md](m19w1.md)); M19W2 added the four-domain clock mapping with
 drift/uncertainty, the versioned dynamic-edge cache, compiled-plan execution,
@@ -31,7 +33,10 @@ hash grid, the compiled static BVH, and the two-source proximity union with
 exact memory verification ([metrics-m21.md](../metrics/metrics-m21.md)) — and
 the freestanding MCU/host reference suites; M21W4 completed the spatial
 reference suite with the float-determinism banding evidence rule and drafted the
-final gate ([m21w4.md](m21w4.md)). The Phase 33 final gate lands at M22W2.
+final gate ([m21w4.md](m21w4.md)). The Phase 33 final gate landed at M22W2
+([m22w2.md](m22w2.md)): all three §Test Matrices re-ran green together against
+mathematical references, the spatial registry rows were resolved to `tested`,
+and `GATE_STATUS(Phase 33) = PASS`.
 
 ## Wave A (M19) — types, spaces, collapse
 
