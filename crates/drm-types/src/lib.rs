@@ -66,6 +66,11 @@ pub enum Status {
     EpochExhausted,
     /// Ring stamp space is exhausted for the ring lifetime.
     RingStampExhausted,
+    /// Requested operation is not implemented by this runtime build — an FFI
+    /// stub whose core hook is still pending; retrying cannot satisfy it
+    /// (distinct from [`Status::NotReady`]).
+    /// REQ: REQ-BIND-007.
+    NotImplemented,
 }
 
 impl Status {
@@ -96,6 +101,7 @@ impl Status {
             Self::SequenceExhausted => -19,
             Self::EpochExhausted => -20,
             Self::RingStampExhausted => -21,
+            Self::NotImplemented => -22,
         }
     }
 
@@ -127,6 +133,7 @@ impl Status {
             -19 => Some(Self::SequenceExhausted),
             -20 => Some(Self::EpochExhausted),
             -21 => Some(Self::RingStampExhausted),
+            -22 => Some(Self::NotImplemented),
             _ => None,
         }
     }
@@ -185,6 +192,7 @@ mod tests {
             Status::SequenceExhausted,
             Status::EpochExhausted,
             Status::RingStampExhausted,
+            Status::NotImplemented,
         ];
         let mut codes = variants.iter().map(|s| s.code()).collect::<Vec<_>>();
         codes.sort_unstable();
@@ -197,7 +205,7 @@ mod tests {
     /// REQ: REQ-BIND-017 — code mapping is a bijection over the declared range.
     #[test]
     fn status_roundtrip() {
-        for code in -21..=0 {
+        for code in -22..=0 {
             assert_eq!(
                 Status::from_code(code).map(Status::code),
                 Some(code),
@@ -205,7 +213,7 @@ mod tests {
             );
         }
         assert!(Status::from_code(1).is_none());
-        assert!(Status::from_code(-22).is_none());
+        assert!(Status::from_code(-23).is_none());
     }
 
     /// REQ: REQ-BIND-007, REQ-CORE-028 — the gap outcome maps 1:1 onto

@@ -1,9 +1,10 @@
 /*
- * ABI spike probe (work-plan M01W4-E4-T2): exhaustively exercises the status
- * enumerator set, opaque-handle patterns, and the ABI-version guard.
+ * ABI spike probe (work-plan M01W4-E4-T2; extended M06W1-E4-T2): exhaustively
+ * exercises the status enumerator set, opaque-handle patterns, the ABI-version
+ * guard, and the endpoint-lifecycle stub signatures.
  * Syntax-only: compiled by CI under gcc+clang x c99+c11 with -Werror.
  * REQ: REQ-BIND-007 (status taxonomy), REQ-BIND-017 (unknown codes safe),
- * REQ-BIND-004 (opaque handles).
+ * REQ-BIND-004 (opaque handles), REQ-BIND-021 (context lifecycle).
  */
 #include <drm/drm.h>
 
@@ -57,6 +58,8 @@ static int32_t spike_status_class(int32_t code) {
         return 20;
     case DRM_ERR_RING_STAMP_EXHAUSTED:
         return 21;
+    case DRM_ERR_NOT_IMPLEMENTED:
+        return 22;
     default:
         return -1000;
     }
@@ -77,12 +80,27 @@ static int32_t spike_handle_probe(drm_context *ctx, drm_publisher *pub, drm_cons
     return DRM_OK;
 }
 
+/* Endpoint-lifecycle stub prototypes (work-plan M06W1-E4): each re-declaration
+ * must match the drm.h declaration exactly, or the compiler rejects the file
+ * with a conflicting-type error. Declarations only — no call, so no drm-ffi
+ * symbol is referenced and the spike still links standalone. (Declaration
+ * presence itself is asserted by drm-ffi's `drm_h_declares_stub_surface` test.) */
+drm_status drm_context_open(const char *path, drm_context **out);
+drm_status drm_context_close(drm_context *ctx);
+drm_status drm_publisher_open(drm_context *ctx, uint32_t topic_id, drm_publisher **out);
+drm_status drm_publisher_close(drm_publisher *publisher);
+drm_status drm_consumer_open(drm_context *ctx, uint32_t topic_id, drm_consumer **out);
+drm_status drm_consumer_close(drm_consumer *consumer);
+int32_t drm_abi_version(void);
+
 int main(void) {
     /* Each probe asserted independently (fail-stop on any mismatch). */
     if (spike_status_class(DRM_OK) != 0)
         return 1;
     if (spike_status_class(DRM_ERR_RING_STAMP_EXHAUSTED) != 21)
         return 2;
+    if (spike_status_class(DRM_ERR_NOT_IMPLEMENTED) != 22)
+        return 6;
     if (spike_status_class(-1000) != -1000)
         return 3; /* unknown code passthrough */
     if (spike_abi_guard() != 0)

@@ -3,6 +3,7 @@
  * REQ: REQ-BIND-007 (one status taxonomy mirrored 1:1 to C codes),
  * REQ-BIND-017 (fixed int32_t, explicit values, unknown codes safe),
  * REQ-BIND-004 (opaque handles; no raw cross-process pointers),
+ * REQ-BIND-021 (opaque drm_context with explicit open/close lifecycle),
  * REQ-BIND-008 (access validation once at endpoint open).
  */
 #ifndef DRM_DRM_H
@@ -61,7 +62,8 @@ enum {
     DRM_ERR_LOCK_FAILED = -18,
     DRM_ERR_SEQUENCE_EXHAUSTED = -19,
     DRM_ERR_EPOCH_EXHAUSTED = -20,
-    DRM_ERR_RING_STAMP_EXHAUSTED = -21
+    DRM_ERR_RING_STAMP_EXHAUSTED = -21,
+    DRM_ERR_NOT_IMPLEMENTED = -22
 };
 
 typedef int32_t drm_status; /* DRM_OK on success, one DRM_ERR_* otherwise */
@@ -84,6 +86,17 @@ typedef struct drm_write_view {
 
 /* ABI probe; the canonical export is drm-ffi drm_abi_version. */
 int32_t drm_abi_version(void);
+
+/* Endpoint lifecycle (opaque handles only — REQ-BIND-004/021). Signatures are
+ * fixed here; the drm-ffi bodies land with the core hooks (c-abi-surface.md
+ * §Functions). While a hook is pending the export validates arguments and
+ * returns DRM_ERR_NOT_IMPLEMENTED, never a fabricated handle. */
+drm_status drm_context_open(const char *path, drm_context **out);
+drm_status drm_context_close(drm_context *ctx);
+drm_status drm_publisher_open(drm_context *ctx, uint32_t topic_id, drm_publisher **out);
+drm_status drm_publisher_close(drm_publisher *publisher);
+drm_status drm_consumer_open(drm_context *ctx, uint32_t topic_id, drm_consumer **out);
+drm_status drm_consumer_close(drm_consumer *consumer);
 
 #ifdef __cplusplus
 }
