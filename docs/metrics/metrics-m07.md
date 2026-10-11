@@ -21,3 +21,18 @@ test; `drm-core` `ChannelCounters` accessor + `counters`/`precommit_e2e` suites.
 (consumer-registration I-CR4) instead of releasing it — removes a doc/impl
 divergence. The week plan's "catch_unwind shield" wording is superseded by the
 normative I-A6 fail-stop policy.
+
+## M07W2 — C++ Binding (Phase 20)
+
+| Variable | Target | Measured |
+|---|---|---|
+| `CPP_BORROW_GREEN` | RAII release on every scope exit incl. exceptions (I-B1) | `bindings/cpp/tests/borrow_raii.cpp`: normal exit, early return, exception unwinding, move semantics — release exactly once proven by counter + ABI single-borrow rule; g++ 13.3 + clang++ 18.1 |
+| `CPP_NODE_API` | undeclared ops absent (compile-fail, I-B2) | 3 compile-fail fixtures (copy-borrow, undeclared op, raw-pointer escape) rejected by both compilers |
+| `CPP_INTEROP` | C++↔C/Rust/Python cells green | driver also passes linked against the real `drm-ffi` cdylib; the full 4-language matrix is the Phase 20 completion gate |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: header-only `bindings/cpp/include/drm/drm.hpp` (move-only RAII
+`Borrow<T>`/`Context`/`Publisher`/`Consumer`), assert-based driver, two-TU ODR
+test, compile-fail fixtures, and `bindings/cpp/tests/run.sh` (g++ + clang++).
+E3 lane work was already delivered (M03W3/M04W3/M05W1: `PeerLanes`,
+`LaneSocket`, `PeerEgress`, saturation/mixed-class tests).
