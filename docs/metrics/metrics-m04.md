@@ -49,3 +49,19 @@ reconnect / session-scoped reliability (`drm-router::transport::tcp`).
 Deliverables: `docs/gates/phase-13.md`; hazard slot + acquisition + selection
 suites and the `hazard_storm` scaffold (`drm-core`); per-peer lane socket
 lifecycle (`drm-router::lane`).
+
+## M04W4 — Hazard Race Matrix Runtime (Phase 14 implementation)
+
+| Variable | Target | Measured |
+|---|---|---|
+| `RACE_MATRIX_GREEN` | R1–R6 forcing tests green | `hazard::race` (roll-before-intent, roll-after-intent, generation-wrap, concurrent-acquire with a `Barrier`, release-during-scan, reuse-during-reread) |
+| `ABA_GREEN` | generation wrap ≥ 2¹⁶ reuses validated (I-HZ2) | `hazard::aba` (`hazard_aba_reuse_wrap`: 3 slots each reused ≥ 2¹⁶×, stale `{slot,generation}` never validates; `hazard_aba_generation_no_wrap`) |
+| `SELECTION_PROPERTY` | selection-vs-borrows property green | `hazard::select` (`hazard_select_returns_only_free` 5000-iter property; `hazard_select_free_exists_at_r_h_1` drop-free step) |
+| `STORM_LOCAL` | 1 h storm, 0 shadow-validator violations (I-HZ1) | scaffold green at reduced cycles; 1 h run owned by the M05W2 Phase 14 completion gate |
+| `LANES_E2E` | two-lane loopback with priority wiring green | `drm-router` `lane_egress` (4 tests: classification, strict class service order, two-lane exchange, disconnected send refused) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `docs/gates/phase-14.md` (draft); `drm-core::hazard`
+race/aba/select suites; `drm-router::egress` per-peer classification + priority
+wiring. Known: `platform::cleanup` flakes rarely under load (queued for
+quarantine/repair per AGENTS.md 14).
