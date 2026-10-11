@@ -25,8 +25,15 @@ pub enum PlanStep {
     Constant(Transform3),
     /// A runtime cache read of dynamic edge `edge` (version-checked).
     DynamicEdge(u32),
-    /// A runtime cache read of calibration slot `slot` (`I-Q11`).
-    CalibrationSlot(u32),
+    /// A live calibration slot: the effective value is `nominal × correction`,
+    /// so a slot update invalidates dependent caches without recompilation
+    /// (`I-Q11`).
+    CalibrationSlot {
+        /// The nominal static transform embedded at compile time.
+        nominal: Transform3,
+        /// The shared calibration slot id.
+        slot: u32,
+    },
     /// Fold the top two stack transforms (`a ∘ b`).
     Multiply,
 }
@@ -54,7 +61,9 @@ impl TransformPlan {
         let mut max_depth: i64 = 0;
         for step in steps {
             match step {
-                PlanStep::Constant(_) | PlanStep::DynamicEdge(_) | PlanStep::CalibrationSlot(_) => {
+                PlanStep::Constant(_)
+                | PlanStep::DynamicEdge(_)
+                | PlanStep::CalibrationSlot { .. } => {
                     depth += 1;
                 }
                 PlanStep::Multiply => {
@@ -217,12 +226,31 @@ impl TransformResult {
 /// REQ: REQ-SPATIAL-034, REQ-SPATIAL-002.
 pub fn execute_plan(
     plan: &TransformPlan,
+    edge_at: impl FnMut(u32) -> Result<Transform3, SpatialError>,
+    slot_at: impl FnMut(u32) -> Result<Transform3, SpatialError>,
+) -> Result<Transform3, SpatialError> {
+    execute_steps(plan.steps(), edge_at, slot_at)
+}
+
+/// Executes a plan step slice at one instant. This is the single executor shared
+/// by the generated [`TransformPlan`] and runtime [`compile_plan`] output: it
+/// pushes steps onto a fixed [`MAX_PLAN_DEPTH`] stack, resolving each
+/// `DynamicEdge`/`CalibrationSlot` through the caller's temporal resolvers
+/// (`I-Q1`). `slot_at` returns the calibration **correction**; the effective
+/// value is `nominal × correction` (`I-Q11`).
+///
+/// # Errors
+/// [`SpatialError`] from `edge_at`/`slot_at`, or [`SpatialError::NonFinite`] for
+/// a malformed plan / stack underflow.
+/// REQ: REQ-SPATIAL-034, REQ-SPATIAL-002, REQ-SPATIAL-003.
+pub fn execute_steps(
+    steps: &[PlanStep],
     mut edge_at: impl FnMut(u32) -> Result<Transform3, SpatialError>,
     mut slot_at: impl FnMut(u32) -> Result<Transform3, SpatialError>,
 ) -> Result<Transform3, SpatialError> {
     let mut stack: [Transform3; MAX_PLAN_DEPTH] = [Transform3::IDENTITY; MAX_PLAN_DEPTH];
     let mut top = 0_usize;
-    for step in plan.steps() {
+    for step in steps {
         match step {
             PlanStep::Constant(t) => {
                 if top >= MAX_PLAN_DEPTH {
@@ -238,11 +266,12 @@ pub fn execute_plan(
                 stack[top] = edge_at(*edge)?;
                 top += 1;
             }
-            PlanStep::CalibrationSlot(slot) => {
+            PlanStep::CalibrationSlot { nominal, slot } => {
                 if top >= MAX_PLAN_DEPTH {
                     return Err(SpatialError::NonFinite);
                 }
-                stack[top] = slot_at(*slot)?;
+                let correction = slot_at(*slot)?;
+                stack[top] = crate::transform::compose(nominal, &correction);
                 top += 1;
             }
             PlanStep::Multiply => {
@@ -260,6 +289,102 @@ pub fn execute_plan(
         return Err(SpatialError::NonFinite);
     }
     Ok(stack[0])
+}
+
+/// A runtime-compiled, owned transform plan for one `(target, reference)` pair
+/// ([spatial-queries.md] §Functions `compile_plan`). Unlike the `'static`
+/// generated [`TransformPlan`], a [`CompiledPlan`] owns its steps so the runtime
+/// can compile plans from the live [`SpaceForest`](crate::forest::SpaceForest)
+/// (`I-Q1`).
+/// REQ: REQ-SPATIAL-034.
+#[derive(Debug, Clone)]
+pub struct CompiledPlan {
+    steps: Vec<PlanStep>,
+    max_stack: u16,
+}
+
+impl CompiledPlan {
+    /// Wraps runtime-compiled steps, verifying the stack effect (final depth
+    /// exactly one).
+    ///
+    /// # Errors
+    /// [`SpatialError::NonFinite`] for a malformed step sequence.
+    /// REQ: REQ-SPATIAL-034.
+    pub fn new(steps: Vec<PlanStep>) -> Result<Self, SpatialError> {
+        let mut depth: i64 = 0;
+        let mut max_depth: i64 = 0;
+        for step in &steps {
+            match step {
+                PlanStep::Constant(_)
+                | PlanStep::DynamicEdge(_)
+                | PlanStep::CalibrationSlot { .. } => depth += 1,
+                PlanStep::Multiply => {
+                    depth -= 1;
+                    if depth < 1 {
+                        return Err(SpatialError::NonFinite);
+                    }
+                }
+            }
+            max_depth = max_depth.max(depth);
+        }
+        if depth != 1 {
+            return Err(SpatialError::NonFinite);
+        }
+        let max_stack = u16::try_from(max_depth).map_err(|_| SpatialError::NonFinite)?;
+        Ok(Self { steps, max_stack })
+    }
+
+    /// The compiled steps.
+    /// REQ: REQ-SPATIAL-034.
+    #[must_use]
+    pub fn steps(&self) -> &[PlanStep] {
+        &self.steps
+    }
+
+    /// The maximum fixed-stack depth the plan needs.
+    /// REQ: REQ-SPATIAL-034.
+    #[must_use]
+    pub fn max_stack(&self) -> u16 {
+        self.max_stack
+    }
+}
+
+/// Compiles a plan for the `(reference → target)` query pair from a live
+/// [`SpaceForest`](crate::forest::SpaceForest): a build-time collapsed static
+/// run becomes [`PlanStep::Constant`], a dynamic edge becomes
+/// [`PlanStep::DynamicEdge`], bridge transforms collapse to constants, and
+/// adjacent terms are folded by [`PlanStep::Multiply`]. Compilation is the only
+/// place graph traversal happens (`I-Q1`).
+///
+/// # Errors
+/// [`SpatialError::PathNotFound`] for an unknown/disconnected pair (`I-S3`).
+/// REQ: REQ-SPATIAL-034, REQ-SPATIAL-010.
+pub fn compile_plan(
+    forest: &crate::forest::SpaceForest,
+    reference: &str,
+    target: &str,
+) -> Result<CompiledPlan, SpatialError> {
+    use crate::forest::PathEdge;
+    let path = forest.path_between(reference, target)?;
+    if path.is_empty() {
+        return Ok(CompiledPlan {
+            steps: vec![PlanStep::Constant(Transform3::IDENTITY)],
+            max_stack: 1,
+        });
+    }
+    let mut steps: Vec<PlanStep> = Vec::with_capacity(path.len() * 2);
+    for (i, edge) in path.iter().enumerate() {
+        match edge {
+            PathEdge::Constant(t) | PathEdge::Bridge(t) => {
+                steps.push(PlanStep::Constant(*t));
+            }
+            PathEdge::Dynamic(e) => steps.push(PlanStep::DynamicEdge(*e)),
+        }
+        if i != 0 {
+            steps.push(PlanStep::Multiply);
+        }
+    }
+    CompiledPlan::new(steps)
 }
 
 /// The exact observed-version vector for a plan's dynamic inputs; no hash
@@ -382,8 +507,9 @@ pub fn observe_versions(slots: &[&EdgeSlot]) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PLAN_DEPTH, PlanCache, PlanStep, TransformPlan, execute_plan};
+    use super::{MAX_PLAN_DEPTH, PlanCache, PlanStep, TransformPlan, compile_plan, execute_plan};
     use crate::clock::{ClockDomain, ClockIdentity, TimePoint};
+    use crate::forest::SpaceForest;
     use crate::types::{SpatialError, Transform3};
 
     fn chain_plan() -> &'static [PlanStep] {
@@ -448,5 +574,55 @@ mod tests {
             |_slot| Err(SpatialError::ClockUnresolved),
         );
         assert_eq!(got, Err(SpatialError::ClockUnresolved));
+    }
+
+    /// REQ: REQ-SPATIAL-034 — `compile_plan` folds a forest path into constant
+    /// and dynamic-edge steps plus multiply folds; traversal happens only at
+    /// compile time (`I-Q1`).
+    #[test]
+    fn compile_plan_from_forest() {
+        let mut f = SpaceForest::new();
+        f.add_root("world".to_string());
+        f.add_static(
+            "base".to_string(),
+            "world".to_string(),
+            Transform3::new([1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]).unwrap_or(Transform3::IDENTITY),
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        f.add_dynamic("odom".to_string(), "base".to_string(), 7);
+        let plan = compile_plan(&f, "odom", "world").unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(plan.max_stack(), 2);
+        assert_eq!(
+            plan.steps(),
+            &[
+                PlanStep::DynamicEdge(7),
+                PlanStep::Constant(
+                    Transform3::new([1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
+                        .unwrap_or(Transform3::IDENTITY)
+                ),
+                PlanStep::Multiply,
+            ]
+        );
+        // Executing resolves the dynamic edge through the supplied resolver.
+        let dyn_t =
+            Transform3::new([0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]).unwrap_or(Transform3::IDENTITY);
+        let composed = super::execute_steps(
+            plan.steps(),
+            |_edge| Ok(dyn_t),
+            |_slot| Err(SpatialError::OutOfHistory),
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        // odom→world = base_to_odom(identity) ∘ world_to_base translation.
+        assert!((composed.translation[0] - 1.0).abs() < 1e-12);
+        assert!((composed.translation[1] - 2.0).abs() < 1e-12);
+    }
+
+    /// REQ: REQ-SPATIAL-034 — a self-query compiles to the identity constant.
+    #[test]
+    fn compile_plan_self_is_identity() {
+        let mut f = SpaceForest::new();
+        f.add_root("world".to_string());
+        let plan = compile_plan(&f, "world", "world").unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(plan.steps(), &[PlanStep::Constant(Transform3::IDENTITY)]);
     }
 }

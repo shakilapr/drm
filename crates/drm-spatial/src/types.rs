@@ -27,8 +27,14 @@ pub enum SpatialError {
     PathNotFound,
     /// The requested timestamp predates the retained history.
     OutOfHistory,
+    /// Interpolating across a flagged discontinuity boundary was refused; the
+    /// query is near a jump and carries no cross-jump value (`I-Q7`).
+    DiscontinuityNearby,
     /// A runtime overlay handle generation no longer matches (`I-S12`).
     InvalidHandle,
+    /// A declared history bound is unsatisfiable (`N < floor(H/P) + 2`) or a
+    /// calibration/topology declaration is malformed (`I-Q13`).
+    InvalidConfig,
     /// A second node attempted to claim an already-owned dynamic edge (`I-S11`).
     WriterConflict,
 }
@@ -40,9 +46,9 @@ impl SpatialError {
     #[must_use]
     pub const fn status(self) -> drm_types::Status {
         match self {
-            Self::NonUnitQuaternion => drm_types::Status::InvalidData,
+            Self::NonUnitQuaternion | Self::DiscontinuityNearby => drm_types::Status::InvalidData,
             Self::InvalidDirection | Self::NonFinite => drm_types::Status::InvalidArg,
-            Self::ClockUnresolved => drm_types::Status::InvalidConfig,
+            Self::ClockUnresolved | Self::InvalidConfig => drm_types::Status::InvalidConfig,
             Self::PathNotFound => drm_types::Status::NotFound,
             Self::OutOfHistory => drm_types::Status::NoSample,
             Self::InvalidHandle => drm_types::Status::Stale,
@@ -60,7 +66,9 @@ impl fmt::Display for SpatialError {
             Self::ClockUnresolved => "clock unresolved",
             Self::PathNotFound => "path not found",
             Self::OutOfHistory => "out of history",
+            Self::DiscontinuityNearby => "discontinuity nearby",
             Self::InvalidHandle => "invalid handle",
+            Self::InvalidConfig => "invalid configuration",
             Self::WriterConflict => "writer conflict",
         };
         f.write_str(s)

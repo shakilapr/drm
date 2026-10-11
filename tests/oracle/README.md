@@ -19,22 +19,29 @@ code with the Rust implementation.
   Unity, and Unreal, applied to points and rigid transforms
   (work-plan M19W3-E4-T1). `spatial_oracle.py` additionally carries a
   `geodetic_precision` section (small local offsets from an anchor, I-S5).
+- `query_oracle.py` — query-surface ground truth: linear translation + SLERP
+  rotation interpolation between bracketing history samples, and the SE(3)
+  exponential map (`T(t+Δ) = T(t)·Exp(ξ_b Δ)`) used by `predict`
+  (work-plan M20W1-E4-T1).
 - `../fixtures/spatial/oracle_vectors.json`,
   `../fixtures/spatial/clock_vectors.json`,
-  `../fixtures/spatial/convention_vectors.json` — committed vectors the Rust
+  `../fixtures/spatial/convention_vectors.json`,
+  `../fixtures/spatial/query_vectors.json` — committed vectors the Rust
   tests compare against. Regenerate with:
 
 ```text
 python3 tests/oracle/spatial_oracle.py
 python3 tests/oracle/clock_oracle.py
 python3 tests/oracle/conventions_oracle.py
+python3 tests/oracle/query_oracle.py
 ```
 
 The Rust consumers are `crates/drm-spatial/tests/math.rs` (`cargo test -p
 drm-spatial math`), `crates/drm-spatial/tests/clocks.rs` (`cargo test -p
-drm-spatial clocks`), and `crates/drm-spatial/tests/conventions.rs` (`cargo test
--p drm-spatial conventions`), which read the committed JSON — CI does not need
-Python.
+drm-spatial clocks`), `crates/drm-spatial/tests/conventions.rs` (`cargo test
+-p drm-spatial conventions`), and `crates/drm-spatial/tests/queries.rs`
+(`cargo test -p drm-spatial queries`), which read the committed JSON — CI does
+not need Python.
 
 ## Quaternion convention
 
@@ -45,4 +52,5 @@ implementation defect, not a convention difference. SLERP results are compared
 up to sign (`q` and `-q` are the same rotation).
 
 REQ: REQ-SPATIAL-036, REQ-SPATIAL-038, REQ-SPATIAL-012, REQ-SPATIAL-007,
-REQ-SPATIAL-040, REQ-SPATIAL-004, REQ-SPATIAL-041, REQ-SPATIAL-051.
+REQ-SPATIAL-040, REQ-SPATIAL-004, REQ-SPATIAL-041, REQ-SPATIAL-051,
+REQ-SPATIAL-022, REQ-SPATIAL-025.

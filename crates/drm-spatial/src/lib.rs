@@ -30,7 +30,9 @@ pub mod conventions;
 pub mod forest;
 pub mod geodetic;
 pub mod historical;
+pub mod history;
 pub mod plan;
+pub mod query;
 pub mod transform;
 pub mod types;
 
@@ -47,12 +49,18 @@ pub use geodetic::{
     Ecef, Enu, GEODETIC_LOCAL_BOUND_M, Lla, geodetic_to_enu, tangent_plane_enu, wgs84_to_ecef,
 };
 pub use historical::{HistoricalForest, TopologyEvent};
-pub use plan::{
-    FLAG_DISCONTINUITY_NEARBY, FLAG_EXTRAPOLATED, FLAG_STALE, MAX_PLAN_DEPTH, ObservedVersions,
-    PlanCache, PlanStep, QualityFlags, TransformError, TransformPlan, TransformResult,
-    execute_plan, observe_versions,
+pub use history::{
+    HistorySample, Ingest, TimeHistory, interpolate_transform, stamp, transform_from_quat,
 };
-pub use transform::{compose, invert, transform_direction, transform_point, transform_vector};
+pub use plan::{
+    CompiledPlan, FLAG_DISCONTINUITY_NEARBY, FLAG_EXTRAPOLATED, FLAG_STALE, MAX_PLAN_DEPTH,
+    ObservedVersions, PlanCache, PlanStep, QualityFlags, TransformError, TransformPlan,
+    TransformResult, compile_plan, execute_plan, execute_steps, observe_versions,
+};
+pub use query::{CalibrationSlot, QueryEngine};
+pub use transform::{
+    compose, exp_twist, invert, transform_direction, transform_point, transform_vector,
+};
 pub use types::{
     Direction3, Point3, Pose3, SpatialError, SpatialHandle, SpatialId, Stamped, Transform3, Twist3,
     UnitQuat, Vector3,

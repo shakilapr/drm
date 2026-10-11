@@ -11,6 +11,20 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M20 W1 tranche: spatial query API (Phase 33). `drm-spatial` gains a
+  runtime plan compiler (`compile_plan`/`CompiledPlan`/`execute_steps`), a
+  sample-time-ordered `TimeHistory` with linear-translation + SLERP-rotation
+  interpolation and a discontinuity guard, the `SE(3)` exponential map
+  (`exp_twist`), and a `QueryEngine` exposing `latest`/`at`/`predict`/
+  `delayed_view` over a compiled plan with per-query status derivation and live
+  calibration slots ([spatial-queries.md](docs/algorithms/spatial/spatial-queries.md);
+  REQ-SPATIAL-022, REQ-SPATIAL-023, REQ-SPATIAL-024, REQ-SPATIAL-025,
+  REQ-SPATIAL-033, REQ-SPATIAL-037). An independent `NumPy` query oracle
+  (`tests/oracle/query_oracle.py` +
+  `tests/fixtures/spatial/query_vectors.json`) is the numeric ground truth for
+  `cargo test -p drm-spatial queries`. Gate evidence
+  ([m20w1.md](docs/gates/m20w1.md), [phase-33.md](docs/gates/phase-33.md));
+  metrics [metrics-m20.md](docs/metrics/metrics-m20.md).
 - Week M19 W1 tranche: spatial types and static collapse (Phase 33 start). New
   `crates/drm-spatial` runtime crate: distinct typed quantities
   (`Point3`/`Direction3`/`Vector3`/`Pose3`/`Transform3`/`Twist3`), rigid `SE(3)`

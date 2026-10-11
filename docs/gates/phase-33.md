@@ -14,9 +14,11 @@ drift/uncertainty, the versioned dynamic-edge cache, compiled-plan execution,
 and the per-process plan cache ([m19w2.md](m19w2.md)); M19W3 added forest
 disconnected-tree queries with explicit bridges, canonical boundary conventions,
 geodetic local-precision bounds, and historical (sample-timestamp) evaluation
-([m19w3.md](m19w3.md)). Coherent `latest`/`at`/`predict`/`delayed_view`
-semantics, the dynamic hash grid, compiled BVH, and live calibration remain
-M20–M22.
+([m19w3.md](m19w3.md)); M20W1 added the compiled-plan query surface
+`latest`/`at`/`predict`/`delayed_view`, sample-time-ordered history with the
+interpolation + discontinuity guard, and live calibration
+([m20w1.md](m20w1.md)). The dynamic hash grid, compiled BVH, and full
+transactional reparenting remain M20W2–M22.
 
 ## Wave A (M19) — types, spaces, collapse
 
@@ -35,10 +37,10 @@ M20–M22.
 | Static chains collapse to one build-time constant; MCU emission | `crates/drm-workspace/src/spatial/`; `spatial_collapse` (REQ-SPATIAL-049/017) | PASS (M19W1) |
 | Versioned dynamic-edge cache; discontinuous flag; single-writer edges | `crates/drm-spatial/src/cache.rs`; `cache` suite (REQ-SPATIAL-050/035/016/030) | PASS (M19W1–M19W2) |
 | Compiled plan execution + per-process `PlanCache` geometry shortcircuit | `crates/drm-spatial/src/plan.rs`; `spatial_cache_shortcircuit`/`spatial_cache_aging` (I-Q1/I-Q2, REQ-SPATIAL-034/002) | PASS (M19W2) |
-| Independent mathematical reference implementation | `tests/oracle/spatial_oracle.py`, `tests/oracle/clock_oracle.py`, `tests/oracle/conventions_oracle.py` (NumPy); `math`/`clocks`/`conventions` suites | PASS (M19W1–M19W3) |
-| Coherent `latest`, `at`, `predict` (exp-map), `delayed_view` | — | pending (M20) |
+| Coherent `latest`, `at`, `predict` (exp-map), `delayed_view` | `crates/drm-spatial/src/query.rs` + `src/history.rs` + `src/transform.rs` (`exp_twist`); `queries` suite + `query_oracle.py` (I-Q1..I-Q6, REQ-SPATIAL-022/023/024/025) | PASS (M20W1) |
+| Independent mathematical reference implementation | `tests/oracle/spatial_oracle.py`, `tests/oracle/clock_oracle.py`, `tests/oracle/conventions_oracle.py`, `tests/oracle/query_oracle.py` (NumPy); `math`/`clocks`/`conventions`/`queries` suites | PASS (M19W1–M20W1) |
 | Incremental dynamic hash grid; compiled BVH; proximity completeness | — | pending (M20+) |
-| Historical reparenting (Preserve World/Local/Snap, atomic commit); live calibration; generational overlay | historical topology-event evaluation landed M19W3; full reparenting modes | pending (M20–M21) |
+| Historical reparenting (Preserve World/Local/Snap, atomic commit); live calibration; generational overlay | historical topology-event evaluation + `I-Q7` interpolation guard + live calibration landed M20W1; full reparenting modes | pending (M20–M21) |
 | Exact spatial memory verification | — | pending (M21+) |
 
 ## Notes
@@ -50,9 +52,11 @@ M20–M22.
   build-time `drm-workspace` spatial model.
 - Regression permanence (AGENTS #14): M19W1–M19W3 suites are blocking gates.
 
-REQ: REQ-SPATIAL-002, REQ-SPATIAL-004, REQ-SPATIAL-005, REQ-SPATIAL-007,
-REQ-SPATIAL-009, REQ-SPATIAL-010, REQ-SPATIAL-012, REQ-SPATIAL-017,
-REQ-SPATIAL-029, REQ-SPATIAL-030, REQ-SPATIAL-031, REQ-SPATIAL-034,
-REQ-SPATIAL-035, REQ-SPATIAL-036, REQ-SPATIAL-038, REQ-SPATIAL-039,
+REQ: REQ-SPATIAL-002, REQ-SPATIAL-003, REQ-SPATIAL-004, REQ-SPATIAL-005,
+REQ-SPATIAL-007, REQ-SPATIAL-009, REQ-SPATIAL-010, REQ-SPATIAL-012,
+REQ-SPATIAL-016, REQ-SPATIAL-017, REQ-SPATIAL-022, REQ-SPATIAL-023,
+REQ-SPATIAL-024, REQ-SPATIAL-025, REQ-SPATIAL-029, REQ-SPATIAL-030,
+REQ-SPATIAL-031, REQ-SPATIAL-033, REQ-SPATIAL-034, REQ-SPATIAL-035,
+REQ-SPATIAL-036, REQ-SPATIAL-037, REQ-SPATIAL-038, REQ-SPATIAL-039,
 REQ-SPATIAL-040, REQ-SPATIAL-041, REQ-SPATIAL-047, REQ-SPATIAL-048,
 REQ-SPATIAL-049, REQ-SPATIAL-050, REQ-SPATIAL-051.
