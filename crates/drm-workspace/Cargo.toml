@@ -19,6 +19,10 @@ spatial-grammar = []
 [dev-dependencies]
 proptest.workspace = true
 toml.workspace = true
+# Test-only oracle for the MCU spatial subset vs the runtime `SE(3)` reference
+# (work-plan M21W3-E1/E2). Dev-only: the toolchain layer never depends on the
+# runtime crate at build time, so `xtask check-layering` is unaffected.
+drm-spatial = { path = "../drm-spatial" }
 
 [lints]
 workspace = true

@@ -144,6 +144,11 @@ fn overlay_attachment(frame: &FrameId) -> FrameId; // first compiled-base ancest
 fn emit_mcu_constants(plan: &CollapsePlan, target: McuTarget) -> CodeArtifact
 // Collapsed static chains (e.g. base_to_camera = rack * mount * camera) emitted as C constants;
 // runtime receives only world_to_base over serial/network ⇒ one multiply (I-S13).
+// The artifact is a freestanding C11 subset (codebase §3.3; serial-mcu.md I-SR5):
+// fixed-size `drm_spatial_transform` (translation [3] + unit quat [4]), statically
+// bounded `drm_spatial_compose`, `drm_spatial_apply_point/direction/vector`, and
+// `drm_spatial_apply_dynamic` — one straight-line multiply of a collapsed constant
+// against a dynamic edge received over the link; no heap, no recursion, no strings.
 ```
 
 ## Protocols
@@ -202,3 +207,32 @@ fn emit_mcu_constants(plan: &CollapsePlan, target: McuTarget) -> CodeArtifact
 | `spatial_single_writer` | I-S11 |
 | `spatial_overlay_generation` | I-S12 |
 | `spatial_mcu_constant` | I-S13 |
+
+## Implementation Status (M21W3)
+
+MCU/host paths versus mathematical references, and the host reference suite. The
+build-time fold (`crates/drm-workspace/src/spatial/mod.rs`) now emits the
+freestanding MCU artifact through `emit_mcu_constants`: collapsed constants plus
+fixed-size `drm_spatial_transform`, statically bounded `drm_spatial_compose`,
+`drm_spatial_apply_point/direction/vector`, and `drm_spatial_apply_dynamic` (one
+straight-line multiply of a collapsed constant against a dynamic edge received
+over serial/network, I-S13). The C subset source lives in `bindings/c/mcu`
+(`drm_spatial.{h,c}`), is cross-compiled for the pinned targets, host-compiled
+for parity, and shares no heap/recursion/stdio with the data path (I-SR5,
+`REQ-SPATIAL-017`).
+
+The runtime subset is validated against the mathematical reference on the host:
+`spatial_mcu_constant` (`crates/drm-workspace/tests/mcu.rs`) builds a static chain,
+folds it with the workspace compiler, emits the C artifact, and checks every
+`compose`/`apply` result against `drm-spatial`'s `SE(3)` reference within a
+documented tolerance band (host↔MCU float determinism). The C host self-test
+(`bindings/c/mcu/selftest.c`) reproduces the same class of cells.
+
+| Element | Location | Test |
+|---|---|---|
+| MCU C artifact generation (constants + compose/apply) | `crates/drm-workspace/src/spatial/mod.rs` | `mcu_artifact_emit` |
+| MCU subset vs runtime reference (I-S13) | `crates/drm-workspace/tests/mcu.rs` | `spatial_mcu_constant` |
+| freestanding C subset + interop | `bindings/c/mcu/drm_spatial.c`; `selftest.c` | `test_spatial_subset` |
+| zero-forbidden-heap audit | `bindings/c/mcu/Makefile` | `make host-audit` |
+
+REQ: REQ-SPATIAL-017, REQ-SPATIAL-049, REQ-CORE-087, REQ-OPS-004.

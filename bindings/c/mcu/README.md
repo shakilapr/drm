@@ -10,11 +10,17 @@ Phase 32). Source of truth: [mcu-bring-up.md](../../../docs/spec/mcu-bring-up.md
   `REQ-OPS-004`).
 - `drm_node.{h,c}` — static single-producer/single-consumer topic ring: the
   zero-heap MCU publish/read data path (I-SR5, `REQ-CORE-087`).
+- `drm_spatial.{h,c}` — rigid `SE(3)` subset (compose/apply) and the single
+  straight-line multiply applying a build-time collapsed constant to a dynamic
+  edge (I-S13, `REQ-SPATIAL-017`).
 - `selftest.c` — host self-test over golden COBS/CRC vectors shared with the
-  Rust suite; excluded from the firmware build.
+  Rust suite and reference cells for the spatial subset; excluded from the
+  firmware build.
+- `bench.c` — host timing bound for the O(1) spatial subset; excluded from the
+  firmware build.
 - `Makefile` — `arm-none-eabi-gcc 13.3.rel1` cross-build (`make all`), host
-  parity (`make host-test`), and the zero-forbidden-heap symbol audit
-  (`make host-audit`, `make audit`).
+  parity (`make host-test`), spatial timing bound (`make host-bench`), and the
+  zero-forbidden-heap symbol audit (`make host-audit`, `make audit`).
 - CI job: `.github/workflows/mcu-cross.yml` (builds both locked targets, runs
   the host parity self-test, then the zero-forbidden-heap symbol audit).
 

@@ -142,6 +142,33 @@ audit on the MCU data path green.
 
 REQ: REQ-OPS-004, REQ-ROUTE-025, REQ-ROUTE-026, REQ-CORE-087.
 
+## Implementation Status (M21W3)
+
+Spatial subset on the MCU (work-plan M21W3-E1/E2/E3). The freestanding C subset
+`bindings/c/mcu/drm_spatial.{h,c}` carries pre-calculated static constants
+emitted at build (`emit_mcu_constants`) and a single straight-line multiply
+applying a collapsed constant to a dynamic edge received over the link
+(I-S13, `REQ-SPATIAL-017`): fixed-size `drm_spatial_transform` (translation +
+unit quaternion), bounded `drm_spatial_compose`, rotation-only
+`drm_spatial_apply_direction`/`_vector`, and `drm_spatial_apply_point`. The
+subset uses `stdint.h` fixed-width types only, no heap, no recursion, and
+statically bounded loops (codebase §3.3, I-SR5).
+
+The host parity self-test (`test_spatial_subset`, `bindings/c/mcu/selftest.c`)
+checks compose/apply cells against pre-computed references within a documented
+tolerance band; `make host-audit` extends the zero-forbidden-heap symbol audit to
+the new object. The runtime reference (`crates/drm-workspace/tests/mcu.rs`)
+cross-checks the same cells against the host `SE(3)` implementation.
+
+| Element | Location | Test |
+|---|---|---|
+| spatial subset C source | `bindings/c/mcu/drm_spatial.{h,c}` | `test_spatial_subset` |
+| constant emission at build | `crates/drm-workspace/src/spatial/mod.rs` | `mcu_artifact_emit` |
+| host reference cross-check | `crates/drm-workspace/tests/mcu.rs` | `spatial_mcu_constant` |
+| zero-forbidden-heap audit | `bindings/c/mcu/Makefile` | `make host-audit` |
+
+REQ: REQ-SPATIAL-017, REQ-CORE-087, REQ-OPS-004.
+
 ## Regression Gate (M17W1)
 
 The MCU host parity self-test (`make -C bindings/c/mcu host-test`) and the

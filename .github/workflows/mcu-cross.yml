@@ -24,8 +24,10 @@ jobs:
           release: "13.3.Rel1"
       - name: Cross-compile hello-world firmware (both targets)
         run: make -C bindings/c/mcu all
-      - name: Host parity self-test (golden COBS/CRC vectors)
+      - name: Host parity self-test (golden COBS/CRC vectors + spatial subset)
         run: make -C bindings/c/mcu host-test
+      - name: Spatial subset timing bound
+        run: make -C bindings/c/mcu host-bench
       - name: Zero-forbidden-heap symbol audit
         run: |
           set -euo pipefail

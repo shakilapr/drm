@@ -555,6 +555,21 @@ impl HashGrid {
         self.objects.iter().filter(|r| r.live).count()
     }
 
+    /// The physical cell-hash slot count `S = ⌈M/α_max⌉` (`I-X2` metric).
+    /// REQ: REQ-SPATIAL-013.
+    #[must_use]
+    pub fn cell_slots(&self) -> usize {
+        self.cells.len()
+    }
+
+    /// The number of currently used cell-hash slots (`I-X2` metric: occupancy
+    /// is `used_cells / cell_slots`, which must stay `≤ α_max`).
+    /// REQ: REQ-SPATIAL-013.
+    #[must_use]
+    pub fn used_cells(&self) -> usize {
+        self.cells.iter().filter(|c| c.used).count()
+    }
+
     /// `on_sample` dependency-gated entry (`I-X3`/`I-X7`): an unchanged
     /// dependency vector touches nothing; a moved object still inside its
     /// envelope updates only its versions; otherwise it re-buckets.
@@ -790,30 +805,34 @@ impl HashGrid {
     fn remove_cell(&mut self, cell: usize) {
         let mask = self.cells.len() - 1;
         self.cells[cell].used = false;
-        let mut i = cell;
+        let (mut d, mut i) = (cell, cell);
         loop {
-            let j = (i + 1) & mask;
-            if !self.cells[j].used {
+            i = (i + 1) & mask;
+            if !self.cells[i].used {
                 return;
             }
-            let home = hash_key(self.cells[j].key) as usize & mask;
-            // Only shift when `j`'s probe path crossed the emptied slot `i`.
-            let crossed = if i <= j {
-                home <= i || home > j
+            let r = hash_key(self.cells[i].key) as usize & mask;
+            // Knuth Algorithm R: leave `i` in place while its home `r` lies in
+            // the cyclic interval `(d, i]` (otherwise its probe path would be
+            // broken by the hole at `d`). Only a key whose home is outside that
+            // interval can be shifted back into the hole; the scan continues
+            // past it — it never stops at the first stationary key (`I-X2`).
+            let r_in_range = if d < i {
+                r > d && r <= i
             } else {
-                home <= i && home > j
+                r > d || r <= i
             };
-            if !crossed {
-                return;
+            if r_in_range {
+                continue;
             }
-            self.cells[i] = CellSlot {
-                key: self.cells[j].key,
+            self.cells[d] = CellSlot {
+                key: self.cells[i].key,
                 used: true,
-                version: AtomicU32::new(self.cells[j].version.load(Ordering::Relaxed)),
-                head: self.cells[j].head,
+                version: AtomicU32::new(self.cells[i].version.load(Ordering::Relaxed)),
+                head: self.cells[i].head,
             };
-            self.cells[j].used = false;
-            i = j;
+            self.cells[i].used = false;
+            d = i;
         }
     }
 

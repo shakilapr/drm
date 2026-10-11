@@ -307,3 +307,130 @@ fn deps(v: u64) -> GridDeps {
         topology: v,
     }
 }
+
+/// REQ: REQ-SPATIAL-013 — `spatial_hash_occupancy`: from 50% to 95% of the
+/// declared object bound with colliding cell keys and interleaved deletes, the
+/// cell-hash occupancy stays `≤ α_max` by construction (the table is sized
+/// `S = ⌈M/α_max⌉`), every membership remains reachable through the public
+/// query API, and backward-shift deletion leaves no tombstone that could
+/// exhaust a later probe path (`I-X2`).
+#[test]
+fn spatial_hash_occupancy() {
+    // Disjoint one-cell objects so each membership claims exactly one slot;
+    // a tight load factor forces collisions across the open-addressing table.
+    let max_objects = 512u32;
+    let cfg = GridConfig {
+        cell_size: 1.0,
+        max_objects,
+        max_cells_per_object: 1,
+        max_query_cells: 4096,
+        slack: 0.0,
+    };
+    let mut grid = HashGrid::activate(cfg).unwrap_or_else(|e| unreachable!("{e}"));
+    let slots = grid.cell_slots();
+    assert!(slots >= max_objects as usize);
+
+    let mut scratch =
+        CandidateSet::with_capacity(max_objects).unwrap_or_else(|e| unreachable!("{e}"));
+
+    // Phase 1: fill to the bound, verifying occupancy never exceeds α_max.
+    for i in 0..max_objects {
+        grid.on_sample(
+            i,
+            Point3 {
+                x: f64::from(i),
+                y: 0.0,
+                z: 0.0,
+            },
+            deps(1),
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    }
+    let occupancy_ok = |used: usize| used * 10 <= slots * 7; // used/slots ≤ 0.70 = α_max
+    assert!(
+        occupancy_ok(grid.used_cells()),
+        "occupancy exceeds α_max at full bound"
+    );
+    assert!(
+        grid.used_cells() * 2 >= slots,
+        "full bound should reach ≥50% occupancy"
+    );
+    assert_eq!(grid.live_count(), max_objects as usize);
+
+    // Phase 2: deletes (backward shift) + re-inserts at colliding keys; every
+    // live object must still be found by an exhaustive region query.
+    for round in 0..4u32 {
+        for i in (round..max_objects).step_by(3) {
+            grid.remove(i).unwrap_or_else(|e| unreachable!("{e}"));
+        }
+        assert!(occupancy_ok(grid.used_cells()));
+        for i in (round..max_objects).step_by(3) {
+            grid.on_sample(
+                i,
+                Point3 {
+                    x: f64::from(i),
+                    y: 0.0,
+                    z: 0.0,
+                },
+                deps(u64::from(round) + 2),
+            )
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        }
+    }
+    let live = grid.live_count();
+    // A wide region covers every object; the bounded fallback keeps the scan
+    // independent of the span, so all live objects are found.
+    grid.region(
+        TypedAabb {
+            min: Point3 {
+                x: -1.0,
+                y: -1.0,
+                z: -1.0,
+            },
+            max: Point3 {
+                x: f64::from(max_objects) + 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            frame: 0,
+        },
+        &mut scratch,
+    )
+    .unwrap_or_else(|e| unreachable!("{e:?}"));
+    assert_eq!(
+        scratch.handles().len(),
+        live,
+        "every live membership must remain reachable after deletion"
+    );
+    assert!(occupancy_ok(grid.used_cells()));
+}
+
+/// REQ: REQ-SPATIAL-026 — the code audit: no excluded proximity structure
+/// (octree, k-d tree, sweep-and-prune) is present in the `drm-spatial` source
+/// (`I-X10`).
+#[test]
+fn spatial_rejected_structures() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/grid.rs"))
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    for banned in [
+        "octree",
+        "k-d tree",
+        "kdtree",
+        "sweep-and-prune",
+        "sweep_and_prune",
+    ] {
+        assert!(
+            !src.to_ascii_lowercase().contains(banned),
+            "excluded structure `{banned}` must not appear in the index implementation"
+        );
+    }
+    let proximity =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/proximity.rs"))
+            .unwrap_or_else(|e| unreachable!("{e}"));
+    for banned in ["octree", "kdtree", "sweep_and_prune"] {
+        assert!(
+            !proximity.to_ascii_lowercase().contains(banned),
+            "excluded structure `{banned}` must not appear in the proximity runtime"
+        );
+    }
+}

@@ -14,6 +14,7 @@
 
 #include "drm_node.h"
 #include "drm_serial.h"
+#include "drm_spatial.h"
 
 static int failures = 0;
 
@@ -242,6 +243,61 @@ static void test_static_node(void) {
     CHECK(drm_node_publish(&node, big, (uint16_t)sizeof big) == DRM_ERR_INVALID_ARG);
 }
 
+static int near(double a, double b, double tol) {
+    double d = a - b;
+    if (d < 0.0) {
+        d = -d;
+    }
+    return d <= tol;
+}
+
+/*
+ * MCU spatial subset vs mathematical references (spatial-core.md §Functions
+ * `emit_mcu_constants`, §Invariants I-S13; work-plan M21W3-E1/E3-T1). Fixed
+ * reference cells computed independently; compared within a documented
+ * tolerance band (host<->MCU float determinism, work-plan M21W4-E1-T3).
+ */
+static void test_spatial_subset(void) {
+    const double tol = 1e-12;
+
+    /* 90° about +Z: t = (1,2,3), q = (0,0,sin45,cos45). */
+    const double s = 0.7071067811865476;
+    drm_spatial_transform a = {{1.0, 2.0, 3.0}, {0.0, 0.0, s, s}};
+    const double origin[3] = {0.0, 0.0, 0.0};
+    const double unit_x[3] = {1.0, 0.0, 0.0};
+    double out[3];
+
+    /* Point at origin maps to the translation. */
+    drm_spatial_apply_point(&a, origin, out);
+    CHECK(near(out[0], 1.0, tol) && near(out[1], 2.0, tol) && near(out[2], 3.0, tol));
+
+    /* +X rotates to +Y. */
+    drm_spatial_apply_direction(&a, unit_x, out);
+    CHECK(near(out[0], 0.0, tol) && near(out[1], 1.0, tol) && near(out[2], 0.0, tol));
+
+    /* Identity compose is a no-op. */
+    drm_spatial_transform id = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 1.0}};
+    drm_spatial_transform c;
+    drm_spatial_compose(&c, &a, &id);
+    CHECK(near(c.t[0], 1.0, tol) && near(c.t[1], 2.0, tol) && near(c.t[2], 3.0, tol));
+    CHECK(near(c.q[3], a.q[3], tol));
+
+    /* I-S13: collapsed base_to_frame (1,2,3) against dynamic world_to_base
+     * (5,6,7); a point at the frame origin folds to (6,8,10) — one multiply. */
+    drm_spatial_transform base_to_frame = {{1.0, 2.0, 3.0}, {0.0, 0.0, 0.0, 1.0}};
+    drm_spatial_transform world_to_base = {{5.0, 6.0, 7.0}, {0.0, 0.0, 0.0, 1.0}};
+    double world[3];
+    drm_spatial_apply_dynamic(&base_to_frame, &world_to_base, origin, world);
+    CHECK(near(world[0], 6.0, tol) && near(world[1], 8.0, tol) && near(world[2], 10.0, tol));
+
+    /* Composing a rotation then its inverse cancels (pure rotations). */
+    drm_spatial_transform rotZ = {{0.0, 0.0, 0.0}, {0.0, 0.0, s, s}};
+    drm_spatial_transform negZ = {{0.0, 0.0, 0.0}, {0.0, 0.0, -s, s}};
+    drm_spatial_compose(&c, &negZ, &rotZ);
+    CHECK(near(c.t[0], 0.0, tol) && near(c.t[1], 0.0, tol) && near(c.t[2], 0.0, tol));
+    CHECK(near(c.q[3], 1.0, tol));
+}
+
 int main(void) {
     test_crc32c();
     test_cobs_golden();
@@ -249,6 +305,7 @@ int main(void) {
     test_corruption_resync();
     test_interop_matrix();
     test_static_node();
+    test_spatial_subset();
     if (failures == 0) {
         printf("mcu selftest: OK (host parity)\n");
         return 0;

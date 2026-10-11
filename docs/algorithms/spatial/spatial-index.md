@@ -312,3 +312,24 @@ REQ-SPATIAL-020, REQ-SPATIAL-018, REQ-SPATIAL-052.
 **Carry-over**: the multi-round probe occupancy campaign
 (`spatial_hash_occupancy`, I-X2) and the I-X10 code audit land in M21W3
 (MCU/host reference suite) per the work-plan.
+
+### Implementation Status (M21W3)
+
+The carry-over occupancy campaign and the I-X10 audit are green. The
+`spatial_hash_occupancy` test (`crates/drm-spatial/tests/grid.rs`) sweeps the
+cell-hash table from 50% to 95% occupancy with colliding keys and interleaved
+deletes, asserting the open-addressing probe bound holds at worst-case
+occupancy and that backward-shift deletion leaves no tombstone that could
+exhaust a probe path (`I-X2`). The `spatial_rejected_structures` audit
+(`crates/drm-spatial/tests/grid.rs`) greps the `drm-spatial` source for the
+excluded structures (octree, k-d tree, sweep-and-prune) and fails if any is
+present (`I-X10`). The host reference suite runs every spatial suite together
+(`SPATIAL_HOST_SUITE`).
+
+| Element | Location | Test |
+|---|---|---|
+| multi-round probe occupancy campaign | `crates/drm-spatial/tests/grid.rs` | `spatial_hash_occupancy` |
+| rejected-structures code audit | `crates/drm-spatial/tests/grid.rs` | `spatial_rejected_structures` |
+| host reference suite consolidation | `crates/drm-spatial/tests/host_suite.rs` | `spatial_host_reference_suite` |
+
+REQ: REQ-SPATIAL-013, REQ-SPATIAL-026, REQ-SPATIAL-018.

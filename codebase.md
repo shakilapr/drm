@@ -183,6 +183,7 @@ Artifact rules:
 - Standards: C11 (freestanding-safe subset on MCU targets); ISO C++20.
 - Flags: GCC/Clang `-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`; MSVC `/W4 /WX`.
 - MCU subset (`bindings/c` on RTOS/bare-metal): no heap, no recursion, statically bounded loops, `stdint.h` fixed-width types only, no stdio on the data path.
+- MCU spatial subset (`bindings/c/mcu/drm_spatial.{h,c}`): fixed-size rigid transforms and pre-calculated static constants emitted at build (`emit_mcu_constants`); the ingest path resolves camera coordinates from a dynamic edge with one straight-line multiply (I-S13).
 - ABI: opaque relocatable handles `{slot, generation, sequence}`; zero raw cross-process pointers; no exceptions across the C ABI boundary.
 - C++: strict RAII — `drm::Borrow<T>` releases hazard slots on every scope exit, including exceptions; clang-tidy (`bugprone-*`, `cert-*`) runs on public headers.
 
