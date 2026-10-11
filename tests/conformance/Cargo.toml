@@ -1,0 +1,35 @@
+# Whole-system conformance harness (work-plan M10W2-E4-T1). Excluded from the
+# root workspace like tests/fuzz: it links the runtime and toolchain crates
+# together, which the per-crate layering rules forbid for a member.
+[package]
+name = "drm-conformance"
+description = "Two-host router simulation + route e2e conformance harness."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+drm-core = { path = "../../crates/drm-core" }
+drm-router = { path = "../../crates/drm-router" }
+drm-types = { path = "../../crates/drm-types" }
+drm-workspace = { path = "../../crates/drm-workspace" }
+
+[[test]]
+name = "two_host"
+path = "two_host.rs"
+
+[[test]]
+name = "route_e2e"
+path = "route_e2e.rs"
+
+# Mirrors the workspace lints (the package is excluded from the root workspace).
+[lints.rust]
+missing_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

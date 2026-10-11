@@ -11,6 +11,7 @@ mod golden;
 mod layering;
 mod soak;
 mod studio_ts;
+mod two_host;
 mod workplan;
 
 use std::process::Command;
@@ -33,7 +34,7 @@ fn main() -> std::process::ExitCode {
 fn run(args: &[String]) -> Result<()> {
     let Some(cmd) = args.first() else {
         bail!(
-            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability | soak (--duration <h>|--iterations <n>) [--topology <t>] [--ledger <path>] [--dashboard] | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
+            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--two-host|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability | soak (--duration <h>|--iterations <n>) [--topology <t>] [--ledger <path>] [--dashboard] | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
         );
     };
     let flags = &args[1..];
@@ -148,8 +149,11 @@ fn test(flags: &[String]) -> Result<()> {
         ["--cross-os", "--full"] => {
             cross_os::run_full().context("xtask test --cross-os --full")?;
         }
+        ["--two-host"] => {
+            two_host::run().context("xtask test --two-host")?;
+        }
         other => bail!(
-            "test flags: {other:?} (expected none, --stress, --cross-os [--transport udp|tcp|serial | --full])"
+            "test flags: {other:?} (expected none, --stress, --two-host, --cross-os [--transport udp|tcp|serial | --full])"
         ),
     }
     Ok(())

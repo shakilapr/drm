@@ -54,3 +54,50 @@ Notes:
   §Protocols.
 - The fuzz target is excluded from the workspace (as are the other targets), so
   the datagram smoke runs in CI under nightly, not in `cargo xtask test`.
+
+## M10W2 — Router Import Path, Two-Host Integration Start
+
+| Variable | Target | Measured |
+|---|---|---|
+| `IMPORT_NATIVE` | imported samples indistinguishable from local (I-RT4) | `cargo test -p drm-router import`: 4/4 green — `import_native_equivalence` (byte-identical + timing probe), `import_strips_wire_headers`, `import_epoch_reconnect_reset`, `import_sink_binds_channel` |
+| `DISCONNECT_ISOLATION` | link cut ⇒ only remote topics affected (I-RT6) | `cargo test -p drm-router --test disconnect_isolation`: 2/2 green; `two_host_disconnect_isolation` green in the two-host sim |
+| `TWO_HOST_SIM` | 2-host loopback sim exchanging all topic classes | `cargo xtask test --two-host`: 6/6 green (structured/udp, bulk/tcp, event/udp both directions; namespaces isolated; disconnect isolation; route e2e ×2) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | on plan |
+
+Deliverables:
+
+- Import completion `crates/drm-router/src/import.rs` + `crates/drm-router/src/data_path.rs`:
+  `ChannelSink` republishes the header-stripped payload through the ordinary
+  publish path (I-RT4); the router now bumps the synthetic importer epoch once
+  per `(link, wire_channel_id)` after a reconnect (`Router::link_up`), mirroring
+  `publisher_open` (I-RT9, publisher-lifecycle.md I-L4).
+- Import suite `crates/drm-router/tests/import.rs`: native equivalence with a
+  bytes + timing probe, wire-header stripping, and the epoch reconnect-reset
+  path (a stale consumer resets and reads the post-reconnect sample).
+- Publisher-lifecycle freshness `crates/drm-core/src/channel/freshness.rs`:
+  `FreshnessTracker` / `StreamState` with monotonic-arrival `Active`/`Stale`/
+  `Offline` transitions and epoch-change `NoCurrentSample` (I-L9).
+- Two-host harness `tests/conformance/two_host.rs` (whole-system package
+  `tests/conformance`, excluded from the root workspace like `tests/fuzz`):
+  two router instances as distinct hosts (separate deployment namespaces +
+  loopback addresses) exchange every topic class; parameterized by
+  `TopicClass`.
+- Route e2e `tests/conformance/route_e2e.rs`: derived forwarding-plan egress
+  set equals the router filter set (I-RT1), a local-only topic never egresses,
+  and the `V-RT` datagram bound agrees with the router's I-RT3 send-time refusal.
+- Runner `xtask/src/two_host.rs` + `cargo xtask test --two-host`; nightly
+  `.github/workflows/fuzz-nightly.yml` `two-host` job (matrix ×3).
+
+Notes:
+
+- `E2-T2 feasibility stubs`: the verify report's labeled `estimates` section is
+  already plumbed and covered by `verify_engine::verify_boundary_labels`
+  (I-V4, REQ-TOOL-059); the estimation math and the
+  [feasibility-estimation.md](../algorithms/toolchain/feasibility-estimation.md)
+  algorithm doc land M10W3.
+- `tests/conformance` is a standalone package (not a workspace member) because
+  it links the runtime and toolchain layers, which per-crate layering forbids
+  (codebase.md §2.1); the whole-system suite is exactly where that crossing is
+  allowed, matching the `tests/fuzz` precedent.
+- Loopback sim ≠ real network (no NAT/MTU variance); the physical two-host gate
+  stays M11W3 on real hosts (router-core.md §Protocols).

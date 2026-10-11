@@ -6,6 +6,7 @@
 //! (delivery), REQ-CORE-058/056/057/095/023/021 (reclamation).
 
 pub mod ccb;
+pub mod freshness;
 pub mod lifecycle;
 pub mod overflow;
 pub mod pattern;

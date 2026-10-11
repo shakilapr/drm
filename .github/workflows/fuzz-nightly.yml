@@ -65,6 +65,22 @@ jobs:
             cargo run --release -p drm-router --example udp_pair
           done
 
+  two-host:
+    # Nightly two-host router/transport matrix (work-plan M10W2-E4-T1; extended
+    # M10W3-E4-T1): two router instances as distinct hosts exchange every topic
+    # class over loopback, plus the route-derivation ↔ router-filtering e2e.
+    # REQ: REQ-QAL-008, REQ-ROUTE-022, REQ-ROUTE-031, REQ-ROUTE-032.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: two-host sim (x3)
+        run: |
+          for run in 1 2 3; do
+            echo "two-host run $run"
+            cargo xtask test --two-host
+          done
+
   stress:
     runs-on: ubuntu-latest
     env:

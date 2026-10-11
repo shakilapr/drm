@@ -131,3 +131,26 @@ has exactly one `PORT_BOARD` entry (owner + target week + gate-risk note).
 REQ: REQ-QAL-008, REQ-CORE-101, REQ-CORE-077, REQ-CORE-098, REQ-CORE-054,
 REQ-CORE-056, REQ-CORE-057, REQ-ROUTE-007, REQ-ROUTE-025, REQ-ROUTE-026,
 REQ-ROUTE-029.
+
+## Two-host router simulation (defined M10W2-E4-T1, extended M10W3-E4-T1)
+
+The two-host harness lives in the whole-system package `tests/conformance`
+(excluded from the root workspace like `tests/fuzz`, because it links the
+runtime `drm-router`/`drm-core` layers with the toolchain `drm-workspace`
+layer). It runs two router instances as distinct "hosts" — separate
+deployment namespaces and loopback addresses — and exchanges every topic class:
+small structured and event samples over UDP (one datagram ≤ MTU) and bulk
+samples over TCP length-framed records. A link cut takes only the remote route
+offline while the other host's local loop keeps running, and reconnect resumes
+with a fresh session.
+
+| Suite | Command | Expected |
+|---|---|---|
+| Two-host topic classes | `cargo xtask test --two-host` | structured/udp, bulk/tcp, event/udp both directions |
+| Two-host isolation | `cargo xtask test --two-host` | link cut affects only the remote route (I-RT6) |
+| Route e2e | `cargo xtask test --two-host` | derived plan egress set == router filter set (I-RT1); `V-RT` bound agrees with I-RT3 |
+
+Nightly: `.github/workflows/fuzz-nightly.yml` `two-host` job runs the matrix ×3.
+
+REQ: REQ-ROUTE-022, REQ-ROUTE-031, REQ-ROUTE-032, REQ-ROUTE-029, REQ-ROUTE-007,
+REQ-TOOL-062, REQ-QAL-008.
