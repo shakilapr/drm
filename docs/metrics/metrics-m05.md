@@ -16,3 +16,18 @@ section per weekly tranche; variables match the week plan.
 Deliverables: pool-exhaustion suites (`drm-core::channel`); priority-saturation
 + mixed-class lanes (`drm-router`). Phase 14 gate completion (1 h storm evidence)
 carries into M05W2.
+
+## M05W2 — Phase 14 Gate (Hazard Protocol), Dead-Reader Reclamation
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 14)` | PASS | PASS — `docs/gates/phase-14.md` |
+| `RECLAIM_UNITS` | slow-path + identity units green | `channel::reclaim` (`reclaim_requires_trigger`, `reclaim_proof_required`, `reclaim_pid_reuse`) |
+| `KILL_MATRIX` | kill at every borrow stage ⇒ reclaim only after proof | `reclaim_kill_matrix` (pre-intent/post-intent/mid-borrow/post-release, synthetic identity) |
+| `NO_POLLING` | reclamation never runs without exhaustion trigger | `reclaim_requires_trigger` (no flag ⇒ nothing reclaimed) |
+| `EFFORT_DAYS_ACTUAL` | 5/eng | on plan |
+
+Deliverables: `docs/gates/phase-14.md` (finalized); dead-reader reclamation
+slow path (`drm-core::channel::reclaim`, `identity_alive` start-ticks guard,
+per-consumer registration lock + under-lock re-read). The multi-hour storm
+wall-time run is the CI/nightly lane.
