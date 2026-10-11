@@ -380,6 +380,27 @@ fn verify_negatives_v2_route() {
     }
 }
 
+/// REQ: REQ-TOOL-062, REQ-ROUTE-018 — the `V-RT` datagram-fit rejection
+/// (E2-T1 route-fit e2e) is actionable: it names the oversized topic and points
+/// the author at a stream transport, the build-time reject REQ-ROUTE-018
+/// requires for oversize datagram payloads.
+#[test]
+fn verify_negatives_v2_route_fit_actionable() {
+    let report = neg_rt_framing();
+    let failures = report.failures();
+    let failure = failures
+        .iter()
+        .find(|e| e.check == V_RT)
+        .unwrap_or_else(|| unreachable!("V-RT rejects oversize: {report:?}"));
+    assert!(
+        failure.message.contains("pkg/front")
+            && failure.message.contains("stream transport")
+            && failure.message.contains("REQ-ROUTE-018"),
+        "actionable stream-transport hint, topic named, REQ cited: {}",
+        failure.message
+    );
+}
+
 /// REQ: REQ-TOOL-061 — `V-REL` rejects `reliable` on both best-effort
 /// transports (UDP and serial).
 #[test]

@@ -550,10 +550,10 @@ fn check_routes(
                     report.fail(
                         V_RT,
                         format!(
-                            "topic `{topic}` payload {} B exceeds `{}` max_datagram_payload {max} B (route at `{compute}`)",
+                            "topic `{topic}` canon-encoded payload {} B exceeds `{}` max_datagram_payload {max} B (route at `{compute}`); move the topic to a stream transport (e.g. TCP) or raise the datagram bound",
                             exp.payload_capacity, edge.link.0
                         ),
-                        &["REQ-TOOL-062"],
+                        &["REQ-TOOL-062", "REQ-ROUTE-018"],
                     );
                     failed = true;
                 }

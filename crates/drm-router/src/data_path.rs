@@ -126,6 +126,16 @@ impl Router {
             .copied()
     }
 
+    /// Egress route bindings for `link`, in registration order — the egress scan
+    /// iterates only the routes of the link being serviced, so a topic bound to
+    /// another link is never examined here (I-RT1). Local-only topics are
+    /// included (they carry `remote_consumers == false`) so the scan can skip
+    /// them without a separate lookup.
+    /// REQ: REQ-ROUTE-022.
+    pub fn routes_on(&self, link: u32) -> impl Iterator<Item = EgressRoute> + '_ {
+        self.routes.iter().filter(move |r| r.link == link).copied()
+    }
+
     /// Egresses one sample for `topic` on `link`: filtered to routes with a
     /// remote consumer (I-RT1), the encoded frame bound checked before the send
     /// syscall (I-RT3), then handed to the transport adapter. Returns `Ok(false)`

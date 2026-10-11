@@ -12,6 +12,7 @@ pub mod data_path;
 pub mod deployment;
 pub mod egress;
 pub mod framing;
+pub mod import;
 pub mod lane;
 pub mod mtu;
 pub mod priority;

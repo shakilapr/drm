@@ -20,6 +20,20 @@ jobs:
           RUSTUP_TOOLCHAIN: nightly
         run: cargo fuzz run --fuzz-dir tests/fuzz schema -- -max_total_time=3600 -timeout=5
 
+  udp-pair:
+    # Nightly loopback matrix (work-plan M10W1-E4-T2): the UDP pair example runs
+    # repeated full exchanges to surface a rare reorder/loss flake (I-RT9).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: UDP loopback pair (x3)
+        run: |
+          for run in 1 2 3; do
+            echo "udp_pair run $run"
+            cargo run --release -p drm-router --example udp_pair
+          done
+
   stress:
     runs-on: ubuntu-latest
     env:

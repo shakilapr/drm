@@ -112,6 +112,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: nightly
         run: cargo fuzz run --fuzz-dir tests/fuzz schema -- -max_total_time=120 -timeout=5
+      - name: fuzz smoke (datagram, 120s)
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+        run: cargo fuzz run --fuzz-dir tests/fuzz datagram -- -max_total_time=120 -timeout=5
 
   frontend:
     if: false
