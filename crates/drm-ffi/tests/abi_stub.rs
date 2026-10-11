@@ -1,6 +1,8 @@
-//! C ABI stub-surface behaviour (work-plan M06W1-E4-T2): null-argument
-//! negatives and status propagation for exports whose core hooks are pending.
-//! REQ: REQ-BIND-004, REQ-BIND-005, REQ-BIND-007, REQ-BIND-021.
+//! C ABI endpoint-surface behaviour: null-argument negatives, status
+//! propagation, and the live in-process endpoint lifecycle. The backing is
+//! in-process (see the crate module docs); cross-process SHM endpoints are a
+//! later phase. REQ: REQ-BIND-002, REQ-BIND-004, REQ-BIND-005, REQ-BIND-007,
+//! REQ-BIND-021.
 
 use core::ptr;
 use core::ptr::NonNull;
@@ -34,18 +36,17 @@ fn null_out_param_is_invalid_arg() {
     );
 }
 
-/// REQ: REQ-BIND-021 — the pending context hook reports `NotImplemented` and
-/// zeroes `*out`, never fabricating a handle.
+/// REQ: REQ-BIND-021 — a null path opens the in-process backing, writes a
+/// non-null opaque handle, and closes cleanly (never a fabricated handle).
 #[test]
-fn context_open_reports_not_implemented_and_zeroes_out() {
+fn context_open_activates_and_close_reclaims() {
     let mut out: *mut drm_context = dangling();
-    let status = unsafe { drm_context_open(ptr::null(), &raw mut out) };
-    assert_eq!(status, Status::NotImplemented.code());
-    assert_eq!(status, -22);
-    assert!(
-        out.is_null(),
-        "out must be zeroed on the NotImplemented path"
+    assert_eq!(
+        unsafe { drm_context_open(ptr::null(), &raw mut out) },
+        Status::Ok.code()
     );
+    assert!(!out.is_null(), "context_open must write a live handle");
+    assert_eq!(unsafe { drm_context_close(out) }, Status::Ok.code());
 }
 
 /// REQ: REQ-BIND-004, REQ-BIND-005 — a null context at endpoint open is
@@ -84,23 +85,30 @@ fn null_handle_close_is_invalid_arg() {
     );
 }
 
-/// REQ: REQ-BIND-007, REQ-BIND-020 — a non-null handle reaches the pending hook
-/// path and propagates `NotImplemented` verbatim; the stub only null-checks, so
-/// the (dangling) pointer is never dereferenced.
+/// REQ: REQ-BIND-002, REQ-BIND-021 — a full open/close lifecycle through the
+/// real in-process backing returns `OK` at every step (no fabricated handle,
+/// no `NotImplemented`).
 #[test]
-fn non_null_handle_propagates_not_implemented() {
+fn endpoint_lifecycle_open_close_succeeds() {
+    let mut ctx: *mut drm_context = dangling();
     assert_eq!(
-        unsafe { drm_context_close(dangling::<drm_context>()) },
-        Status::NotImplemented.code()
+        unsafe { drm_context_open(ptr::null(), &raw mut ctx) },
+        Status::Ok.code()
     );
+    let mut publisher: *mut drm_publisher = dangling();
     assert_eq!(
-        unsafe { drm_publisher_close(dangling::<drm_publisher>()) },
-        Status::NotImplemented.code()
+        unsafe { drm_publisher_open(ctx, 0, &raw mut publisher) },
+        Status::Ok.code()
     );
+    let mut consumer: *mut drm_consumer = dangling();
     assert_eq!(
-        unsafe { drm_consumer_close(dangling::<drm_consumer>()) },
-        Status::NotImplemented.code()
+        unsafe { drm_consumer_open(ctx, 0, &raw mut consumer) },
+        Status::Ok.code()
     );
+    assert!(!publisher.is_null() && !consumer.is_null());
+    assert_eq!(unsafe { drm_publisher_close(publisher) }, Status::Ok.code());
+    assert_eq!(unsafe { drm_consumer_close(consumer) }, Status::Ok.code());
+    assert_eq!(unsafe { drm_context_close(ctx) }, Status::Ok.code());
 }
 
 /// REQ: REQ-BIND-018 — the ABI probe mirrors `drm_types::ABI_VERSION`.

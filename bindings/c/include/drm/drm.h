@@ -88,15 +88,34 @@ typedef struct drm_write_view {
 int32_t drm_abi_version(void);
 
 /* Endpoint lifecycle (opaque handles only — REQ-BIND-004/021). Signatures are
- * fixed here; the drm-ffi bodies land with the core hooks (c-abi-surface.md
- * §Functions). While a hook is pending the export validates arguments and
- * returns DRM_ERR_NOT_IMPLEMENTED, never a fabricated handle. */
+ * fixed here; the drm-ffi bodies for open/close/publish/read/borrow are backed
+ * in-process by a drm-core channel (cross-process SHM endpoints are a later
+ * phase; see c-abi-surface.md §Functions). An export with no live hook yet
+ * validates arguments and returns DRM_ERR_NOT_IMPLEMENTED, never a fabricated
+ * handle. */
 drm_status drm_context_open(const char *path, drm_context **out);
 drm_status drm_context_close(drm_context *ctx);
 drm_status drm_publisher_open(drm_context *ctx, uint32_t topic_id, drm_publisher **out);
 drm_status drm_publisher_close(drm_publisher *publisher);
 drm_status drm_consumer_open(drm_context *ctx, uint32_t topic_id, drm_consumer **out);
 drm_status drm_consumer_close(drm_consumer *consumer);
+
+/* Copy publish (REQ-BIND-006): the caller owns `data` for `len` bytes; `len`
+ * must not exceed the topic sample size. */
+drm_status drm_publish_copy(drm_publisher *publisher, const uint8_t *data, size_t len);
+
+/* Copy reads (REQ-BIND-009): deliver into the caller-owned `buf`;
+ * `*out_len` receives the written length (or the required size on a too-small
+ * buffer). `drm_read_next` additionally reports a Gap count via `*out_missed`
+ * (REQ-BIND-019). */
+drm_status drm_read_latest(drm_consumer *consumer, uint8_t *buf, size_t cap, size_t *out_len);
+drm_status drm_read_next(drm_consumer *consumer, uint8_t *buf, size_t cap, size_t *out_len, uint64_t *out_missed);
+
+/* Zero-copy borrow (REQ-BIND-003): at most one outstanding borrow per consumer;
+ * release is explicit (no RAII in C) — double-release returns
+ * DRM_ERR_INVALID_ARG. */
+drm_status drm_borrow_latest(drm_consumer *consumer, drm_borrow_view *out);
+drm_status drm_borrow_release(drm_consumer *consumer, uint32_t token);
 
 #ifdef __cplusplus
 }

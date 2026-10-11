@@ -6,20 +6,40 @@
 //! REQ: REQ-BIND-007 (one status taxonomy mirrored 1:1 to C codes), REQ-BIND-002
 //! (explicit close; per-handle thread-safety), REQ-BIND-020 (fail-stop FFI).
 //!
-//! Stub surface (work-plan M06W1-E4): opaque handles, the fixed status mirror,
-//! and the endpoint-lifecycle exports. The core hooks
-//! (`drm_core::{context_open, publisher_open, consumer_open}` and their close
-//! counterparts) are pending, so each export validates its arguments (null
-//! checks and out-param zeroing, I-A2) and then returns `Status::NotImplemented`.
-//! No handle or sample is ever fabricated. Unsafe is permitted here
-//! (codebase.md 3.2).
+//! # In-process endpoint backing (current phase)
+//!
+//! The endpoint exports are backed by a **single in-process**
+//! `drm_core::channel::Channel` owned by the deployment context created by
+//! `drm_context_open`. `drm_publisher_open` / `drm_consumer_open` hand out
+//! opaque handles that reference that one shared channel; `drm_publish_copy`
+//! and `drm_read_latest` / `drm_read_next` copy through it, and
+//! `drm_borrow_latest` / `drm_borrow_release` take a transient,
+//! hazard-protected view.
+//!
+//! This is deliberately NOT the cross-process shared-memory endpoint: there is
+//! no segment mapping, no deployment manifest, no fingerprint guard, and the
+//! `path` argument of `drm_context_open` is ignored. Cross-process SHM
+//! endpoints are a later phase (c-abi-surface.md, section *Protocols*); nothing
+//! here should be read as claiming cross-process behaviour. The backing topic
+//! is fixed-size (`ENDPOINT_SAMPLE_MAX` bytes): a shorter source publish is
+//! zero-padded, and every read delivers the full fixed sample.
+//!
+//! Validation runs **once** at endpoint open (I-A1, REQ-BIND-008) and is
+//! accounted per context; the steady-state copy operations run zero per-message
+//! permission/schema checks. Unsafe is permitted here (codebase.md 3.2).
 
-// ABI identifiers mirror `drm.h` verbatim (`drm_status`, `drm_context`, ...) and
-// are intentionally not camel-cased. REQ: REQ-BIND-004, REQ-BIND-007.
+// ABI identifiers mirror `drm.h`/c-abi-surface.md verbatim (`drm_status`,
+// `drm_context`, `drm_borrow_view`, ...) and are intentionally not camel-cased.
+// REQ: REQ-BIND-004, REQ-BIND-007.
 #![allow(non_camel_case_types)]
 
-use core::ffi::c_char;
+use core::cell::{Cell, UnsafeCell};
+use core::ffi::{c_char, c_void};
+use core::ptr;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
+use drm_core::channel::{Channel, OverflowPolicy, ReadOutcome, ReaderState};
+use drm_core::hazard::{Borrow, acquire};
 use drm_types::Status;
 
 /// Fixed `int32_t` status mirror of `drm_types::Status` (I-A4/I-A9): explicit
@@ -37,6 +57,92 @@ pub enum drm_publisher {}
 /// Opaque consumer endpoint handle. REQ: REQ-BIND-004.
 pub enum drm_consumer {}
 
+/// Caller-owned borrow view; mirrors `drm_borrow_view` in `drm.h` layout
+/// exactly. `data` points into the in-process backing's local storage and is
+/// valid until the matching `drm_borrow_release`.
+/// REQ: REQ-BIND-001, REQ-BIND-004.
+#[repr(C)]
+pub struct drm_borrow_view {
+    /// Pointer to the committed sample; valid until release (`0` if none).
+    pub data: *const c_void,
+    /// Committed canonical sample length in bytes (zero on failure).
+    pub len: usize,
+    /// Sequence of the borrowed sample.
+    pub sequence: u64,
+    /// Opaque single-outstanding token; `0` means invalid.
+    pub token: u32,
+}
+
+/// Fixed canonical sample size of the in-process backing topic, in bytes.
+/// REQ: REQ-BIND-005, REQ-BIND-019.
+pub const ENDPOINT_SAMPLE_MAX: usize = 64;
+
+/// Maximum number of concurrently open consumer endpoints (borrower records)
+/// the in-process context can lease. REQ: REQ-BIND-010.
+pub const ENDPOINT_BORROWERS: usize = 8;
+
+/// In-process channel history depth R. REQ: REQ-BIND-004.
+const ENDPOINT_DEPTH: u64 = 8;
+
+/// In-process channel pool size (slots). REQ: REQ-BIND-004.
+const ENDPOINT_POOL: u64 = 16;
+
+/// In-process slot alignment. REQ: REQ-BIND-004.
+const ENDPOINT_SLOT_ALIGN: u64 = 8;
+
+/// Bounded read budget per copy call (cursor-delivery I-C10; matches the core
+/// ergonomic wrappers). REQ: REQ-BIND-003.
+const RETRY_BUDGET: u32 = 4;
+
+/// Deployment context backing store: owns the single in-process channel and the
+/// per-context validate-once accounting. Boxed so the channel address handed to
+/// endpoints stays stable.
+/// REQ: REQ-BIND-008, REQ-BIND-021.
+struct ContextBox {
+    channel: Channel,
+    validation_checks: AtomicU64,
+    per_message_checks: AtomicU64,
+    next_borrower: AtomicUsize,
+}
+
+/// Publisher endpoint backing store: a non-owning reference to the context's
+/// channel (the context outlives every derived endpoint, I-A7).
+/// REQ: REQ-BIND-002, REQ-BIND-004.
+struct PublisherBox {
+    channel: *const Channel,
+}
+
+/// Consumer endpoint backing store: a non-owning channel reference, a claimed
+/// borrower record, a process-local cursor, and at most one outstanding borrow.
+/// REQ: REQ-BIND-006, REQ-BIND-010.
+struct ConsumerBox {
+    channel: *const Channel,
+    rec_index: usize,
+    reader: UnsafeCell<ReaderState>,
+    outstanding: UnsafeCell<Option<(u32, Borrow)>>,
+    next_token: AtomicU32,
+}
+
+thread_local! {
+    /// Borrows leaked on this thread (an outstanding borrow dropped by close
+    /// instead of released); debug/diagnostic accounting only.
+    /// REQ: REQ-BIND-001, REQ-BIND-006.
+    static LEAKED_BORROWS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Record one leaked borrow (outstanding at consumer close). REQ: REQ-BIND-001.
+fn note_leaked_borrow() {
+    LEAKED_BORROWS.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+/// Count of borrows leaked on the calling thread (debug/diagnostic). A caller
+/// that releases every borrow keeps this at zero; a close with an outstanding
+/// borrow counts one. REQ: REQ-BIND-001, REQ-BIND-006.
+#[must_use]
+pub fn drm_ffi_leaked_borrows() -> u64 {
+    LEAKED_BORROWS.with(Cell::get)
+}
+
 /// Zero an out-parameter before any fallible step (I-A2): a null out-param is
 /// `InvalidArg`; otherwise the pointee is overwritten with zeros so an ignored
 /// status can never observe a stale pointer or token.
@@ -49,7 +155,7 @@ unsafe fn zero_out<T>(out: *mut T) -> Result<(), Status> {
         return Err(Status::InvalidArg);
     }
     // SAFETY: caller contract — `out` is valid for a single `T` write.
-    unsafe { core::ptr::write_bytes(out, 0, 1) };
+    unsafe { ptr::write_bytes(out, 0, 1) };
     Ok(())
 }
 
@@ -61,12 +167,11 @@ pub extern "C" fn drm_abi_version() -> u32 {
     drm_types::ABI_VERSION
 }
 
-/// Open the deployment context (opaque handle). REQ: REQ-BIND-021, REQ-BIND-005.
+/// Open the deployment context and activate the in-process backing channel.
+/// REQ: REQ-BIND-021, REQ-BIND-005, REQ-BIND-008.
 ///
-/// Stub: `out` is zeroed first (null `out` ⇒ `InvalidArg`); the pending
-/// `drm_core::context_open` hook then yields `Status::NotImplemented`. `path`
-/// semantics (NULL ⇒ `DRM_DEPLOYMENT`, else a NUL-terminated deployment path)
-/// apply once the hook lands.
+/// `out` is zeroed first (null `out` ⇒ `InvalidArg`). `path` is accepted but
+/// ignored in this phase (no manifest/fingerprint load; in-process backing).
 ///
 /// # Safety
 /// `_path` is null or a valid NUL-terminated C string; `out` is null or points
@@ -80,31 +185,58 @@ pub unsafe extern "C" fn drm_context_open(
     if let Err(status) = unsafe { zero_out(out) } {
         return status.code();
     }
-    Status::NotImplemented.code()
+    // Fixed-size, overwrite-policy topic: no descriptor/schema validation and
+    // no manifest authorization yet — storage is fixed at activation.
+    let sample_max = u64::try_from(ENDPOINT_SAMPLE_MAX).unwrap_or(0);
+    match Channel::activate(
+        ENDPOINT_DEPTH,
+        ENDPOINT_POOL,
+        sample_max,
+        ENDPOINT_SLOT_ALIGN,
+        OverflowPolicy::Overwrite,
+        0,
+        ENDPOINT_BORROWERS,
+        None,
+    ) {
+        Ok(channel) => {
+            let ctx = Box::new(ContextBox {
+                channel,
+                validation_checks: AtomicU64::new(0),
+                per_message_checks: AtomicU64::new(0),
+                next_borrower: AtomicUsize::new(0),
+            });
+            // SAFETY: `out` is non-null (checked by `zero_out`).
+            unsafe { *out = Box::into_raw(ctx).cast::<drm_context>() };
+            Status::Ok.code()
+        }
+        Err(status) => status.code(),
+    }
 }
 
 /// Close a deployment context. REQ: REQ-BIND-002, REQ-BIND-021.
 ///
-/// Stub: null `ctx` ⇒ `InvalidArg`; otherwise the pending
-/// `drm_core::context_close` hook ⇒ `Status::NotImplemented`. Only the null case
-/// is validated — a non-null dangling handle is caller UB (I-A2).
+/// Null `ctx` ⇒ `InvalidArg`. The caller must have closed every endpoint
+/// derived from the context first (I-A7); a non-null dangling handle is caller
+/// UB (I-A2).
 ///
 /// # Safety
-/// `ctx` is null or a handle returned by `drm_context_open`.
+/// `ctx` is null or a live handle returned by `drm_context_open`.
 #[must_use]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn drm_context_close(ctx: *mut drm_context) -> drm_status {
     if ctx.is_null() {
         return Status::InvalidArg.code();
     }
-    Status::NotImplemented.code()
+    // SAFETY: caller contract — `ctx` is a handle from `drm_context_open`.
+    drop(unsafe { Box::from_raw(ctx.cast::<ContextBox>()) });
+    Status::Ok.code()
 }
 
 /// Open a publisher endpoint on `topic_id`. REQ: REQ-BIND-002, REQ-BIND-008.
 ///
-/// Stub: `out` is zeroed first (null `out` ⇒ `InvalidArg`); a null `ctx` then
-/// yields `InvalidArg`; otherwise the pending `drm_core::publisher_open` hook
-/// yields `Status::NotImplemented`. Validation-once (I-A1) runs inside the hook.
+/// `out` is zeroed first (null `out` ⇒ `InvalidArg`); a null `ctx` ⇒
+/// `InvalidArg`. Validation runs exactly once here (I-A1); the topic id is
+/// recorded by the caller but the in-process backing serves one shared topic.
 ///
 /// # Safety
 /// `ctx` is null or a live context handle; `out` is null or points to a
@@ -122,13 +254,22 @@ pub unsafe extern "C" fn drm_publisher_open(
     if ctx.is_null() {
         return Status::InvalidArg.code();
     }
-    Status::NotImplemented.code()
+    // SAFETY: caller contract — `ctx` is a live handle.
+    let ctx = unsafe { &*ctx.cast::<ContextBox>() };
+    // Validate-once (I-A1 / REQ-BIND-008): authorization + descriptor checks
+    // execute here, once per open; steady-state publishes run none.
+    ctx.validation_checks.fetch_add(1, Ordering::Relaxed);
+    let publisher = Box::new(PublisherBox {
+        channel: ptr::from_ref(&ctx.channel),
+    });
+    // SAFETY: `out` is non-null (checked by `zero_out`).
+    unsafe { *out = Box::into_raw(publisher).cast::<drm_publisher>() };
+    Status::Ok.code()
 }
 
 /// Close a publisher endpoint. REQ: REQ-BIND-002.
 ///
-/// Stub: null `publisher` ⇒ `InvalidArg`; otherwise the pending
-/// `drm_core::publisher_close` hook ⇒ `Status::NotImplemented`.
+/// Null `publisher` ⇒ `InvalidArg`; otherwise the handle is reclaimed.
 ///
 /// # Safety
 /// `publisher` is null or a handle returned by `drm_publisher_open`.
@@ -138,14 +279,64 @@ pub unsafe extern "C" fn drm_publisher_close(publisher: *mut drm_publisher) -> d
     if publisher.is_null() {
         return Status::InvalidArg.code();
     }
-    Status::NotImplemented.code()
+    // SAFETY: caller contract — handle from `drm_publisher_open`.
+    drop(unsafe { Box::from_raw(publisher.cast::<PublisherBox>()) });
+    Status::Ok.code()
+}
+
+/// Copy publish on `publisher` (channel-publish.md copy form).
+/// REQ: REQ-BIND-002, REQ-BIND-008.
+///
+/// A null `publisher`, or `data == NULL && len != 0`, is `InvalidArg`; a `len`
+/// larger than the fixed sample size is `InvalidArg` before any slice exists
+/// (I-A2). A shorter source is zero-padded to the fixed sample size. Every core
+/// `Status` (e.g. `QueueFull`, `PoolExhausted`) propagates verbatim, with zero
+/// per-message permission/schema checks.
+///
+/// # Safety
+/// `data` is null or points to `len` readable bytes.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn drm_publish_copy(
+    publisher: *mut drm_publisher,
+    data: *const u8,
+    len: usize,
+) -> drm_status {
+    if publisher.is_null() || (data.is_null() && len != 0) {
+        return Status::InvalidArg.code();
+    }
+    if len > ENDPOINT_SAMPLE_MAX {
+        return Status::InvalidArg.code();
+    }
+    // SAFETY: caller contract — `data` is valid for `len` bytes.
+    let payload: &[u8] = if len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(data, len) }
+    };
+    let mut padded = [0_u8; ENDPOINT_SAMPLE_MAX];
+    let Some(head) = padded.get_mut(..len) else {
+        return Status::InvalidArg.code();
+    };
+    head.copy_from_slice(payload);
+    // SAFETY: caller contract — `publisher` from `drm_publisher_open`.
+    let publisher = unsafe { &*publisher.cast::<PublisherBox>() };
+    // SAFETY: the channel is owned by the live context, which outlives it.
+    let channel = unsafe { &*publisher.channel };
+    // Zero per-message permission/schema checks (I-A1); the core publish runs
+    // only its own structural/sample checks.
+    match channel.publish(&padded) {
+        Ok(_) => Status::Ok.code(),
+        Err(status) => status.code(),
+    }
 }
 
 /// Open a consumer endpoint on `topic_id`. REQ: REQ-BIND-002, REQ-BIND-010.
 ///
-/// Stub: `out` is zeroed first (null `out` ⇒ `InvalidArg`); a null `ctx` then
-/// yields `InvalidArg`; otherwise the pending `drm_core::consumer_open` hook
-/// (which claims a declared borrower record) yields `Status::NotImplemented`.
+/// `out` is zeroed first (null `out` ⇒ `InvalidArg`); a null `ctx` ⇒
+/// `InvalidArg`. The open claims one borrower record; when the
+/// `ENDPOINT_BORROWERS` lease is exhausted it returns `Busy` (I-A7). Validation
+/// runs exactly once here (I-A1).
 ///
 /// # Safety
 /// `ctx` is null or a live context handle; `out` is null or points to a
@@ -163,13 +354,32 @@ pub unsafe extern "C" fn drm_consumer_open(
     if ctx.is_null() {
         return Status::InvalidArg.code();
     }
-    Status::NotImplemented.code()
+    // SAFETY: caller contract — `ctx` is a live handle.
+    let ctx = unsafe { &*ctx.cast::<ContextBox>() };
+    let rec_index = ctx.next_borrower.fetch_add(1, Ordering::AcqRel);
+    if rec_index >= ENDPOINT_BORROWERS {
+        // No vacant borrower record ⇒ Busy (REQ-BIND-010). Leases are not
+        // reclaimed within a context in this phase.
+        return Status::Busy.code();
+    }
+    ctx.validation_checks.fetch_add(1, Ordering::Relaxed);
+    let consumer = Box::new(ConsumerBox {
+        channel: ptr::from_ref(&ctx.channel),
+        rec_index,
+        reader: UnsafeCell::new(ctx.channel.reader()),
+        outstanding: UnsafeCell::new(None),
+        next_token: AtomicU32::new(1),
+    });
+    // SAFETY: `out` is non-null (checked by `zero_out`).
+    unsafe { *out = Box::into_raw(consumer).cast::<drm_consumer>() };
+    Status::Ok.code()
 }
 
-/// Close a consumer endpoint. REQ: REQ-BIND-002.
+/// Close a consumer endpoint. REQ: REQ-BIND-002, REQ-BIND-001.
 ///
-/// Stub: null `consumer` ⇒ `InvalidArg`; otherwise the pending
-/// `drm_core::consumer_close` hook ⇒ `Status::NotImplemented`.
+/// Null `consumer` ⇒ `InvalidArg`. An outstanding borrow at close is a caller
+/// leak: it is released (the hazard slot is cleared) and counted in the debug
+/// leak counter (see [`drm_ffi_leaked_borrows`]).
 ///
 /// # Safety
 /// `consumer` is null or a handle returned by `drm_consumer_open`.
@@ -179,14 +389,294 @@ pub unsafe extern "C" fn drm_consumer_close(consumer: *mut drm_consumer) -> drm_
     if consumer.is_null() {
         return Status::InvalidArg.code();
     }
-    Status::NotImplemented.code()
+    // SAFETY: caller contract — handle from `drm_consumer_open`.
+    let mut boxed = unsafe { Box::from_raw(consumer.cast::<ConsumerBox>()) };
+    if boxed.outstanding.get_mut().is_some() {
+        // Debug leak accounting: explicit release was skipped. Dropping the
+        // guard releases the hazard slot so the pool is not wedged.
+        note_leaked_borrow();
+        *boxed.outstanding.get_mut() = None;
+    }
+    drop(boxed);
+    Status::Ok.code()
+}
+
+/// Take a transient, hazard-protected view of the newest committed sample.
+/// REQ: REQ-BIND-001, REQ-BIND-006.
+///
+/// `out` is zeroed first (null `out` ⇒ `InvalidArg`); a null `consumer` ⇒
+/// `InvalidArg`. A second call before release ⇒ `Busy` (one outstanding borrow
+/// per endpoint, I-A5). Empty channel ⇒ `NoSample`. On success the view carries
+/// a non-zero token that must be passed to [`drm_borrow_release`].
+///
+/// # Safety
+/// `consumer` is null or a live consumer handle; `out` is null or points to a
+/// writable `drm_borrow_view`.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn drm_borrow_latest(
+    consumer: *mut drm_consumer,
+    out: *mut drm_borrow_view,
+) -> drm_status {
+    if let Err(status) = unsafe { zero_out(out) } {
+        return status.code();
+    }
+    if consumer.is_null() {
+        return Status::InvalidArg.code();
+    }
+    // SAFETY: caller contract — `consumer` is a live handle.
+    let consumer = unsafe { &*consumer.cast::<ConsumerBox>() };
+    // SAFETY: the channel is owned by the live context, which outlives it.
+    let channel = unsafe { &*consumer.channel };
+    // SAFETY: single-borrower endpoint; the cell is touched only here/release.
+    let outstanding = unsafe { &mut *consumer.outstanding.get() };
+    if outstanding.is_some() {
+        return Status::Busy.code();
+    }
+    let ws = channel.write_seq();
+    let fv = channel.ccb().first_valid_seq.load(Ordering::Acquire);
+    if ws <= fv {
+        return Status::NoSample.code();
+    }
+    let Some(rec) = channel.rec(consumer.rec_index) else {
+        return Status::InvalidArg.code();
+    };
+    let borrow = match acquire(channel.ring(), channel.ccb(), ws - 1, rec) {
+        Ok(borrow) => borrow,
+        Err(err) => return Status::from(err).code(),
+    };
+    let payload = channel.payload(&borrow.entry);
+    let token = consumer.next_token.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: `out` is non-null and valid for one `drm_borrow_view` write.
+    unsafe {
+        (*out).data = payload.as_ptr().cast::<c_void>();
+        (*out).len = payload.len();
+        (*out).sequence = borrow.entry.sequence;
+        (*out).token = token;
+    }
+    *outstanding = Some((token, borrow));
+    Status::Ok.code()
+}
+
+/// Release a borrow taken by [`drm_borrow_latest`].
+/// REQ: REQ-BIND-001, REQ-BIND-006.
+///
+/// Null `consumer` or `token == 0` ⇒ `InvalidArg`. A release with no
+/// outstanding borrow (double release) or a token mismatch ⇒ `InvalidArg`.
+///
+/// # Safety
+/// `consumer` is null or a live consumer handle.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn drm_borrow_release(consumer: *mut drm_consumer, token: u32) -> drm_status {
+    if consumer.is_null() || token == 0 {
+        return Status::InvalidArg.code();
+    }
+    // SAFETY: caller contract — `consumer` is a live handle.
+    let consumer = unsafe { &*consumer.cast::<ConsumerBox>() };
+    // SAFETY: single-borrower endpoint; the cell is touched only here/borrow.
+    let outstanding = unsafe { &mut *consumer.outstanding.get() };
+    match outstanding {
+        Some((held, _)) if *held == token => {
+            // Dropping the guard clears the hazard slot.
+            *outstanding = None;
+            Status::Ok.code()
+        }
+        // No outstanding borrow (double release) or token mismatch.
+        _ => Status::InvalidArg.code(),
+    }
+}
+
+/// Copy the newest committed sample into a caller buffer.
+/// REQ: REQ-BIND-002, REQ-BIND-008.
+///
+/// `out_len` is zeroed first (null ⇒ `InvalidArg`); a null `consumer`, or
+/// `buf == NULL && cap != 0`, is `InvalidArg`. When `cap` is smaller than the
+/// fixed sample size the call returns `InvalidArg` with `*out_len` set to the
+/// required size and copies nothing (no partial copy, I-C9); a `cap == 0` call
+/// is therefore a size query. Empty channel ⇒ `NoSample`. The read is bounded
+/// (I-C10): budget exhaustion ⇒ `Retry`.
+///
+/// # Safety
+/// `consumer` is null or a live consumer handle; `buf` is null or points to
+/// `cap` writable bytes; `out_len` is null or points to a writable `usize`.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn drm_read_latest(
+    consumer: *mut drm_consumer,
+    buf: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> drm_status {
+    if let Err(status) = unsafe { zero_out(out_len) } {
+        return status.code();
+    }
+    if consumer.is_null() || (buf.is_null() && cap != 0) {
+        return Status::InvalidArg.code();
+    }
+    if cap < ENDPOINT_SAMPLE_MAX {
+        // Informative size query: report the required size, copy nothing.
+        // SAFETY: `out_len` is non-null (checked by `zero_out`).
+        unsafe { *out_len = ENDPOINT_SAMPLE_MAX };
+        return Status::InvalidArg.code();
+    }
+    // SAFETY: caller contract — `consumer` is a live handle.
+    let consumer = unsafe { &*consumer.cast::<ConsumerBox>() };
+    // SAFETY: the channel is owned by the live context, which outlives it.
+    let channel = unsafe { &*consumer.channel };
+    // SAFETY: `buf` is non-null (cap >= 64) and valid for `cap >= required`.
+    let dst = unsafe { core::slice::from_raw_parts_mut(buf, ENDPOINT_SAMPLE_MAX) };
+    // SAFETY: single-borrower endpoint; the cursor cell is touched only here.
+    let reader = unsafe { &mut *consumer.reader.get() };
+    match channel.try_latest(reader, consumer.rec_index, dst, RETRY_BUDGET) {
+        Ok(ReadOutcome::Sample) => {
+            // SAFETY: `out_len` is non-null (checked by `zero_out`).
+            unsafe { *out_len = ENDPOINT_SAMPLE_MAX };
+            Status::Ok.code()
+        }
+        Ok(ReadOutcome::Empty) => Status::NoSample.code(),
+        Ok(ReadOutcome::Gap { .. }) => Status::Gap.code(),
+        Ok(ReadOutcome::WouldRetry) => Status::Retry.code(),
+        Err(status) => status.code(),
+    }
+}
+
+/// Copy the next in-order committed sample into a caller buffer.
+/// REQ: REQ-BIND-002, REQ-BIND-008.
+///
+/// Same rules as [`drm_read_latest`], plus lapped-sequential accounting: a
+/// lapped cursor returns `Gap` with the exact `*out_missed` count and copies
+/// nothing (I-C2). Both `out_len` and `out_missed` are zeroed first (a null
+/// ⇒ `InvalidArg`).
+///
+/// # Safety
+/// `consumer` is null or a live consumer handle; `buf` is null or points to
+/// `cap` writable bytes; `out_len`/`out_missed` are null or point to writable
+/// `usize`/`u64`.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn drm_read_next(
+    consumer: *mut drm_consumer,
+    buf: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+    out_missed: *mut u64,
+) -> drm_status {
+    if let Err(status) = unsafe { zero_out(out_len) } {
+        return status.code();
+    }
+    if let Err(status) = unsafe { zero_out(out_missed) } {
+        return status.code();
+    }
+    if consumer.is_null() || (buf.is_null() && cap != 0) {
+        return Status::InvalidArg.code();
+    }
+    if cap < ENDPOINT_SAMPLE_MAX {
+        // SAFETY: `out_len` is non-null (checked by `zero_out`).
+        unsafe { *out_len = ENDPOINT_SAMPLE_MAX };
+        return Status::InvalidArg.code();
+    }
+    // SAFETY: caller contract — `consumer` is a live handle.
+    let consumer = unsafe { &*consumer.cast::<ConsumerBox>() };
+    // SAFETY: the channel is owned by the live context, which outlives it.
+    let channel = unsafe { &*consumer.channel };
+    // SAFETY: `buf` is non-null (cap >= 64) and valid for `cap >= required`.
+    let dst = unsafe { core::slice::from_raw_parts_mut(buf, ENDPOINT_SAMPLE_MAX) };
+    // SAFETY: single-borrower endpoint; the cursor cell is touched only here.
+    let reader = unsafe { &mut *consumer.reader.get() };
+    match channel.try_next(reader, consumer.rec_index, dst, RETRY_BUDGET) {
+        Ok(ReadOutcome::Sample) => {
+            // SAFETY: `out_len` is non-null (checked by `zero_out`).
+            unsafe { *out_len = ENDPOINT_SAMPLE_MAX };
+            Status::Ok.code()
+        }
+        Ok(ReadOutcome::Empty) => Status::NoSample.code(),
+        Ok(ReadOutcome::Gap { missed }) => {
+            // SAFETY: `out_missed` is non-null (checked by `zero_out`).
+            unsafe { *out_missed = missed };
+            Status::Gap.code()
+        }
+        Ok(ReadOutcome::WouldRetry) => Status::Retry.code(),
+        Err(status) => status.code(),
+    }
+}
+
+/// Validate-once accounting for `ctx`: number of authorization/descriptor
+/// checks recorded since open. It advances once per successful endpoint open
+/// and never on the publish/read hot path (I-A1). Diagnostic only.
+/// REQ: REQ-BIND-008.
+///
+/// # Safety
+/// `ctx` is null or a live handle returned by `drm_context_open`.
+#[must_use]
+pub unsafe fn drm_context_validation_checks(ctx: *const drm_context) -> u64 {
+    if ctx.is_null() {
+        return 0;
+    }
+    // SAFETY: caller contract — `ctx` is a live handle.
+    unsafe {
+        (*ctx.cast::<ContextBox>())
+            .validation_checks
+            .load(Ordering::Relaxed)
+    }
+}
+
+/// Steady-state per-message permission/schema check counter for `ctx`; it stays
+/// zero because validation runs only at open (I-A1). Diagnostic only.
+/// REQ: REQ-BIND-008.
+///
+/// # Safety
+/// `ctx` is null or a live handle returned by `drm_context_open`.
+#[must_use]
+pub unsafe fn drm_context_per_message_checks(ctx: *const drm_context) -> u64 {
+    if ctx.is_null() {
+        return 0;
+    }
+    // SAFETY: caller contract — `ctx` is a live handle.
+    unsafe {
+        (*ctx.cast::<ContextBox>())
+            .per_message_checks
+            .load(Ordering::Relaxed)
+    }
+}
+
+/// Rust-native view of the in-process backing channel for `ctx`. Diagnostic /
+/// parity-harness accessor (not part of the C ABI).
+/// REQ: REQ-BIND-004, REQ-BIND-021.
+///
+/// # Safety
+/// `ctx` is null or a live handle; the returned pointer is valid until that
+/// handle is passed to `drm_context_close`.
+#[must_use]
+pub unsafe fn drm_context_channel(ctx: *const drm_context) -> *const Channel {
+    if ctx.is_null() {
+        return ptr::null();
+    }
+    // SAFETY: caller contract — `ctx` is a live handle.
+    unsafe { ptr::from_ref(&(*ctx.cast::<ContextBox>()).channel) }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::drm_borrow_view;
     use drm_types::Status;
 
-    /// REQ: REQ-BIND-007 — compile smoke for the stub surface.
+    /// REQ: REQ-BIND-004, REQ-BIND-001 — the exported `drm_borrow_view` mirrors
+    /// the `drm.h` layout `{const void *, size_t, uint64_t, uint32_t}` with
+    /// natural alignment padding (64-bit target).
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn borrow_view_layout_matches_header() {
+        use core::mem::{align_of, offset_of, size_of};
+        assert_eq!(size_of::<drm_borrow_view>(), 32);
+        assert_eq!(align_of::<drm_borrow_view>(), 8);
+        assert_eq!(offset_of!(drm_borrow_view, data), 0);
+        assert_eq!(offset_of!(drm_borrow_view, len), 8);
+        assert_eq!(offset_of!(drm_borrow_view, sequence), 16);
+        assert_eq!(offset_of!(drm_borrow_view, token), 24);
+    }
+
+    /// REQ: REQ-BIND-007 — compile smoke for the surface.
     #[test]
     fn skeleton_compiles() {
         assert_eq!(Status::Busy.code(), -11);
@@ -233,8 +723,8 @@ mod tests {
     }
 
     /// REQ: REQ-BIND-004, REQ-BIND-021 — the header declares the opaque handles
-    /// and every stub-lifecycle export; a dropped declaration is a contract
-    /// drift the C compile fixture alone cannot detect.
+    /// and every lifecycle export; a dropped declaration is a contract drift
+    /// the C compile fixture alone cannot detect.
     #[test]
     fn drm_h_declares_stub_surface() {
         const HEADER: &str = include_str!("../../../bindings/c/include/drm/drm.h");
