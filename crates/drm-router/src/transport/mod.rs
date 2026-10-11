@@ -9,6 +9,7 @@ use drm_types::Status;
 use crate::wire::WireHeader;
 
 pub mod registry;
+pub mod serial;
 pub mod session;
 pub mod tcp;
 pub mod udp;
