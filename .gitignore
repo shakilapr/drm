@@ -51,3 +51,4 @@ Thumbs.db
 
 # Session-local tool state
 .opencode/
+.workplan-notify.state
