@@ -55,8 +55,12 @@ typedef int32_t drm_status; // fixed width — no C enum in the ABI, so compiler
 #define DRM_ERR_SEQUENCE_EXHAUSTED ((drm_status)19)
 #define DRM_ERR_EPOCH_EXHAUSTED    ((drm_status)20)
 #define DRM_ERR_RING_STAMP_EXHAUSTED ((drm_status)21)
+#define DRM_ERR_NOT_IMPLEMENTED      ((drm_status)-22)
 // Append-only: new codes get explicit numbers forever; never renumber, never reuse.
 // No DRM_ERR_INTERNAL — fail-stop (I-A6): OS/environment failures map to precise codes above.
+// Authoritative numeric values live in bindings/c/include/drm/drm.h (the illustrative
+// values in this block predate the negative-code header; drm.h is the source of truth,
+// and the drm-ffi status-map test asserts the two sets match 1:1 both ways).
 
 typedef struct drm_context drm_context;   // opaque deployment context
 typedef struct drm_publisher drm_publisher; // opaque
