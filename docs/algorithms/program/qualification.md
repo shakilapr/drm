@@ -22,6 +22,10 @@ Scope: Phase 34 whole-system qualification — requirement traceability, fault i
 | `REQ-QAL-crit-coverage` | runtime (ring history, overflow policies, hazard, exhaustion) and transport critical paths each link an oracle + boundary + negative test; coverage closure swept in M24W1 | `REQ-QAL-020` |
 | `REQ-QAL-api-inventory` | full public-surface inventory (crates + bindings + the C ABI) with a freeze-candidate list; anything post-v1.0 marked deferred | `REQ-QAL-021` |
 | `REQ-QAL-mutation-sample` | seeded-defect mutation sample on hazard/ring critical paths proves the linked tests measure assertion strength, not line count | `REQ-QAL-022` |
+| `REQ-QAL-api-freeze` | the v1.0 freeze is executed: crate/binding versions locked; frozen surfaces append-only; freeze note published (`API_FROZEN`) | `REQ-QAL-023` |
+| `REQ-QAL-pilot-deploy` | pilot running in ≥1 external environment: field environment (router + MCU + Studio UI) with a stamped deployment identity (`PILOT_DEPLOYED`) | `REQ-QAL-024` |
+| `REQ-QAL-pilot-rollback` | pilot rollback drill: deploy ⇒ injected fault ⇒ rollback preserves identity stamping and freeze discipline under failure | `REQ-QAL-025` |
+| `REQ-QAL-pilot-bundles` | pilot packaging: release bundles (bindings packages, crates, system packages) assembled and verified per codebase §2.3 | `REQ-QAL-026` |
 
 ## Data Structures
 
@@ -180,6 +184,67 @@ nothing new at runtime); the packet is `cargo xtask qualify`
 3. Run the fixed-seed mutation sample on the hazard/ring predicates: each seeded defect must be detected by the linked oracle; an undetected defect blocks the gate.
 4. New gap tests are added, never refactors (M24W1 risk cap); the coverage leg is unified into the qualification packet.
 
+## Release Freeze & Pilot Deployment (M24W2)
+
+`REQ-QAL-023`, `REQ-QAL-024`, `REQ-QAL-025`, `REQ-QAL-026`; the release
+close-out wave. Harnesses: `cargo xtask freeze` (`xtask/src/freeze.rs`),
+`cargo xtask pilot` (`xtask/src/pilot.rs`), `cargo xtask package`
+(`xtask/src/packaging.rs`); detail: [api-freeze.md](../../spec/api-freeze.md),
+[packaging.md](../../spec/packaging.md). The freeze executes the M24W1
+inventory ([api-inventory.md](../../spec/api-inventory.md), `REQ-QAL-021`).
+
+```rust
+pub struct VersionLock { pub name: String, pub manifest: String, pub version: String }
+pub struct ArtifactStamp { pub artifact: String, pub abi_version: u32, pub fingerprint: [u8; 16] }
+pub struct FreezeReport {
+ pub versions: Vec<VersionLock>, // every crate + binding at the locked release version
+ pub frozen_surfaces: usize,     // freeze candidates re-resolved against their owners
+ pub note_published: bool,       // docs/spec/api-freeze.md present
+}
+pub struct PilotEnv { pub router: bool, pub mcu: bool, pub studio: bool, pub stamp: ArtifactStamp }
+pub struct RollbackDrill { pub deployed: bool, pub injected_fault: FaultCampaign, pub rolled_back: bool }
+pub struct Bundle { pub name: String, pub kind: BundleKind, pub source: String, pub present: bool }
+```
+
+- **Version lock** (`REQ-QAL-023`): every workspace crate (`version.workspace`)
+  and every binding manifest (Rust crate, Python `pyproject`/native crate,
+  Studio `package.json`) is read from disk and must equal the locked release
+  version; a divergent manifest fails the command. Lockstep versioning is the
+  codebase §6.1 rule.
+- **Frozen surfaces**: the M24W1 freeze candidates are re-resolved against their
+  owners exactly as `inventory::verify` does; the freeze is append-only
+  (I-A8) — a renamed or removed frozen symbol fails `cargo xtask freeze`.
+- **Artifact stamping** (`REQ-QAL-023`, deployment-identity.md): every released
+  artifact is stamped with its ABI version and its contract fingerprint computed
+  from the declared inputs — `hash(ABI version, topic schemas, declared
+  interfaces)` (`REQ-CORE-085`). The stamp is recomputed from the declared inputs
+  so a drift between the stamp and the inputs is a gate failure.
+- **Pilot environment** (`REQ-QAL-024`): the field environment is the real
+  router + MCU binding + Studio UI surface, each verified present; the stamped
+  deployment identity rides along and is re-checked (`PILOT_DEPLOYED = 1`).
+- **Rollback drill** (`REQ-QAL-025`, EXP inside the pilot task): deploy ⇒ inject
+  a seeded fault (a [`FaultCampaign`](../../spec/fault-injection.md)) ⇒ roll back.
+  The drill passes iff the rollback restores the pre-deploy deployment identity
+  and the frozen surface is unchanged — i.e. the fix lives behind the existing
+  surface, never a new API.
+- **Pilot packaging** (`REQ-QAL-026`): a release-package dry-run builds the
+  declared bundle set — workspace crates, the C/C++ headers, the Rust SDK crate,
+  the Python wheel source, and the Studio packages — and verifies each source
+  resolves per codebase §2.3; the dry-run renders the bundle manifest that the
+  real pilot bundles consume. `BUNDLES_VERIFIED = resolved/total`.
+
+*Freeze protocol (M24W2):*
+
+1. `cargo xtask freeze --check` → versions locked, frozen surfaces resolved,
+   stamps consistent, freeze note published. `API_FROZEN = 1`.
+2. `cargo xtask pilot --check` → field environment present, identity stamped,
+   rollback drill clean. `PILOT_DEPLOYED = 1`.
+3. `cargo xtask package --check` → bundle set resolved. `BUNDLES_VERIFIED`.
+4. Pilot-only issues are fixed behind the frozen surface; a required API change
+   reopens the freeze (new ABI bump) rather than silently drifting.
+5. The freeze/pilot/package legs fold into the qualification packet
+   (`cargo xtask qualify --check`); artifacts archived with the M24W2 gate.
+
 ## Edge Cases & Errors
 
 | Case | Result |
@@ -213,3 +278,7 @@ nothing new at runtime); the packet is `cargo xtask qualify`
 | critical-path coverage (ring/overflow/hazard/exhaustion/transports linked tests) | I-QAL8 |
 | mutation sample (seeded hazard/ring defects detected by linked oracle) | I-QAL9 |
 | public API inventory + freeze candidates (`xtask/src/inventory.rs`) | `REQ-QAL-021` |
+| API freeze: versions locked + frozen surfaces resolved + freeze note (`xtask/src/freeze.rs`) | `REQ-QAL-023` |
+| pilot deployment: field environment + stamped identity (`xtask/src/pilot.rs`) | `REQ-QAL-024` |
+| pilot rollback drill: deploy ⇒ injected fault ⇒ rollback preserves identity + freeze | `REQ-QAL-025` |
+| pilot bundles: crate/header/SDK/wheel/Studio sources resolved per codebase §2.3 (`xtask/src/packaging.rs`) | `REQ-QAL-026` |

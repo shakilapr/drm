@@ -342,7 +342,11 @@ form is `xtask/src/inventory.rs`; the reviewable form is
   freeze set; deferred additions never appear in the frozen block.
 - **Deprecation**: removal only at a major or ABI-version bump, with ≥1 minor
   release of notice (codebase.md §6.4). The freeze is executed in M24W2
-  (`API_FROZEN = 1`).
+  (`API_FROZEN = 1`): `cargo xtask freeze` (`xtask/src/freeze.rs`) re-resolves
+  every freeze candidate against its owner and locks the crate/binding versions
+  (`REQ-QAL-023`); the freeze note is [api-freeze.md](../../spec/api-freeze.md).
+  The C ABI surface is append-only (I-A8): from the freeze point, additions only,
+  never a rename or renumber; any layout change bumps `DRM_ABI_VERSION`.
 
 ## Edge Cases & Errors
 

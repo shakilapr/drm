@@ -18,7 +18,7 @@ use anyhow::{Context, Result, bail};
 use crate::cross_os::{CellState, cell_state, interop_core_matrix, interop_matrix};
 use crate::fault::CAMPAIGN_COUNT;
 use crate::soak::{SoakLedger, load as load_soak};
-use crate::{coverage, inventory, traceability};
+use crate::{coverage, freeze, inventory, packaging, pilot, traceability};
 
 /// Evidence artifacts the packet references and their on-disk presence.
 /// REQ: REQ-QAL-006.
@@ -59,6 +59,7 @@ impl ConformanceClosure {
 
 /// The assembled qualification gate packet (`QualificationReport`).
 /// REQ: REQ-QAL-006.
+#[allow(clippy::struct_excessive_bools)] // independent pass/fail gate legs, not a state machine
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QualificationPacket {
     /// Traceability coverage in whole percent (`I-QAL1`).
@@ -77,6 +78,12 @@ pub struct QualificationPacket {
     pub mutation_sample_clean: bool,
     /// Inventory entries resolved over the declared total (`REQ-QAL-021`).
     pub api_inventory: (usize, usize),
+    /// Whether the v1.0 API freeze is executed (`API_FROZEN`, `REQ-QAL-023`).
+    pub api_frozen: bool,
+    /// Whether the pilot is deployed (`PILOT_DEPLOYED`, `REQ-QAL-024`/`REQ-QAL-025`).
+    pub pilot_deployed: bool,
+    /// Pilot bundles resolved over the declared total (`BUNDLES_VERIFIED`, `REQ-QAL-026`).
+    pub bundles_verified: (usize, usize),
     /// Referenced evidence artifacts.
     pub evidence: Vec<Evidence>,
 }
@@ -84,8 +91,11 @@ pub struct QualificationPacket {
 impl QualificationPacket {
     /// Packet gate: trace complete, conformance closed, all fault campaigns
     /// present, critical paths resolved (`I-QAL8`), mutation sample clean
-    /// (`I-QAL9`), inventory resolved, and every evidence artifact on disk.
-    /// REQ: REQ-QAL-006, REQ-QAL-020, REQ-QAL-021, REQ-QAL-022.
+    /// (`I-QAL9`), inventory resolved, the API frozen (`REQ-QAL-023`), the pilot
+    /// deployed (`REQ-QAL-024`/`REQ-QAL-025`), bundles verified (`REQ-QAL-026`),
+    /// and every evidence artifact on disk.
+    /// REQ: REQ-QAL-006, REQ-QAL-020, REQ-QAL-021, REQ-QAL-022, REQ-QAL-023,
+    /// REQ-QAL-024, REQ-QAL-025, REQ-QAL-026.
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.trace_complete
@@ -96,6 +106,10 @@ impl QualificationPacket {
             && self.mutation_sample_clean
             && self.api_inventory.0 == self.api_inventory.1
             && self.api_inventory.1 > 0
+            && self.api_frozen
+            && self.pilot_deployed
+            && self.bundles_verified.0 == self.bundles_verified.1
+            && self.bundles_verified.1 > 0
             && self.evidence.iter().all(|e| e.present)
     }
 
@@ -133,6 +147,11 @@ impl QualificationPacket {
             self.api_inventory.0,
             self.api_inventory.1,
         );
+        let _ = writeln!(
+            out,
+            "release: api_frozen={} pilot_deployed={} bundles={}/{}",
+            self.api_frozen, self.pilot_deployed, self.bundles_verified.0, self.bundles_verified.1,
+        );
         for evidence in &self.evidence {
             let _ = writeln!(
                 out,
@@ -165,7 +184,7 @@ fn repo_root() -> PathBuf {
 
 /// Evidence artifacts the packet requires, relative to the repository root.
 /// REQ: REQ-QAL-002, REQ-QAL-003.
-const EVIDENCE: [(&str, &str); 10] = [
+const EVIDENCE: [(&str, &str); 13] = [
     ("trace", "docs/algorithms/program/qualification.md"),
     ("fault", "docs/spec/fault-injection.md"),
     ("soak", "docs/spec/soak-ledger.md"),
@@ -175,7 +194,10 @@ const EVIDENCE: [(&str, &str); 10] = [
     ("perf", "docs/spec/bench-baseline.md"),
     ("coverage", "docs/spec/coverage-policy.md"),
     ("inventory", "docs/spec/api-inventory.md"),
+    ("freeze", "docs/spec/api-freeze.md"),
+    ("packaging", "docs/spec/packaging.md"),
     ("packet", "docs/gates/m24w1.md"),
+    ("release-packet", "docs/gates/m24w2.md"),
 ];
 
 /// Classifies the declared interop matrix into a closure.
@@ -220,6 +242,9 @@ pub fn assemble(root: &Path) -> Result<QualificationPacket> {
         .collect();
     let coverage = coverage::critical_paths(root)?;
     let inventory = inventory::verify(root)?;
+    let freeze = freeze::verify(root)?;
+    let pilot = pilot::verify(root);
+    let packaging = packaging::verify(root);
     Ok(QualificationPacket {
         trace_coverage: matrix.coverage_percent(),
         trace_complete: matrix.is_complete(),
@@ -229,6 +254,9 @@ pub fn assemble(root: &Path) -> Result<QualificationPacket> {
         crit_coverage: (coverage.resolved(), coverage.total()),
         mutation_sample_clean: coverage::mutation_sample_clean(),
         api_inventory: (inventory.resolved(), inventory.total()),
+        api_frozen: freeze.api_frozen(),
+        pilot_deployed: pilot.pilot_deployed(),
+        bundles_verified: (packaging.resolved(), packaging.total()),
         evidence,
     })
 }
@@ -290,6 +318,12 @@ pub fn run(flags: &[String]) -> Result<()> {
                 "resolved": packet.api_inventory.0,
                 "total": packet.api_inventory.1,
             },
+            "api_frozen": packet.api_frozen,
+            "pilot_deployed": packet.pilot_deployed,
+            "bundles_verified": {
+                "resolved": packet.bundles_verified.0,
+                "total": packet.bundles_verified.1,
+            },
             "evidence": packet
                 .evidence
                 .iter()
@@ -326,6 +360,9 @@ mod tests {
             crit_coverage: (6, 6),
             mutation_sample_clean: true,
             api_inventory: (42, 42),
+            api_frozen: true,
+            pilot_deployed: true,
+            bundles_verified: (7, 7),
             evidence: vec![Evidence {
                 label: "packet".to_string(),
                 path: "docs/gates/m24w1.md".to_string(),
@@ -384,10 +421,28 @@ mod tests {
         assert!(!inventory.is_complete());
     }
 
-    /// REQ: REQ-QAL-006, REQ-QAL-020, REQ-QAL-021, REQ-QAL-022 — the live
-    /// repository assembles a complete packet: the traceability matrix is 100%,
-    /// every critical path resolves, the mutation sample is clean, the inventory
-    /// resolves, and the declared evidence exists.
+    /// REQ: REQ-QAL-023, REQ-QAL-024, REQ-QAL-025, REQ-QAL-026 — an unfrozen
+    /// API, an undeployed pilot, or an incomplete bundle set flips the packet
+    /// incomplete.
+    #[test]
+    fn release_legs_are_gated() {
+        let mut unfrozen = complete_packet();
+        unfrozen.api_frozen = false;
+        assert!(!unfrozen.is_complete());
+        let mut no_pilot = complete_packet();
+        no_pilot.pilot_deployed = false;
+        assert!(!no_pilot.is_complete());
+        let mut short_bundles = complete_packet();
+        short_bundles.bundles_verified = (6, 7);
+        assert!(!short_bundles.is_complete());
+    }
+
+    /// REQ: REQ-QAL-006, REQ-QAL-020, REQ-QAL-021, REQ-QAL-022, REQ-QAL-023,
+    /// REQ-QAL-024, REQ-QAL-025, REQ-QAL-026 — the live repository assembles a
+    /// complete packet: the traceability matrix is 100%, every critical path
+    /// resolves, the mutation sample is clean, the inventory resolves, the API is
+    /// frozen, the pilot is deployed, bundles verify, and the declared evidence
+    /// exists.
     #[test]
     fn repository_packet_is_complete() {
         let root = repo_root();
@@ -404,6 +459,12 @@ mod tests {
         assert_eq!(
             packet.api_inventory.0, packet.api_inventory.1,
             "REQ-QAL-021 inventory"
+        );
+        assert!(packet.api_frozen, "REQ-QAL-023 API freeze");
+        assert!(packet.pilot_deployed, "REQ-QAL-024/025 pilot");
+        assert_eq!(
+            packet.bundles_verified.0, packet.bundles_verified.1,
+            "REQ-QAL-026 pilot bundles"
         );
         assert!(
             packet.is_complete(),

@@ -149,7 +149,7 @@ Artifact rules:
 1. Per-crate unit/property tests live inside each crate; `tests/` holds only whole-system suites (§4.1).
 2. `examples/` contains one buildable, CI-executed workspace per binding language.
 3. All automation lives in `xtask/` (§5.1); no one-off shell scripts.
-4. Documentation set: normative specs (architecture docs), canonical algorithms, execution plan (work-plan), derived component specs (`docs/spec/`, non-normative; architecture wins conflicts), requirement registry (§6.2), decision records (§6.3). Algorithm coverage must include every non-deferred normative architecture path. Coverage closure is governed by `docs/spec/coverage-policy.md` (`I-QAL8`/`I-QAL9`) and the public-surface freeze prep by `docs/spec/api-inventory.md` (`REQ-QAL-021`).
+4. Documentation set: normative specs (architecture docs), canonical algorithms, execution plan (work-plan), derived component specs (`docs/spec/`, non-normative; architecture wins conflicts), requirement registry (§6.2), decision records (§6.3). Algorithm coverage must include every non-deferred normative architecture path. Coverage closure is governed by `docs/spec/coverage-policy.md` (`I-QAL8`/`I-QAL9`), the public-surface freeze prep by `docs/spec/api-inventory.md` (`REQ-QAL-021`), the freeze execution by `docs/spec/api-freeze.md` (`REQ-QAL-023`), and pilot packaging by `docs/spec/packaging.md` (`REQ-QAL-026`).
 
 ---
 
@@ -245,7 +245,7 @@ Artifact rules:
 | `xtask audit-traceability` | REQ citation coverage (§3.1 R2) |
 | `xtask docs` | build docs + execute examples headless |
 
-Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak` (`--duration <h>` | `--iterations <n>`, `--topology`, `--parallel <n>`, `--memory-bound <mb>`, `--report <path>`, `--ledger`, `--dashboard`), `fault` (`--campaign`, `--seed`, `--steps`, `--list`, `--dry-run`, `--json`), `qualify` (`--check`, `--json <path>`), `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
+Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak` (`--duration <h>` | `--iterations <n>`, `--topology`, `--parallel <n>`, `--memory-bound <mb>`, `--report <path>`, `--ledger`, `--dashboard`), `fault` (`--campaign`, `--seed`, `--steps`, `--list`, `--dry-run`, `--json`), `qualify` (`--check`, `--json <path>`), `freeze` (`--check`, `--json <path>`), `pilot` (`--check`, `--json <path>`), `package` (`--check`, `--dry-run`, `--json <path>`), `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
 
 `xtask` is the single automation entry point — cross-platform by construction (Windows is a first-class platform, Phase 31), no external runner binaries required.
 
@@ -289,6 +289,7 @@ Required checks: all `ci.yml` jobs. `audit.yml` runs nightly and on release; fai
 ### 6.4 Deprecation and Breaking Changes
 - Public crates: `cargo-semver-checks` blocks accidental breaking changes in CI.
 - Public-surface freeze prep: the inventory and freeze-candidate list live in `docs/spec/api-inventory.md`, re-resolved mechanically by `xtask/src/inventory.rs` (`REQ-QAL-021`); a renamed or removed listed symbol fails `cargo xtask qualify`.
+- Public-surface freeze execution: `cargo xtask freeze` (`xtask/src/freeze.rs`, `REQ-QAL-023`) locks the crate/binding versions and re-resolves every freeze candidate append-only; the freeze note is `docs/spec/api-freeze.md`. Pilot bundles are verified by `cargo xtask package` (`xtask/src/packaging.rs`, `REQ-QAL-026`) per `docs/spec/packaging.md`; the pilot environment and rollback drill are `cargo xtask pilot` (`xtask/src/pilot.rs`, `REQ-QAL-024`/`REQ-QAL-025`).
 - Deprecation: ≥1 minor release with changelog notice plus `#[deprecated]` / schema `deprecated:` annotation; removal only at a major or ABI-version bump.
 
 ### 6.5 Changelog and Commits

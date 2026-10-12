@@ -11,6 +11,22 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M24 W2 tranche: API freeze and pilot deployment. `cargo xtask freeze`
+  (`xtask/src/freeze.rs`) executes the v1.0 freeze — it locks every crate and
+  binding version, re-resolves the M24W1 freeze candidates append-only (I-A8),
+  and stamps the released artifacts with their ABI version and contract
+  fingerprint (`hash(ABI version, schemas, interfaces)`, REQ-CORE-085) —
+  publishing the freeze note [api-freeze.md](docs/spec/api-freeze.md)
+  (`API_FROZEN = 1`, REQ-QAL-023). `cargo xtask pilot` (`xtask/src/pilot.rs`)
+  deploys the field environment (router + MCU + Studio UI) with a stamped
+  deployment identity and runs the rollback drill (deploy ⇒ injected fault ⇒
+  rollback restores the identity, no surface drift; `PILOT_DEPLOYED = 1`,
+  REQ-QAL-024/025). `cargo xtask package` (`xtask/src/packaging.rs`) assembles
+  and verifies the pilot bundle set per codebase §2.3 (`BUNDLES_VERIFIED = 7/7`,
+  REQ-QAL-026; [packaging.md](docs/spec/packaging.md)). The qualification packet
+  gains the freeze/pilot/bundles legs ([qualify.rs](xtask/src/qualify.rs)). Gate
+  evidence ([m24w2.md](docs/gates/m24w2.md)); metrics
+  [metrics-m24.md](docs/metrics/metrics-m24.md).
 - Week M24 W1 tranche: coverage closure and API freeze prep. The qualification
   packet gains three legs (`xtask/src/coverage.rs`, `xtask/src/inventory.rs`;
   [qualify.rs](xtask/src/qualify.rs)): critical-path coverage (`I-QAL8`,

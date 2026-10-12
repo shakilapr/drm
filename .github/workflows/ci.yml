@@ -160,10 +160,11 @@ jobs:
   qualify:
     # Qualification gate packet (work-plan M23W4-E4-T1): assembles the I-QAL1
     # traceability matrix, I-QAL2 fault/soak evidence, I-QAL4 conformance matrix
-    # closure, and the perf-invariant/repro/docs evidence; `--check` fails while
-    # any leg is unmet.
+    # closure, the I-QAL8/I-QAL9 coverage legs, and (M24W2) the API freeze, pilot
+    # deployment, and pilot-bundle legs; `--check` fails while any leg is unmet.
     # REQ: REQ-QAL-001, REQ-QAL-002, REQ-QAL-003, REQ-QAL-004, REQ-QAL-005,
-    # REQ-QAL-006, REQ-QAL-008, REQ-QAL-018.
+    # REQ-QAL-006, REQ-QAL-008, REQ-QAL-018, REQ-QAL-023, REQ-QAL-024,
+    # REQ-QAL-025, REQ-QAL-026.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -246,6 +247,32 @@ jobs:
         with:
           name: fault-report
           path: target/fault-report.json
+
+  release:
+    # Release close-out (work-plan M24W2-E1/E2/E3/E4): the v1.0 API freeze
+    # (`API_FROZEN = 1`), the pilot deployment with a stamped identity and a
+    # clean rollback drill (`PILOT_DEPLOYED = 1`), and the pilot bundle set
+    # (`BUNDLES_VERIFIED`). qualification.md §Release Freeze & Pilot Deployment;
+    # REQ-QAL-023/024/025/026.
+    # REQ: REQ-QAL-023, REQ-QAL-024, REQ-QAL-025, REQ-QAL-026.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: API freeze (API_FROZEN = 1)
+        run: cargo xtask freeze --check --json target/freeze-report.json
+      - name: pilot deployment + rollback drill (PILOT_DEPLOYED = 1)
+        run: cargo xtask pilot --check --json target/pilot-report.json
+      - name: pilot packaging (BUNDLES_VERIFIED)
+        run: cargo xtask package --check --dry-run --json target/packaging-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-reports
+          path: |
+            target/freeze-report.json
+            target/pilot-report.json
+            target/packaging-report.json
 
   mcu:
     # MCU host parity + zero-forbidden-heap audit, wired as a permanent blocking

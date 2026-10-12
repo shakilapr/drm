@@ -66,3 +66,60 @@ cargo xtask check-layering && cargo xtask audit-traceability
 REQ: REQ-QAL-020, REQ-QAL-021, REQ-QAL-022, REQ-QAL-006, REQ-QAL-018,
 REQ-CORE-040, REQ-CORE-066, REQ-CORE-058, REQ-CORE-030, REQ-ROUTE-032,
 REQ-ROUTE-024.
+
+## M24W2 — API Freeze + Pilot Deployment
+
+| Variable | Target | Measured |
+|---|---|---|
+| `API_FROZEN` | versions locked; freeze note published | 1 — `cargo xtask freeze --check`; [m24w2.md](../gates/m24w2.md) |
+| `PILOT_DEPLOYED` | pilot running in ≥1 external environment | 1 — `cargo xtask pilot --check` |
+| `PILOT_ISSUES` | triaged P0/P1 | 0 open P0/P1 |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | 5 |
+
+Deliverables:
+
+- **API freeze** ([freeze.rs](../../xtask/src/freeze.rs)): `verify` locks every
+  crate/binding version ([`VERSION_LOCKS`](../../xtask/src/freeze.rs): workspace,
+  Rust SDK, Python pyproject + native, Studio packages) at the release version,
+  re-resolves the 45 freeze candidates append-only (I-A8) via
+  [inventory.rs](../../xtask/src/inventory.rs), stamps the released artifacts
+  with their ABI version + contract fingerprint (`hash(ABI version, schemas,
+  interfaces)`, `REQ-CORE-085`), and requires the freeze note. Reviewable note:
+  [api-freeze.md](../spec/api-freeze.md). `API_FROZEN = 1`, `REQ-QAL-023`.
+- **Pilot deployment + rollback EXP** ([pilot.rs](../../xtask/src/pilot.rs)):
+  `verify` checks the field environment (router + MCU + Studio UI) and the
+  stamped deployment identity; `rollback_drill` runs deploy ⇒ seeded
+  (`publisher-crash`) injected fault ⇒ rollback, and passes iff the rollback
+  restores the pre-deploy identity (no surface drift). `PILOT_DEPLOYED = 1`,
+  `REQ-QAL-024`/`REQ-QAL-025`.
+- **Pilot packaging** ([packaging.rs](../../xtask/src/packaging.rs)): the
+  declared bundle set (workspace crates, C/C++ headers, Rust SDK, Python wheel
+  source, Studio packages) resolves per codebase §2.3; the dry-run manifest is
+  written to `target/pilot-bundle-manifest.txt`. `BUNDLES_VERIFIED = 7/7`,
+  `REQ-QAL-026`. Reviewable spec:
+  [packaging.md](../spec/packaging.md).
+- **Qualification packet** ([qualify.rs](../../xtask/src/qualify.rs)): the packet
+  gains the `api_frozen`, `pilot_deployed`, and `bundles_verified` legs and the
+  freeze/packaging evidence; `is_complete` gates on them (`REQ-QAL-018`).
+
+### Weekly gate checklist (chaired by E1, Friday)
+
+- [x] `API_FROZEN = 1`; `PILOT_DEPLOYED = 1`; `PILOT_ISSUES = 0 open P0`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M24W2) = PASS`**
+
+### How to reproduce
+
+```text
+cargo xtask freeze --check --json target/freeze-report.json
+cargo xtask pilot --check --json target/pilot-report.json
+cargo xtask package --check --dry-run --json target/packaging-report.json
+cargo xtask qualify --check --json target/qualification-packet.json
+cargo xtask test
+cargo xtask fmt --check && cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask check-layering && cargo xtask audit-traceability
+```
+
+REQ: REQ-QAL-023, REQ-QAL-024, REQ-QAL-025, REQ-QAL-026, REQ-QAL-018,
+REQ-QAL-006, REQ-CORE-085.
