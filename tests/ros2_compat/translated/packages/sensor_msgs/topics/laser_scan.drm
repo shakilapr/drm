@@ -1,0 +1,15 @@
+@history: latest
+@pool_size: 3
+@overflow: overwrite
+stamp_sec: i32
+stamp_nanosec: u32
+frame_id: string[64]
+angle_min: f32
+angle_max: f32
+angle_increment: f32
+time_increment: f32
+scan_time: f32
+range_min: f32
+range_max: f32
+ranges: f32[<=2048]
+intensities: f32[<=2048]

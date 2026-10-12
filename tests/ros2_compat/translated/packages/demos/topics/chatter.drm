@@ -1,0 +1,4 @@
+@history: latest
+@pool_size: 4
+@overflow: overwrite
+data: string[256]

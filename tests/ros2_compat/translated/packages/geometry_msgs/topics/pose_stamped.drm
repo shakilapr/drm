@@ -1,0 +1,13 @@
+@history: latest
+@pool_size: 4
+@overflow: overwrite
+stamp_sec: i32
+stamp_nanosec: u32
+frame_id: string[64]
+position_x: f64
+position_y: f64
+position_z: f64
+orientation_x: f64
+orientation_y: f64
+orientation_z: f64
+orientation_w: f64

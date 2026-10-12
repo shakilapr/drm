@@ -1,0 +1,6 @@
+name = "talker"
+language = "cpp"
+publishes = ["demos/chatter"]
+
+[build]
+command = ['sh', '-c', 'test -n "$DRM_GEN_INCLUDE" && test -f "$DRM_DEPLOY_METADATA"']

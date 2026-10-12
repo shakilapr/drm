@@ -1,0 +1,6 @@
+name = "camera"
+language = "c"
+publishes = ["sensor/image", "sensor/imu"]
+
+[build]
+command = ['sh', '-c', 'test -n "$DRM_GEN_INCLUDE" && test -f "$DRM_DEPLOY_METADATA"']

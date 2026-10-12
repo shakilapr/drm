@@ -1,0 +1,6 @@
+@history: 4
+@pool_size: 6
+@overflow: overwrite
+stamp_ns: i64
+seq: u64
+blob: bytes[<=4096]

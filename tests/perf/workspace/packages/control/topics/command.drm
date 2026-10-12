@@ -1,0 +1,10 @@
+@history: latest
+@pool_size: 2
+@overflow: reject
+kind: u8
+flags: u8
+pad: u16
+mode: u32
+value: f32
+stamp_ns: i64
+seq: u64

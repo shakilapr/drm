@@ -1,0 +1,4 @@
+@history: latest
+@pool_size: 2
+stamp: builtin_interfaces/Time
+frame_id: string

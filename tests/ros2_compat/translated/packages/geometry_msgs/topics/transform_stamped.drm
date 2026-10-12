@@ -1,0 +1,14 @@
+@history: latest
+@pool_size: 4
+@overflow: overwrite
+stamp_sec: i32
+stamp_nanosec: u32
+frame_id: string[64]
+child_frame_id: string[64]
+translation_x: f64
+translation_y: f64
+translation_z: f64
+rotation_x: f64
+rotation_y: f64
+rotation_z: f64
+rotation_w: f64

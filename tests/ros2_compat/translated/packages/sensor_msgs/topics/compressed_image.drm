@@ -1,0 +1,8 @@
+@history: latest
+@pool_size: 2
+@overflow: overwrite
+stamp_sec: i32
+stamp_nanosec: u32
+frame_id: string[64]
+format: string[32]
+data: u8[<=1048576]

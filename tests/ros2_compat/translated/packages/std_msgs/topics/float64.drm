@@ -1,0 +1,4 @@
+@history: latest
+@pool_size: 2
+@overflow: overwrite
+data: f64

@@ -1,0 +1,6 @@
+name = "monitor"
+language = "rust"
+consumes = ["control/telemetry", "control/pose"]
+
+[build]
+command = ['sh', '-c', 'test -n "$DRM_GEN_INCLUDE" && test -f "$DRM_DEPLOY_METADATA"']

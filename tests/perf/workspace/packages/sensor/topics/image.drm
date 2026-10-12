@@ -1,0 +1,6 @@
+@history: latest
+@pool_size: 2
+@overflow: overwrite
+width: u32
+height: u32
+pixels: u8[1048576]

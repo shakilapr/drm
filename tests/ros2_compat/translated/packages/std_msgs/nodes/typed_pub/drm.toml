@@ -1,0 +1,6 @@
+name = "chatter_src"
+language = "cpp"
+publishes = ["std_msgs/string", "std_msgs/header", "geometry_msgs/twist", "geometry_msgs/pose", "sensor_msgs/imu"]
+
+[build]
+command = ['sh', '-c', 'test -n "$DRM_GEN_INCLUDE" && test -f "$DRM_DEPLOY_METADATA"']
