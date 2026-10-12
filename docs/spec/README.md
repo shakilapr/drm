@@ -24,6 +24,8 @@ Owned by E2 unless noted. Written by the weekly plan named in each file's header
 | `soak-ledger.md` | 34 (M18W4) | `docs/algorithms/program/qualification.md` I-QAL2, §Soak Escalation Harness |
 | `api-freeze.md` | 34 (M24W2) | `docs/algorithms/program/qualification.md` §Release Freeze & Pilot Deployment; `docs/algorithms/bindings/c-abi-surface.md`; `docs/spec/api-inventory.md` |
 | `packaging.md` | 34 (M24W2) | `docs/algorithms/program/qualification.md` §Release Freeze & Pilot Deployment; `codebase.md` §2.3 |
+| `release-notes.md` | 34 (M24W3) | `docs/algorithms/program/qualification.md` §Phase 34 Gate & v1.0 Release Candidate; `CHANGELOG.md` |
+| `waiver-template.md` | 34 (M24W3) | `docs/algorithms/program/qualification.md` §Phase 34 Gate & v1.0 Release Candidate |
 
 Specs here may not introduce requirements beyond the architecture; each lands with a `source_ref`
 back to the owning architecture/algorithm section.

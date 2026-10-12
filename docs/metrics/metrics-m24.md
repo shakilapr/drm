@@ -123,3 +123,55 @@ cargo xtask check-layering && cargo xtask audit-traceability
 
 REQ: REQ-QAL-023, REQ-QAL-024, REQ-QAL-025, REQ-QAL-026, REQ-QAL-018,
 REQ-QAL-006, REQ-CORE-085.
+
+## M24W3 — Phase 34 Gate (Qualification Complete), v1.0 Release Candidate
+
+| Variable | Target | Measured |
+|---|---|---|
+| `GATE_STATUS(Phase 34)` | PASS — qualification evidence complete | PASS — `cargo xtask qualify --check`; [m24w3.md](../gates/m24w3.md) |
+| `V10_RC` | v1.0 RC tagged; release notes drafted | 1 — `cargo xtask release --check` |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | 5 |
+
+Deliverables:
+
+- **Phase 34 gate** ([qualify.rs](../../xtask/src/qualify.rs)): `assemble` folds
+  the traceability matrix (`I-QAL1`), conformance closure (`I-QAL4`), fault/soak
+  (`I-QAL2`), coverage/mutation (`I-QAL8`/`I-QAL9`), the API freeze, pilot, and
+  bundle legs into the whole-system packet; `--check` fails while any leg is
+  unmet. `GATE_STATUS(Phase 34) = PASS`, `REQ-QAL-027`.
+- **v1.0 release candidate** ([release.rs](../../xtask/src/release.rs)
+  `verify`): folds the completed packet into the RC tagged with the deployment
+  identity recomputed from the declared inputs (`REQ-CORE-085`), the frozen
+  `DRM_ABI_VERSION`, and the drafted release notes
+  ([release-notes.md](../spec/release-notes.md)); a missing packet, freeze,
+  identity, or note clears `V10_RC`. `V10_RC = 1`, `REQ-QAL-028`.
+- **Waiver discipline** ([release.rs](../../xtask/src/release.rs)
+  `Waiver`/`WaiverLedger`, E4 SPIKE): a red evidence line is only cleared by a
+  recorded waiver with a non-empty rationale and a review quorum of
+  `WAIVER_QUORUM` (2) distinct approvers; a silent or informal waiver fails
+  `cargo xtask release --check`. Template:
+  [waiver-template.md](../spec/waiver-template.md). M24W3 has no red lines, so
+  the ledger is clean; `REQ-QAL-029`.
+- **Gate evidence** ([m24w3.md](../gates/m24w3.md)): Phase 34 criteria ⇄
+  evidence mapping and the v1.0 RC fold.
+
+### Weekly gate checklist (chaired by E2, Friday)
+
+- [x] Phase 34 gate PASS (qualification complete)
+- [x] `V10_RC = 1`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(Phase 34) = PASS`**
+
+### How to reproduce
+
+```text
+cargo xtask qualify --check --json target/qualification-packet.json
+cargo xtask release --check --json target/release-candidate.json
+cargo xtask test
+cargo xtask fmt --check && cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask check-layering && cargo xtask audit-traceability
+```
+
+REQ: REQ-QAL-027, REQ-QAL-028, REQ-QAL-029, REQ-QAL-018, REQ-QAL-006,
+REQ-CORE-085.

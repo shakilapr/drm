@@ -26,6 +26,9 @@ Scope: Phase 34 whole-system qualification — requirement traceability, fault i
 | `REQ-QAL-pilot-deploy` | pilot running in ≥1 external environment: field environment (router + MCU + Studio UI) with a stamped deployment identity (`PILOT_DEPLOYED`) | `REQ-QAL-024` |
 | `REQ-QAL-pilot-rollback` | pilot rollback drill: deploy ⇒ injected fault ⇒ rollback preserves identity stamping and freeze discipline under failure | `REQ-QAL-025` |
 | `REQ-QAL-pilot-bundles` | pilot packaging: release bundles (bindings packages, crates, system packages) assembled and verified per codebase §2.3 | `REQ-QAL-026` |
+| `REQ-QAL-phase34-gate` | whole-system qualification gate: the assembled packet is complete and the phase verdict is PASS | `REQ-QAL-027` |
+| `REQ-QAL-v10-rc` | v1.0 release candidate tagged with the stamped deployment identity and release notes drafted | `REQ-QAL-028` |
+| `REQ-QAL-waiver-discipline` | every red evidence line carries a recorded waiver with rationale and review quorum; no silent or informal waivers | `REQ-QAL-029` |
 
 ## Data Structures
 
@@ -245,6 +248,52 @@ pub struct Bundle { pub name: String, pub kind: BundleKind, pub source: String, 
 5. The freeze/pilot/package legs fold into the qualification packet
    (`cargo xtask qualify --check`); artifacts archived with the M24W2 gate.
 
+## Phase 34 Gate & v1.0 Release Candidate (M24W3)
+
+`REQ-QAL-027`, `REQ-QAL-028`, `REQ-QAL-029`; the phase gate and release-candidate
+prep. Harness: `cargo xtask release` (`xtask/src/release.rs`); detail:
+[release-notes.md](../../spec/release-notes.md),
+[waiver-template.md](../../spec/waiver-template.md). The gate verdict folds the
+`qualify()` packet (§Perf Invariant Harness) into the release candidate.
+
+```rust
+pub struct ReleaseCandidate {
+ pub tag: String,                  // v1.0 RC tag
+ pub abi_version: u32,             // frozen ABI version
+ pub identity: [u8; 16],           // stamped deployment identity (REQ-CORE-085)
+ pub qualification_complete: bool, // assembled qualification packet (I-QAL1..I-QAL9)
+ pub api_frozen: bool,             // API_FROZEN
+ pub notes_published: bool,        // release notes drafted for the RC tag
+ pub waiver_clean: bool,           // every red evidence line carries a valid waiver
+}
+pub struct Waiver { pub line: String, pub rationale: String, pub approvers: Vec<String> }
+```
+
+- **Phase 34 gate** (`REQ-QAL-027`): `cargo xtask qualify --check` assembles the
+  whole-system packet and fails while any leg is unmet — traceability (`I-QAL1`),
+  fault/soak (`I-QAL2`), repro (`I-QAL3`), conformance (`I-QAL4`), perf
+  (`I-QAL5`), coverage/mutation (`I-QAL8`/`I-QAL9`), API freeze (`REQ-QAL-023`),
+  pilot (`REQ-QAL-024`/`REQ-QAL-025`), and bundles (`REQ-QAL-026`). The verdict
+  is `GATE_STATUS(Phase 34) = PASS`.
+- **v1.0 release candidate** (`REQ-QAL-028`): `cargo xtask release --check` tags
+  the candidate with the deployment identity recomputed from the declared inputs
+  (`REQ-CORE-085`), requires the release notes drafted for the RC tag, and folds
+  the frozen API into the candidate. `V10_RC = 1`.
+- **Waiver discipline** (`REQ-QAL-029`, SPIKE): a red evidence line may not pass
+  silently. The pre-drafted template
+  ([waiver-template.md](../../spec/waiver-template.md)) records the line, the
+  rationale, and the approvers; a waiver is valid only with a review quorum of
+  `WAIVER_QUORUM` (2) approvers and a non-empty rationale. A red line without a
+  valid waiver fails `cargo xtask release --check`.
+
+*Phase 34 gate protocol:*
+
+1. `cargo xtask qualify --check` → packet complete (`I-QAL1`..`I-QAL9`).
+2. `cargo xtask release --check` → `V10_RC = 1` (identity + notes + waiver).
+3. Any red evidence line is fixed and the gate re-runs, or it is recorded in the
+   waiver ledger with a rationale and the review quorum; no silent passes.
+4. Evidence folds into [m24w3.md](../../gates/m24w3.md); the v1.0 tag is M24W4.
+
 ## Edge Cases & Errors
 
 | Case | Result |
@@ -282,3 +331,6 @@ pub struct Bundle { pub name: String, pub kind: BundleKind, pub source: String, 
 | pilot deployment: field environment + stamped identity (`xtask/src/pilot.rs`) | `REQ-QAL-024` |
 | pilot rollback drill: deploy ⇒ injected fault ⇒ rollback preserves identity + freeze | `REQ-QAL-025` |
 | pilot bundles: crate/header/SDK/wheel/Studio sources resolved per codebase §2.3 (`xtask/src/packaging.rs`) | `REQ-QAL-026` |
+| Phase 34 gate: assembled qualification packet complete (`xtask/src/qualify.rs`, `xtask/src/release.rs`) | `REQ-QAL-027` |
+| v1.0 RC: stamped deployment identity + release notes drafted (`xtask/src/release.rs`) | `REQ-QAL-028` |
+| waiver discipline: red line without rationale/quorum blocks (`xtask/src/release.rs`) | `REQ-QAL-029` |

@@ -245,7 +245,7 @@ Artifact rules:
 | `xtask audit-traceability` | REQ citation coverage (§3.1 R2) |
 | `xtask docs` | build docs + execute examples headless |
 
-Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak` (`--duration <h>` | `--iterations <n>`, `--topology`, `--parallel <n>`, `--memory-bound <mb>`, `--report <path>`, `--ledger`, `--dashboard`), `fault` (`--campaign`, `--seed`, `--steps`, `--list`, `--dry-run`, `--json`), `qualify` (`--check`, `--json <path>`), `freeze` (`--check`, `--json <path>`), `pilot` (`--check`, `--json <path>`), `package` (`--check`, `--dry-run`, `--json <path>`), `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
+Extension commands are registered in `xtask/README.md` and covered by ADR 0003: `golden-gen`, `soak` (`--duration <h>` | `--iterations <n>`, `--topology`, `--parallel <n>`, `--memory-bound <mb>`, `--report <path>`, `--ledger`, `--dashboard`), `fault` (`--campaign`, `--seed`, `--steps`, `--list`, `--dry-run`, `--json`), `qualify` (`--check`, `--json <path>`), `freeze` (`--check`, `--json <path>`), `pilot` (`--check`, `--json <path>`), `package` (`--check`, `--dry-run`, `--json <path>`), `release` (`--check`, `--json <path>`), `test --stress`, `test --two-host`, `test --cross-os`, `bench --report-regressions`, `abi-check --against`, `publish`, `sbom`, `audit syscall`. Registered flags extend §5.1 commands (`audit-traceability --registry/--citations/--matrix`, `fmt --check`). No command runs outside this registry.
 
 `xtask` is the single automation entry point — cross-platform by construction (Windows is a first-class platform, Phase 31), no external runner binaries required.
 
@@ -274,6 +274,7 @@ Required checks: all `ci.yml` jobs. `audit.yml` runs nightly and on release; fai
 1. All `drm-*` crates share one lockstep version (0.x until API freeze); `Cargo.lock` committed.
 2. `drm.h` carries an ABI version with a one-way compatibility suite against previously supported versions (Phase 7 gate): older applications always run against newer libraries; newer applications run against older libraries only when they use no newer symbols (link-time), and node contract fingerprints record the required ABI.
 3. Releases flow only through `release.yml` (§5.2) — never ad-hoc publishing.
+4. v1.0 release candidate: `cargo xtask release --check` (`xtask/src/release.rs`, `REQ-QAL-028`) folds the completed Phase 34 packet into an RC tagged with the stamped deployment identity and requires the drafted release notes; a red gate line is only cleared by a fix or by a recorded waiver carrying a rationale and the review quorum (`REQ-QAL-029`).
 
 ### 6.2 Requirement Registry
 - Location: `docs/req/` — `registry.csv` (`id, area, statement, source_ref, phase, test, status`); `README.md` defines the column schema. No separate per-area statement files; `area` groups rows.

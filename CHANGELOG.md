@@ -11,6 +11,21 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M24 W3 tranche: Phase 34 gate + v1.0 release candidate. `cargo xtask
+  qualify --check` assembles the whole-system packet — traceability (`I-QAL1`),
+  fault/soak (`I-QAL2`), repro (`I-QAL3`), conformance (`I-QAL4`), perf
+  (`I-QAL5`), coverage/mutation (`I-QAL8`/`I-QAL9`), API freeze, pilot, and
+  bundles — and the Phase 34 verdict is PASS (`GATE_STATUS(Phase 34)`, REQ-QAL-027).
+  `cargo xtask release` (`xtask/src/release.rs`) folds the completed packet into
+  the v1.0 release candidate `v1.0.0-rc.1`, tagged with the deployment identity
+  recomputed from the declared inputs (REQ-CORE-085) and requiring the drafted
+  release notes ([release-notes.md](docs/spec/release-notes.md)) (`V10_RC = 1`,
+  REQ-QAL-028). Waiver discipline (REQ-QAL-029, E4 SPIKE): a red evidence line is
+  only cleared by a recorded waiver with a non-empty rationale and a review
+  quorum of distinct approvers, never silently
+  ([waiver-template.md](docs/spec/waiver-template.md)). Gate evidence
+  ([m24w3.md](docs/gates/m24w3.md)); metrics
+  [metrics-m24.md](docs/metrics/metrics-m24.md).
 - Week M24 W2 tranche: API freeze and pilot deployment. `cargo xtask freeze`
   (`xtask/src/freeze.rs`) executes the v1.0 freeze — it locks every crate and
   binding version, re-resolves the M24W1 freeze candidates append-only (I-A8),
