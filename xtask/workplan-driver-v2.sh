@@ -22,9 +22,18 @@ MAX="${DRM_WORKPLAN_MAX:-200}"
 LEDGER=.workplan-progress.json
 BLOCKED=.workplan-blocked.json
 EXHAUSTED=.workplan-exhausted.json
-RETRY="$(printf '%s' "$(cat .workplan-retry-flag 2>/dev/null)")"
 
 log() { printf '[%s] %s\n' "$(date -Is)" "$*" >>"$LOG"; }
+
+# Whether a week stem is currently in the quarantine ledger.
+is_blocked() {
+  python3 - "$BLOCKED" "$1" <<'PY'
+import json, os, sys
+p, w = sys.argv[1], sys.argv[2]
+d = json.load(open(p)) if os.path.exists(p) else {"blocked": []}
+print("1" if w in d.get("blocked", []) else "0")
+PY
+}
 
 gates() {
   cargo xtask fmt --check &&
@@ -43,6 +52,12 @@ gates() {
 # A week that fails a retry pass is written to the exhausted ledger and never picked again, so
 # the loop always terminates. Without this the driver declared "ALL WEEKS DONE OR QUARANTINED"
 # with m10w2/m15w3/m22w1 silently missing from a plan it reported as complete.
+#
+# Termination does NOT depend on an external retry flag: `attempt` decides per week whether the
+# week was ALREADY quarantined when the pass started. A week that is retried and fails again is
+# exhausted (it has now failed ATTEMPTS attempts once and ATTEMPTS again on retry); a week that
+# fails for the first time is quarantined and left for a later retry pass. Requiring an operator
+# to create a flag file meant a re-failing quarantined week was re-picked MAX times in one run.
 pick() {
   python3 - "$LEDGER" "$BLOCKED" "$EXHAUSTED" <<'PY'
 import json, os, re, sys
@@ -113,6 +128,7 @@ for _ in $(seq 1 "$MAX"); do
     break
   fi
   FILE=$(file_of "$WEEK")
+  WAS_BLOCKED="$(is_blocked "$WEEK")"
   log "=== week $WEEK ($FILE) ==="
 
   ok=0
@@ -140,7 +156,7 @@ $(tail -c 4000 "$LOG")"
     cargo xtask workplan mark-done "$WEEK" >>"$LOG" 2>&1
     git add "$LEDGER" && git commit -q -m "chore(workplan): mark $WEEK complete" >>"$LOG" 2>&1
     # A retried week that lands must leave the quarantine ledger, or it is picked forever.
-    if [ -n "$RETRY" ]; then
+    if [ "$WAS_BLOCKED" = "1" ]; then
       python3 - "$BLOCKED" "$WEEK" <<'PY'
 import json, sys
 p, w = sys.argv[1], sys.argv[2]
@@ -152,7 +168,7 @@ PY
     fi
     log "week $WEEK COMPLETE"
   else
-    if [ -n "$RETRY" ]; then
+    if [ "$WAS_BLOCKED" = "1" ]; then
       # This week was already quarantined and has now failed its retry pass: exhaust it so the
       # loop can terminate instead of picking it forever.
       exhaust "$WEEK"
