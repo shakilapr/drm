@@ -12,6 +12,7 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 | `xtask check-layering` | crate dependency-layer verification (codebase §2.2 R6) |
 | `xtask gen-check` | regenerate against fixtures; fail on diff (codebase §3.1 R6) |
 | `xtask audit-zero-alloc` | data-path allocation audit (codebase §3.2) |
+| `xtask perf-matrix` | system performance matrix: measures the fixture payload classes (`tests/perf/workspace`), checks the p99 budgets + baseline bands, and records the cross-process segment lifecycle; `--workspace <dir>`, `--json <path>`, `--quick` (`xtask/src/perf.rs`, [bench-methodology.md](../docs/spec/bench-methodology.md) §System perf matrix) |
 | `xtask audit-traceability` | REQ citation coverage; flags `--registry`, `--citations`, `--matrix` |
 | `xtask workplan` | 24-month work-plan progress: `status` (what's done / in progress), `next`, `watch [--interval <s>]`, `mark-done <week>` |
 | `xtask docs` | build docs + execute examples headless |

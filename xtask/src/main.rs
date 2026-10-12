@@ -15,6 +15,7 @@ mod golden;
 mod inventory;
 mod layering;
 mod packaging;
+mod perf;
 mod pilot;
 mod qualify;
 mod release;
@@ -64,6 +65,7 @@ fn run(args: &[String]) -> Result<()> {
         "closeout" => closeout::run(flags),
         "golden-gen" => golden::generate(flags),
         "gen-check" => gencheck::run(flags),
+        "perf-matrix" => perf::run(flags),
         "workplan" => workplan::run(flags),
         other => bail!("unknown command `{other}`; see xtask/README.md"),
     }

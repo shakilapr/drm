@@ -94,5 +94,36 @@ taskset -c 1 cargo bench -p drm-router --bench router
 taskset -c 1 cargo bench -p drm-router --bench transport
 ```
 
+## System perf matrix
+
+`cargo xtask perf-matrix [--workspace <dir>] [--json <path>] [--quick]` measures
+the declared payload classes of [tests/perf/workspace](../../tests/perf/README.md)
+(64 B fixed, 1 MiB fixed, 32 B `reject`, 4 KiB-bounded variable, 128 B deep
+history) through the production `drm_core::channel::Channel`. Each topic's
+capacity comes from the codegen output (`SAMPLE_MAX`) and its attributes from the
+`.drm` source, so the matrix is driven by the fixtures. It also records the
+cross-process segment lifecycle on one segment: creator process, a separate
+consumer process (`consumer_open`, open-only), and a refused second publisher
+(I-L1).
+
+- Budgets: the p99 ceilings of §In-bench invariants apply unchanged (50 µs for
+  the core publish and read paths). Any breach sets `all_pass` false.
+- Baseline bands: compared with [bench-baseline.md](bench-baseline.md) (M23W4
+  `publish+latest` p50 190 ns / p99 200 ns) within ±20 % / ±30 %. Only topics at
+  or below 4 KiB are compared — the recorded baseline is a 64-byte sample, so
+  larger payload classes are reported `n/a`. A slower move outside the band is a
+  regression (`SLOWER`); a faster move is reported `faster`, never as drift.
+- Percentiles use the floor index `(n-1)*pct/100`, matching
+  `crates/drm-core/benches/common/mod.rs`, so the values are comparable with the
+  archived baselines. Per-operation `Duration` resolution (~40 ns on this host)
+  bounds the smallest reportable latency.
+- `@overflow: reject` topics: a `reject` channel whose pool is not retired by a
+  consumer refuses publishes by design, so the sustained rate reads 0; the
+  refusal-path cost is what `publish_queue_full` measures.
+- Not covered: sample movement *between* processes. The node-facing C ABI is a
+  single in-process channel (`crates/drm-ffi/src/lib.rs` module docs), and no
+  runtime API publishes *through* a mapped segment, so cross-process evidence
+  stops at segment create/adopt/authority.
+
 REQ: REQ-QAL-011, REQ-QAL-012, REQ-CORE-003, REQ-CORE-012, REQ-CORE-013,
 REQ-CORE-097, REQ-ROUTE-012, REQ-ROUTE-013, REQ-ROUTE-020, REQ-ROUTE-030.
