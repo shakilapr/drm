@@ -22,6 +22,7 @@ MAX="${DRM_WORKPLAN_MAX:-200}"
 LEDGER=.workplan-progress.json
 BLOCKED=.workplan-blocked.json
 EXHAUSTED=.workplan-exhausted.json
+MODEL="${DRM_WORKPLAN_MODEL:-}"
 
 log() { printf '[%s] %s\n' "$(date -Is)" "$*" >>"$LOG"; }
 
@@ -33,6 +34,15 @@ p, w = sys.argv[1], sys.argv[2]
 d = json.load(open(p)) if os.path.exists(p) else {"blocked": []}
 print("1" if w in d.get("blocked", []) else "0")
 PY
+}
+
+# Whether the working tree carries any change from the agent (the week's work).
+# Excludes the driver's own artifacts, which it rewrites every run.
+has_work() {
+  [ -n "$(git status --porcelain -- . \
+    ':(exclude).workplan-progress.json' ':(exclude).workplan-blocked.json' \
+    ':(exclude).workplan-exhausted.json' ':(exclude)tests/fuzz/Cargo.lock' \
+    ':(exclude)handover.md' 2>/dev/null)" ]
 }
 
 gates() {
@@ -121,17 +131,23 @@ PY
 }
 
 log "driver v2 start (agent=$AGENT attempts=$ATTEMPTS continue=$CONTINUE max=$MAX)"
+# Exit codes: 0 = hit DRM_WORKPLAN_MAX (a restart should resume), 78 = nothing left
+# to pick (plan complete, or every remaining week is quarantined+exhausted).
+# A supervising service sets RestartPreventExitStatus=78 so it does not spin on a
+# finished plan.
 for _ in $(seq 1 "$MAX"); do
   WEEK=$(pick)
   if [ -z "$WEEK" ]; then
     log "ALL WEEKS DONE OR QUARANTINED (blocked: $BLOCKED)"
-    break
+    log "driver v2 exit (no work left; not restartable)"
+    exit 78
   fi
   FILE=$(file_of "$WEEK")
   WAS_BLOCKED="$(is_blocked "$WEEK")"
   log "=== week $WEEK ($FILE) ==="
 
   ok=0
+  produced=0
   for attempt in $(seq 1 "$ATTEMPTS"); do
     log "attempt $attempt/$ATTEMPTS for $WEEK"
     if [ "$attempt" -eq 1 ]; then
@@ -142,13 +158,29 @@ for _ in $(seq 1 "$MAX"); do
 --- failing gate output (tail) ---
 $(tail -c 4000 "$LOG")"
     fi
-    "$AGENT" run "$PROMPT" >>"$LOG" 2>&1
+    if [ -n "$MODEL" ]; then
+      "$AGENT" run --model "$MODEL" "$PROMPT" >>"$LOG" 2>&1
+    else
+      "$AGENT" run "$PROMPT" >>"$LOG" 2>&1
+    fi
+    has_work && produced=1
     if gates >>"$LOG" 2>&1; then
       ok=1
       break
     fi
     log "attempt $attempt for $WEEK FAILED gates"
   done
+
+  # An agent that produced NO file changes never attempted the week: the failure
+  # is the agent/provider/transport, not the work. Quarantining here would record
+  # a phantom week failure and park an empty wip branch (which is exactly how
+  # m24w1..m24w4 were falsely quarantined when the model account ran out of
+  # credit). Stop loudly and leave the ledger honest instead.
+  if [ "$ok" -eq 0 ] && [ "$produced" -eq 0 ]; then
+    log "week $WEEK FAILED WITHOUT ANY AGENT OUTPUT - provider/transport failure, NOT a week failure"
+    log "not quarantining $WEEK; ledger left honest. Driver stopping for review."
+    exit 75
+  fi
 
   if [ "$ok" -eq 1 ]; then
     git add -A -- . ':(exclude)tests/fuzz/Cargo.lock' ':(exclude)handover.md'
@@ -186,7 +218,8 @@ PY
     fi
     if [ "$CONTINUE" != "1" ]; then
       log "stopping (DRM_WORKPLAN_CONTINUE=$CONTINUE)"
-      break
+      log "driver v2 exit (operator stop; not restartable)"
+      exit 78
     fi
   fi
 done
