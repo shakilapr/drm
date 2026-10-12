@@ -88,7 +88,7 @@ impl ShmBackend for MemShm {
         let ptr = mem.as_ptr().cast_mut();
         debug_assert!(mem.len() == size);
         slots.insert(name.as_str().to_string(), Slot { mem, size });
-        Ok(Mapping::from_raw_parts(
+        Ok(Mapping::borrowed_view(
             std::ptr::NonNull::new(ptr)
                 .unwrap_or_else(|| unreachable!("non-null fresh allocation")),
             size,
@@ -106,8 +106,9 @@ impl ShmBackend for MemShm {
             return Err(ShmError::SizeMismatch);
         }
         // The slot owns these bytes for as long as the registry holds it; aliasing the base
-        // mirrors POSIX shared mappings (a live mapping outlives `unlink`).
-        Ok(Mapping::from_raw_parts(
+        // mirrors POSIX shared mappings (a live mapping outlives `unlink`). Borrowed: the
+        // registry, not this view, releases the bytes.
+        Ok(Mapping::borrowed_view(
             std::ptr::NonNull::new(addr)
                 .unwrap_or_else(|| unreachable!("registry stores non-null")),
             size,

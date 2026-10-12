@@ -33,7 +33,11 @@ Registration-Lock Authority, §Process Lifecycle (fork), §Hard Real-Time Precom
 pub struct SegmentName(Arc<str>); // "/drm.<deployment_id>.<topic_hash>"
 fn backend_segment_name(deploy_id: &str, topic_hash: u64) -> SegmentName; // length-checked at verify
 
-pub struct Mapping { ptr: NonNull<u8>, len: usize } // RAII: Drop ⇒ munmap; fd closes after mmap
+pub struct Mapping { ptr: NonNull<u8>, len: usize, owned: bool }
+// RAII: Drop ⇒ munmap for an OWNED kernel mapping; fd closes after mmap.
+// A BORROWED view (`Mapping::borrowed_view`) aliases bytes owned by the backend
+// (the in-memory test shim's registry) and its Drop releases nothing — munmap on
+// allocator-owned memory corrupts the heap.
 
 pub enum ShmError {
  NotFound, AlreadyExists, PermissionDenied, Io(std::io::Error), QuotaExceeded, SizeMismatch,

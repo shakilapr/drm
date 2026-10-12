@@ -195,19 +195,48 @@ impl From<ShmError> for Status {
     }
 }
 
-/// RAII mapping view: `Drop` ⇒ munmap; the descriptor closes right after mmap.
+/// RAII mapping view: `Drop` ⇒ munmap **for an owned kernel mapping**; the
+/// descriptor closes right after mmap.
+///
+/// A view may also be *borrowed*: memory owned elsewhere (the in-memory test
+/// backend's registry) and merely aliased here. Dropping a borrowed view must
+/// not release the bytes — `munmap` on allocator-owned memory corrupts the heap
+/// and faults later in `free`. See [`Mapping::borrowed_view`].
 /// REQ: REQ-CORE-072.
 pub struct Mapping {
     ptr: NonNull<u8>,
     len: usize,
+    /// `true` for a kernel mapping created by `mmap`/`MapViewOfFile`, whose
+    /// `Drop` releases the view; `false` for a borrowed view over memory owned
+    /// by the caller's backend (test shims), whose `Drop` is a no-op.
+    owned: bool,
 }
 
 impl Mapping {
     /// Backend-internal constructor: POSIX [`super::segment::PosixShm`] after
-    /// `mmap`, Windows [`super::windows::WinShm`] after `MapViewOfFile`.
+    /// `mmap`, Windows [`super::windows::WinShm`] after `MapViewOfFile`. The
+    /// view owns the described bytes and releases them on drop.
     /// REQ: REQ-CORE-072, REQ-CORE-078.
     pub(crate) fn from_raw_parts(ptr: NonNull<u8>, len: usize) -> Self {
-        Self { ptr, len }
+        Self {
+            ptr,
+            len,
+            owned: true,
+        }
+    }
+
+    /// Backend-internal constructor for a **borrowed** view: the bytes are owned
+    /// by the caller's backend, so `Drop` must not release them. Used by the
+    /// in-memory test backend, whose segments live in a process-local registry
+    /// backed by the Rust allocator — `munmap` there is undefined behaviour.
+    /// REQ: REQ-CORE-072.
+    #[cfg(test)]
+    pub(crate) fn borrowed_view(ptr: NonNull<u8>, len: usize) -> Self {
+        Self {
+            ptr,
+            len,
+            owned: false,
+        }
     }
 
     /// Base pointer of the mapping. Raw view by design: shared memory is
@@ -235,7 +264,8 @@ impl Mapping {
 #[cfg(unix)]
 impl Drop for Mapping {
     fn drop(&mut self) {
-        if self.len == 0 {
+        // A borrowed view's bytes belong to the backend registry, not to us.
+        if !self.owned || self.len == 0 {
             return;
         }
         // SAFETY: `ptr` was produced by `mmap(PROT_READ | PROT_WRITE, MAP_SHARED)`
@@ -248,7 +278,8 @@ impl Drop for Mapping {
 #[cfg(windows)]
 impl Drop for Mapping {
     fn drop(&mut self) {
-        if self.len == 0 {
+        // A borrowed view's bytes belong to the backend registry, not to us.
+        if !self.owned || self.len == 0 {
             return;
         }
         // SAFETY: `ptr` was produced by `MapViewOfFile` over a live pagefile
