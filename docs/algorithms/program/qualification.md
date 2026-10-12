@@ -19,6 +19,9 @@ Scope: Phase 34 whole-system qualification — requirement traceability, fault i
 | `REQ-QAL-fault-campaigns` | five fault campaigns (publisher-crash, exhaustion-burst, subscriber-kill, serial-bomb, link-storm) green | `REQ-QAL-015` |
 | `REQ-QAL-fault-deterministic-replay` | a seeded fault schedule replays to a stable digest | `REQ-QAL-016` |
 | `REQ-QAL-soak-memory-bounded` | parallel 24 h runs with a memory-boundedness ceiling and an auto-report | `REQ-QAL-017` |
+| `REQ-QAL-crit-coverage` | runtime (ring history, overflow policies, hazard, exhaustion) and transport critical paths each link an oracle + boundary + negative test; coverage closure swept in M24W1 | `REQ-QAL-020` |
+| `REQ-QAL-api-inventory` | full public-surface inventory (crates + bindings + the C ABI) with a freeze-candidate list; anything post-v1.0 marked deferred | `REQ-QAL-021` |
+| `REQ-QAL-mutation-sample` | seeded-defect mutation sample on hazard/ring critical paths proves the linked tests measure assertion strength, not line count | `REQ-QAL-022` |
 
 ## Data Structures
 
@@ -46,6 +49,8 @@ pub struct QualificationReport {
 - **I-QAL5 BenchInvariants**: load suite asserts zero allocation, bounded operation counts, and reports latency without treating estimates as proof. Test: bench CI.
 - **I-QAL6 DefectLedger**: P0 = 0; P1 all closed or waived with record. Test: ledger audit.
 - **I-QAL7 FuzzResolved**: 0 unresolved reproducible fuzz crashes/hangs and 0 unresolved sanitizer findings; regression corpus replay 100% pass; minimum campaign budget reached; corpus + deterministic failing seeds persisted. "Triaged" is a project state, not a passing state. Test: fuzz/sanitizer ledger.
+- **I-QAL8 CriticalPathCoverage**: the declared critical paths — runtime ring history, overflow policies, hazard protocol, exhaustion/reclamation, and the router transports — each resolve to at least one linked test that exercises an oracle, a boundary, and a negative/adversarial branch. A path with no resolved linked test, or a linked test that no longer exists, is a gap; the gate counts resolved paths, never line count. Test: `xtask/src/coverage.rs` (`CRIT_COVERAGE`) + `docs/spec/coverage-policy.md`.
+- **I-QAL9 MutationSample**: a seeded defect on a hazard/ring critical predicate (`<=`→`<`, inverted epoch comparison, removed queue-full handling, removed CRC/validation check) is detected by the linked oracle; an undetected seeded defect blocks the gate and the linked test is strengthened before close. The sample is a fixed-seed, fixed-size subset (documented rate), not an exhaustive mutation run. Test: `xtask/src/coverage.rs` mutation-sample self-check.
 
 ## Functions
 
@@ -57,8 +62,11 @@ fn qualify() -> QualificationReport {
  let fs = fuzz_sanitizer::results();
  let repro = build_repro::verify_per_platform(two_runners_each); // I-QAL3
  let docs = docs_examples::run_headless();
+ let coverage = coverage::critical_paths(root); // I-QAL8
+ let mutation = coverage::mutation_sample(); // I-QAL9
+ let inventory = inventory::freeze_candidates(root); // REQ-QAL-021
  let defects = ledger::audit();
- report(matrix, soak, cells, fs, repro, docs, defects) // gate = all invariants green
+ report(matrix, soak, cells, fs, repro, docs, coverage, mutation, inventory, defects) // gate = all invariants green
 }
 ```
 
@@ -165,6 +173,13 @@ nothing new at runtime); the packet is `cargo xtask qualify`
   core is exactly 24 cells, and undeclared cells cannot appear (the manifest is
   the sole source). `cargo xtask qualify --json <path>` writes the packet.
 
+*Coverage closure (I-QAL8/I-QAL9, M24W1):*
+
+1. Enumerate the declared critical paths (ring history, overflow policies, hazard, exhaustion, transports) in `docs/spec/coverage-policy.md`; each path names its source owner, its `REQ` anchor, and its linked tests.
+2. `cargo xtask qualify` resolves every critical path to an existing linked test; a path whose linked test is missing is a gap and fails `--check`.
+3. Run the fixed-seed mutation sample on the hazard/ring predicates: each seeded defect must be detected by the linked oracle; an undetected defect blocks the gate.
+4. New gap tests are added, never refactors (M24W1 risk cap); the coverage leg is unified into the qualification packet.
+
 ## Edge Cases & Errors
 
 | Case | Result |
@@ -195,3 +210,6 @@ nothing new at runtime); the packet is `cargo xtask qualify`
 | bench invariants | I-QAL5 |
 | ledger audit | I-QAL6 |
 | fuzz/sanitizer ledger (0 unresolved; corpus replay 100%) | I-QAL7 |
+| critical-path coverage (ring/overflow/hazard/exhaustion/transports linked tests) | I-QAL8 |
+| mutation sample (seeded hazard/ring defects detected by linked oracle) | I-QAL9 |
+| public API inventory + freeze candidates (`xtask/src/inventory.rs`) | `REQ-QAL-021` |

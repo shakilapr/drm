@@ -396,6 +396,35 @@ mod tests {
         assert!(HistoryRing::new(0).is_err());
     }
 
+    /// REQ: REQ-CORE-061 — preflight refuses a writer-active (odd) stamp and a
+    /// stamp that cannot advance by two; repair refuses a stamp that cannot
+    /// advance by one (I7/I8 exhaustion and restart paths).
+    #[test]
+    fn stamp_exhaustion_paths() {
+        use drm_types::Status;
+        let ring = assert_ok(HistoryRing::new(2));
+        // Odd stamp = writer active ⇒ InvalidData before any commit.
+        ring.entries[0].banks[0].stamp.store(1, Ordering::SeqCst);
+        assert_eq!(ring.preflight_commit(0), Err(Status::InvalidData));
+        // No room for the +2 stable window: the largest even stamp ⇒ exhausted.
+        ring.entries[0].banks[0]
+            .stamp
+            .store(u64::MAX - 1, Ordering::SeqCst);
+        assert_eq!(ring.preflight_commit(0), Err(Status::RingStampExhausted));
+        // Repair of an odd stamp that cannot advance by one ⇒ RingStampExhausted.
+        ring.entries[0].banks[0]
+            .stamp
+            .store(u64::MAX, Ordering::SeqCst);
+        assert_eq!(
+            ring.repair_incomplete_banks(),
+            Err(Status::RingStampExhausted)
+        );
+        // A repairable odd stamp becomes even.
+        ring.entries[0].banks[0].stamp.store(5, Ordering::SeqCst);
+        assert!(ring.repair_incomplete_banks().is_ok());
+        assert_eq!(ring.entries[0].banks[0].stamp.load(Ordering::SeqCst), 6);
+    }
+
     /// REQ: REQ-CORE-061 — sequence exhaustion guard fires before payload write (I7).
     #[test]
     fn sequence_exhaustion() {

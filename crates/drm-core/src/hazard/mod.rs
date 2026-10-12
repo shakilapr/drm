@@ -326,8 +326,8 @@ pub fn bump_generation(current: u64) -> Result<u64, Status> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AcquireErr, Borrow, ConsumerRec, HAZARD_NONE, HazardWord, acquire, pack, select_slot,
-        unpack,
+        AcquireErr, Borrow, ConsumerRec, HAZARD_NONE, HazardWord, acquire, bump_generation, pack,
+        select_slot, unpack,
     };
     use crate::channel::ccb::ChannelControlBlock;
     use crate::ring::{HistoryRing, LookupErr};
@@ -623,5 +623,42 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// REQ: REQ-CORE-031 — the generation bump is a 64-bit checked add: it
+    /// advances by one and refuses to wrap at `u64::MAX`
+    /// (`GenerationExhausted`).
+    #[test]
+    fn generation_bump_no_wrap() {
+        assert_eq!(bump_generation(0), Ok(1));
+        assert_eq!(bump_generation(41), Ok(42));
+        assert_eq!(
+            bump_generation(u64::MAX),
+            Err(Status::GenerationExhausted),
+            "ABA generation never silently wraps"
+        );
+    }
+
+    /// REQ: REQ-CORE-003, I-HZ5 — `Borrow::release` is idempotent: an explicit
+    /// release clears the word once and a subsequent (or drop-time) release is a
+    /// no-op, so the empty form is available for re-acquisition.
+    #[test]
+    fn borrow_release_idempotent() {
+        let ring = ring(4);
+        let ccb = ccb();
+        commit(&ring, &ccb, 0, 1, 1);
+        let rec = ConsumerRec::new(7);
+        let mut borrow =
+            acquire(&ring, &ccb, 0, &rec).unwrap_or_else(|e| unreachable!("acquire: {e:?}"));
+        assert_eq!(rec.hazard.load(Ordering::SeqCst), (7, 1));
+        borrow.release();
+        assert_eq!(rec.hazard.load(Ordering::SeqCst), (7, HAZARD_NONE));
+        // Second release must not touch anything; drop then runs it again.
+        borrow.release();
+        assert_eq!(rec.hazard.load(Ordering::SeqCst), (7, HAZARD_NONE));
+        drop(borrow);
+        assert_eq!(rec.hazard.load(Ordering::SeqCst), (7, HAZARD_NONE));
+        // The endpoint can acquire again (word back to its empty form).
+        assert!(acquire(&ring, &ccb, 0, &rec).is_ok());
     }
 }

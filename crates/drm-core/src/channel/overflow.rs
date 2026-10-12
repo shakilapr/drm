@@ -112,3 +112,95 @@ pub fn allow_commit(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{OverflowPolicy, RequiredSequential, allow_commit};
+    use crate::channel::ccb::ChannelControlBlock;
+    use drm_types::Status;
+    use std::sync::atomic::Ordering;
+
+    /// REQ: REQ-CORE-015 — the descriptor byte decodes to exactly two policies;
+    /// any other byte is `InvalidData`; the encoding round-trips.
+    #[test]
+    fn policy_byte_round_trip() {
+        assert_eq!(OverflowPolicy::from_byte(0), Ok(OverflowPolicy::Overwrite));
+        assert_eq!(OverflowPolicy::from_byte(1), Ok(OverflowPolicy::Reject));
+        assert_eq!(OverflowPolicy::from_byte(2), Err(Status::InvalidData));
+        assert_eq!(OverflowPolicy::from_byte(255), Err(Status::InvalidData));
+        assert_eq!(OverflowPolicy::Overwrite.to_byte(), 0);
+        assert_eq!(OverflowPolicy::Reject.to_byte(), 1);
+    }
+
+    /// REQ: REQ-CORE-059, REQ-CORE-001 — a fresh record acknowledges nothing
+    /// (init 0, sequence 0 is representable); `may_retire` is strictly past the
+    /// watermark and `ack_completed` is monotonic; the sequence-exhaustion guard
+    /// fires at `u64::MAX` (REQ-CORE-024).
+    #[test]
+    fn ack_watermark_and_monotonicity() {
+        let rec = RequiredSequential::new();
+        assert_eq!(rec.ack_seq.load(Ordering::Acquire), 0, "init 0");
+        assert!(!rec.may_retire(u64::MAX), "nothing acknowledged");
+        assert!(!rec.may_retire(0), "retire 0 not strictly past init");
+
+        assert_eq!(rec.ack_completed(0), Ok(()));
+        assert_eq!(rec.ack_seq.load(Ordering::Acquire), 1);
+        assert!(rec.may_retire(0), "retire 0 strictly past ack 1");
+        assert!(!rec.may_retire(1), "retire == ack is not past it");
+
+        // Monotonic: a stale acknowledge never lowers the watermark.
+        assert_eq!(rec.ack_completed(0), Ok(()));
+        assert_eq!(rec.ack_seq.load(Ordering::Acquire), 1, "no regression");
+        assert_eq!(rec.ack_completed(9), Ok(()));
+        assert_eq!(rec.ack_seq.load(Ordering::Acquire), 10);
+        assert_eq!(
+            rec.ack_completed(u64::MAX),
+            Err(Status::SequenceExhausted),
+            "no successor for u64::MAX"
+        );
+    }
+
+    /// REQ: REQ-CORE-039, REQ-CORE-040 — the commit gate is transparent for the
+    /// overwrite policy (never blocks), rejects a zero-required reject topic as
+    /// `InvalidConfig` (I-OV5), passes while the retained window is within depth,
+    /// and returns `QueueFull` once retirement would overtake an unacknowledged
+    /// required consumer.
+    #[test]
+    fn allow_commit_paths() {
+        let ccb = ChannelControlBlock::zeroed();
+        let required = [RequiredSequential::new()];
+
+        // Overwrite: never gated, even with an empty required registry.
+        assert_eq!(
+            allow_commit(OverflowPolicy::Overwrite, &ccb, &[], 4),
+            Ok(())
+        );
+
+        // Reject with no required consumer is a runtime config violation.
+        assert_eq!(
+            allow_commit(OverflowPolicy::Reject, &ccb, &[], 4),
+            Err(Status::InvalidConfig)
+        );
+
+        // Reject within depth: no sequence retires yet, so the gate passes.
+        ccb.write_seq.store(3, Ordering::Release);
+        assert_eq!(
+            allow_commit(OverflowPolicy::Reject, &ccb, &required, 8),
+            Ok(())
+        );
+
+        // Reject at the depth edge: retiring sequence 0 needs ack > 0.
+        ccb.write_seq.store(4, Ordering::Release);
+        assert_eq!(
+            allow_commit(OverflowPolicy::Reject, &ccb, &required, 4),
+            Err(Status::QueueFull),
+            "unacknowledged consumer gates retirement"
+        );
+        assert_eq!(required[0].ack_completed(0), Ok(()));
+        assert_eq!(
+            allow_commit(OverflowPolicy::Reject, &ccb, &required, 4),
+            Ok(()),
+            "acknowledged past the retiring sequence"
+        );
+    }
+}

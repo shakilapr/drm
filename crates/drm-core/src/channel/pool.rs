@@ -71,7 +71,7 @@ pub const fn default_pool_size(history_is_latest: bool) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{PoolLayout, slot_offset, write_checked};
+    use super::{PoolLayout, default_pool_size, slot_offset, write_checked};
     use drm_types::Status;
 
     fn layout(count: u64) -> PoolLayout {
@@ -127,5 +127,38 @@ mod tests {
         );
         assert_eq!(buf, before, "no destination byte changed");
         assert_eq!(write_checked(&mut buf, &l, 1, &[]), Ok(0));
+    }
+
+    /// REQ: REQ-CORE-044 — checked offset arithmetic refuses an overflowing
+    /// layout and a slot beyond the destination region as `InvalidConfig`
+    /// (I-P1/I-P3): the destination is never partially written.
+    #[test]
+    fn pool_offset_overflow_and_bounds() {
+        // base + stride*i overflows u64 ⇒ InvalidConfig, not a wrapped offset.
+        let overflow = PoolLayout {
+            base: u64::MAX,
+            stride: 2,
+            count: 4,
+            header_size: 0,
+            sample_max: 16,
+            slot_align: 8,
+        };
+        assert_eq!(slot_offset(&overflow, 1), Err(Status::InvalidConfig));
+        // A valid offset past the destination slice is InvalidConfig.
+        let l = layout(4);
+        let mut buf = [0_u8; 96];
+        assert_eq!(
+            write_checked(&mut buf, &l, 3, &[3_u8; 16]),
+            Err(Status::InvalidConfig),
+            "slot 3 ends at 160 > buf 96"
+        );
+    }
+
+    /// REQ: REQ-CORE-041 — the declared default pool is 3 for `@history:
+    /// latest` and 8 otherwise.
+    #[test]
+    fn pool_default_sizes() {
+        assert_eq!(default_pool_size(true), 3);
+        assert_eq!(default_pool_size(false), 8);
     }
 }

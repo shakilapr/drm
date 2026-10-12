@@ -194,4 +194,17 @@ mod tests {
         assert_eq!(q.pop(), Some(2));
         assert!(q.is_empty());
     }
+
+    /// REQ: REQ-ROUTE-032 — a zero-capacity queue drops every arrival (counted)
+    /// and `pop` on an empty queue yields nothing; `len` never exceeds `cap`.
+    #[test]
+    fn recv_queue_zero_capacity_and_empty_pop() {
+        let mut q = super::RecvQueue::new(0);
+        assert!(!q.push(1), "cap 0 drops everything");
+        assert!(!q.push(2));
+        assert_eq!(q.dropped(), 2);
+        assert_eq!(q.len(), 0);
+        assert!(q.is_empty());
+        assert_eq!(q.pop(), None, "empty pop yields nothing");
+    }
 }

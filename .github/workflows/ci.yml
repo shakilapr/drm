@@ -176,6 +176,22 @@ jobs:
           name: qualification-packet
           path: target/qualification-packet.json
 
+  coverage:
+    # Critical-path coverage closure (work-plan M24W1-E1/E3/E4): the declared
+    # runtime (ring/overflow/hazard/exhaustion) and transport critical paths must
+    # each resolve to linked tests, and the hazard/ring mutation sample must be
+    # clean. `xtask qualify --check` gates both legs; the workspace suite runs
+    # the added uncovered-branch tests.
+    # REQ: REQ-QAL-020, REQ-QAL-021, REQ-QAL-022.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: critical-path coverage + mutation sample
+        run: cargo xtask qualify --check
+      - name: runtime and transport coverage tests
+        run: cargo test -p drm-core -p drm-router
+
   spatial:
     # Regression permanence (AGENTS #14; work-plan M22W4-E1-T1/E2-T1): every
     # spatial runtime and toolchain suite that went green during Phase 33 is now

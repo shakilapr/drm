@@ -5,10 +5,12 @@
 
 #![forbid(unsafe_code)]
 
+mod coverage;
 mod cross_os;
 mod fault;
 mod gencheck;
 mod golden;
+mod inventory;
 mod layering;
 mod qualify;
 mod soak;

@@ -322,6 +322,28 @@ Every export shares the same boundary rules: null/length checks first (I-A2), st
 | `drm_publisher` | `drm_publish_copy`/`drm_write_*` concurrent-safe; exactly one in-progress write, losers `Busy`; close not concurrent |
 | `drm_consumer` | single-borrower only; lease additional records for additional threads |
 
+## Public API Inventory & Freeze (M24W1)
+
+`REQ-QAL-021`; the release wave's freeze prep. The inventory is the full
+externally-visible surface — every `drm-ffi` `extern "C"` export declared in
+`drm.h` (source of truth, ADR 0002) plus the public items of the runtime crates
+(`drm-types`, `drm-core`, `drm-router`) and the bindings crates. The machine
+form is `xtask/src/inventory.rs`; the reviewable form is
+[docs/spec/api-inventory.md](../../spec/api-inventory.md).
+
+- **Inventory rule**: every entry names its symbol, kind (C export / Rust
+  public / handle / status code), owner crate, and freeze verdict. `cargo xtask
+  qualify` re-resolves each entry against its source file, so a renamed or
+  removed symbol is a gate failure, never a silent drift.
+- **Freeze candidates**: symbols stable enough to lock for v1.0 per the
+  one-way-compat rule (I-A8) — append-only, never renamed; a layout change bumps
+  `DRM_ABI_VERSION` (I-A8/I-A9).
+- **Deferred**: anything post-v1.0 is marked deferred and excluded from the
+  freeze set; deferred additions never appear in the frozen block.
+- **Deprecation**: removal only at a major or ABI-version bump, with ≥1 minor
+  release of notice (codebase.md §6.4). The freeze is executed in M24W2
+  (`API_FROZEN = 1`).
+
 ## Edge Cases & Errors
 
 | Case | Result |

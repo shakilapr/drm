@@ -11,6 +11,21 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M24 W1 tranche: coverage closure and API freeze prep. The qualification
+  packet gains three legs (`xtask/src/coverage.rs`, `xtask/src/inventory.rs`;
+  [qualify.rs](xtask/src/qualify.rs)): critical-path coverage (`I-QAL8`,
+  `CRIT_COVERAGE`) resolving the ring/overflow/hazard/exhaustion and UDP/serial
+  paths to their linked tests, a fixed-seed mutation sample (`I-QAL9`,
+  REQ-QAL-022) over the hazard/ring/queue predicates (four seeded defect classes,
+  each detected by the linked oracle), and the public API inventory + freeze
+  candidates (`REQ-QAL-021`) re-resolved against `drm.h`, the runtime crates, and
+  the deferred post-v1.0 exports. Runtime and transport uncovered-branch sweep:
+  overflow-policy gate paths, pool offset/bounds, ring stamp exhaustion, hazard
+  generation/borrow, and the zero-capacity receive queue. Policy and tables in
+  [coverage-policy.md](docs/spec/coverage-policy.md) and
+  [api-inventory.md](docs/spec/api-inventory.md); gate evidence
+  ([m24w1.md](docs/gates/m24w1.md)); metrics
+  [metrics-m24.md](docs/metrics/metrics-m24.md) (REQ-QAL-020/021/022).
 - Week M23 W2 tranche: fault injection and the 3×24 h soak. `cargo xtask fault`
   (`xtask/src/fault.rs`) executes the five runtime/transport campaigns —
   publisher-crash, exhaustion-burst, subscriber-kill, serial-bomb, link-storm —
@@ -596,6 +611,12 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Fixed
 
+- Generated Python node facades imported the topic namespace package
+  (`from control import target`) instead of the topic module
+  (`from control.target import target`), so `publish_*`/`read_*` annotations
+  raised `AttributeError` at import; the import now descends into the topic
+  module under its `<dir>/<stem>/target.py` layout (REQ-TOOL-028,
+  REQ-BIND-012).
 - The `platform::cleanup` flock test flaked under parallel runs (same class as the lib `shm::lock` flake): a concurrent `Command::spawn` (fork+exec) child inherits the lock descriptors and keeps a released `flock` alive until `exec`. `spawn_child` now takes a process-wide guard shared with the flock assertions (0/30 failures after; stale `/dev/shm` segments cleared).
 - `drm_consumer_close` now returns `Busy` when an outstanding borrow exists (consumer-registration I-CR4) and leaves the endpoint claimed, instead of releasing the borrow and reporting `Ok` — closing a doc/impl divergence.
 - `shm::lock` semantic tests were flaky (~10–30% under parallel runs): a fork/exec child inherits the lock descriptors (`O_CLOEXEC` covers only `exec`, not `fork`), which kept a peer test's `flock` alive after the parent closed its fds. A process-wide test guard now serializes fork/spawn tests against the flock assertions (AGENTS.md 14).

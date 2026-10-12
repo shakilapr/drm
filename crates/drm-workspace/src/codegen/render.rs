@@ -1745,9 +1745,20 @@ fn node_python(name: &str, entry: &NodeEntry, model: &WorkspaceModel) -> String 
     topics.dedup();
     for topic in &topics {
         let module = file_ident(topic);
-        let pkg = topic.rsplit_once('/').map_or("", |(dir, _)| dir);
-        let stem = topic.rsplit_once('/').map_or(topic.as_str(), |(_, s)| s);
-        let _ = writeln!(s, "from {pkg} import {stem} as {module}");
+        // The per-topic module file is the canonical `target.<ext>` under the
+        // topic's namespace directory (`<dir>/<stem>/target.py`), so the import
+        // descends one level past the namespace package: importing
+        // `<dir>.<stem>` alone yields the package, which exposes no dataclass or
+        // codec.
+        // REQ: REQ-TOOL-028, REQ-BIND-012.
+        match topic.rsplit_once('/') {
+            Some((dir, stem)) => {
+                let _ = writeln!(s, "from {dir}.{stem} import target as {module}");
+            }
+            None => {
+                let _ = writeln!(s, "import {topic}.target as {module}");
+            }
+        }
     }
     s.push('\n');
     for topic in &entry.publishes {

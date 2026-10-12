@@ -149,7 +149,7 @@ Artifact rules:
 1. Per-crate unit/property tests live inside each crate; `tests/` holds only whole-system suites (§4.1).
 2. `examples/` contains one buildable, CI-executed workspace per binding language.
 3. All automation lives in `xtask/` (§5.1); no one-off shell scripts.
-4. Documentation set: normative specs (architecture docs), canonical algorithms, execution plan (work-plan), derived component specs (`docs/spec/`, non-normative; architecture wins conflicts), requirement registry (§6.2), decision records (§6.3). Algorithm coverage must include every non-deferred normative architecture path.
+4. Documentation set: normative specs (architecture docs), canonical algorithms, execution plan (work-plan), derived component specs (`docs/spec/`, non-normative; architecture wins conflicts), requirement registry (§6.2), decision records (§6.3). Algorithm coverage must include every non-deferred normative architecture path. Coverage closure is governed by `docs/spec/coverage-policy.md` (`I-QAL8`/`I-QAL9`) and the public-surface freeze prep by `docs/spec/api-inventory.md` (`REQ-QAL-021`).
 
 ---
 
@@ -288,6 +288,7 @@ Required checks: all `ci.yml` jobs. `audit.yml` runs nightly and on release; fai
 
 ### 6.4 Deprecation and Breaking Changes
 - Public crates: `cargo-semver-checks` blocks accidental breaking changes in CI.
+- Public-surface freeze prep: the inventory and freeze-candidate list live in `docs/spec/api-inventory.md`, re-resolved mechanically by `xtask/src/inventory.rs` (`REQ-QAL-021`); a renamed or removed listed symbol fails `cargo xtask qualify`.
 - Deprecation: ≥1 minor release with changelog notice plus `#[deprecated]` / schema `deprecated:` annotation; removal only at a major or ABI-version bump.
 
 ### 6.5 Changelog and Commits

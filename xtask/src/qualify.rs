@@ -18,7 +18,7 @@ use anyhow::{Context, Result, bail};
 use crate::cross_os::{CellState, cell_state, interop_core_matrix, interop_matrix};
 use crate::fault::CAMPAIGN_COUNT;
 use crate::soak::{SoakLedger, load as load_soak};
-use crate::traceability;
+use crate::{coverage, inventory, traceability};
 
 /// Evidence artifacts the packet references and their on-disk presence.
 /// REQ: REQ-QAL-006.
@@ -71,18 +71,31 @@ pub struct QualificationPacket {
     pub fault_campaigns: usize,
     /// Trailing clean soak-run streak from the committed ledger (`I-QAL2`).
     pub soak_clean_streak: u64,
+    /// Resolved critical paths over the declared total (`I-QAL8`).
+    pub crit_coverage: (usize, usize),
+    /// Whether every seeded defect in the mutation sample is detected (`I-QAL9`).
+    pub mutation_sample_clean: bool,
+    /// Inventory entries resolved over the declared total (`REQ-QAL-021`).
+    pub api_inventory: (usize, usize),
     /// Referenced evidence artifacts.
     pub evidence: Vec<Evidence>,
 }
 
 impl QualificationPacket {
     /// Packet gate: trace complete, conformance closed, all fault campaigns
-    /// present, and every evidence artifact on disk. REQ: REQ-QAL-006.
+    /// present, critical paths resolved (`I-QAL8`), mutation sample clean
+    /// (`I-QAL9`), inventory resolved, and every evidence artifact on disk.
+    /// REQ: REQ-QAL-006, REQ-QAL-020, REQ-QAL-021, REQ-QAL-022.
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.trace_complete
             && self.conformance.is_closed()
             && self.fault_campaigns == CAMPAIGN_COUNT
+            && self.crit_coverage.0 == self.crit_coverage.1
+            && self.crit_coverage.1 > 0
+            && self.mutation_sample_clean
+            && self.api_inventory.0 == self.api_inventory.1
+            && self.api_inventory.1 > 0
             && self.evidence.iter().all(|e| e.present)
     }
 
@@ -106,6 +119,19 @@ impl QualificationPacket {
             self.conformance.core,
             self.fault_campaigns,
             self.soak_clean_streak,
+        );
+        let _ = writeln!(
+            out,
+            "coverage: crit={}/{} mutation_sample={} inventory={}/{}",
+            self.crit_coverage.0,
+            self.crit_coverage.1,
+            if self.mutation_sample_clean {
+                "clean"
+            } else {
+                "DIRTY"
+            },
+            self.api_inventory.0,
+            self.api_inventory.1,
         );
         for evidence in &self.evidence {
             let _ = writeln!(
@@ -139,7 +165,7 @@ fn repo_root() -> PathBuf {
 
 /// Evidence artifacts the packet requires, relative to the repository root.
 /// REQ: REQ-QAL-002, REQ-QAL-003.
-const EVIDENCE: [(&str, &str); 8] = [
+const EVIDENCE: [(&str, &str); 10] = [
     ("trace", "docs/algorithms/program/qualification.md"),
     ("fault", "docs/spec/fault-injection.md"),
     ("soak", "docs/spec/soak-ledger.md"),
@@ -147,7 +173,9 @@ const EVIDENCE: [(&str, &str); 8] = [
     ("repro", "docs/algorithms/program/qualification.md"),
     ("docs", "docs/spec/bench-methodology.md"),
     ("perf", "docs/spec/bench-baseline.md"),
-    ("packet", "docs/gates/m23w4.md"),
+    ("coverage", "docs/spec/coverage-policy.md"),
+    ("inventory", "docs/spec/api-inventory.md"),
+    ("packet", "docs/gates/m24w1.md"),
 ];
 
 /// Classifies the declared interop matrix into a closure.
@@ -190,12 +218,17 @@ pub fn assemble(root: &Path) -> Result<QualificationPacket> {
             present: root.join(path).is_file(),
         })
         .collect();
+    let coverage = coverage::critical_paths(root)?;
+    let inventory = inventory::verify(root)?;
     Ok(QualificationPacket {
         trace_coverage: matrix.coverage_percent(),
         trace_complete: matrix.is_complete(),
         conformance: conformance_closure(),
         fault_campaigns: CAMPAIGN_COUNT,
         soak_clean_streak: soak_streak,
+        crit_coverage: (coverage.resolved(), coverage.total()),
+        mutation_sample_clean: coverage::mutation_sample_clean(),
+        api_inventory: (inventory.resolved(), inventory.total()),
         evidence,
     })
 }
@@ -224,8 +257,13 @@ pub fn run(flags: &[String]) -> Result<()> {
         }
     }
 
-    let packet = assemble(&repo_root())?;
+    let root = repo_root();
+    let packet = assemble(&root)?;
+    let coverage = coverage::critical_paths(&root)?;
+    let inventory = inventory::verify(&root)?;
     print!("{}", packet.render());
+    print!("{}", coverage.render());
+    print!("{}", inventory.render());
     if let Some(path) = json {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -243,6 +281,15 @@ pub fn run(flags: &[String]) -> Result<()> {
             },
             "fault_campaigns": packet.fault_campaigns,
             "soak_clean_streak": packet.soak_clean_streak,
+            "crit_coverage": {
+                "resolved": packet.crit_coverage.0,
+                "total": packet.crit_coverage.1,
+            },
+            "mutation_sample_clean": packet.mutation_sample_clean,
+            "api_inventory": {
+                "resolved": packet.api_inventory.0,
+                "total": packet.api_inventory.1,
+            },
             "evidence": packet
                 .evidence
                 .iter()
@@ -253,8 +300,8 @@ pub fn run(flags: &[String]) -> Result<()> {
         std::fs::write(&path, format!("{body:#}\n"))
             .with_context(|| format!("write {}", path.display()))?;
     }
-    if check && !packet.is_complete() {
-        bail!("qualification packet incomplete (I-QAL1/I-QAL4)");
+    if check && !(packet.is_complete() && coverage.is_complete() && inventory.is_complete()) {
+        bail!("qualification packet incomplete (I-QAL1/I-QAL4/I-QAL8/I-QAL9)");
     }
     Ok(())
 }
@@ -268,7 +315,7 @@ mod tests {
     };
 
     /// A packet with every leg satisfied.
-    /// REQ: REQ-QAL-006.
+    /// REQ: REQ-QAL-006, REQ-QAL-020, REQ-QAL-021, REQ-QAL-022.
     fn complete_packet() -> QualificationPacket {
         QualificationPacket {
             trace_coverage: 100,
@@ -276,9 +323,12 @@ mod tests {
             conformance: conformance_closure(),
             fault_campaigns: CAMPAIGN_COUNT,
             soak_clean_streak: 3,
+            crit_coverage: (6, 6),
+            mutation_sample_clean: true,
+            api_inventory: (42, 42),
             evidence: vec![Evidence {
                 label: "packet".to_string(),
-                path: "docs/gates/m23w4.md".to_string(),
+                path: "docs/gates/m24w1.md".to_string(),
                 present: true,
             }],
         }
@@ -318,8 +368,26 @@ mod tests {
         assert!(!open.is_complete());
     }
 
-    /// REQ: REQ-QAL-006 — the live repository assembles a complete packet: the
-    /// traceability matrix is 100% and the declared evidence exists.
+    /// REQ: REQ-QAL-020, REQ-QAL-021, REQ-QAL-022 — an unresolved critical
+    /// path, a dirty mutation sample, or an unresolved inventory entry flips the
+    /// packet incomplete.
+    #[test]
+    fn coverage_legs_are_gated() {
+        let mut gap = complete_packet();
+        gap.crit_coverage = (5, 6);
+        assert!(!gap.is_complete());
+        let mut dirty = complete_packet();
+        dirty.mutation_sample_clean = false;
+        assert!(!dirty.is_complete());
+        let mut inventory = complete_packet();
+        inventory.api_inventory = (41, 42);
+        assert!(!inventory.is_complete());
+    }
+
+    /// REQ: REQ-QAL-006, REQ-QAL-020, REQ-QAL-021, REQ-QAL-022 — the live
+    /// repository assembles a complete packet: the traceability matrix is 100%,
+    /// every critical path resolves, the mutation sample is clean, the inventory
+    /// resolves, and the declared evidence exists.
     #[test]
     fn repository_packet_is_complete() {
         let root = repo_root();
@@ -328,6 +396,15 @@ mod tests {
         assert!(packet.trace_complete, "I-QAL1 completeness");
         assert!(packet.conformance.is_closed(), "I-QAL4 closure");
         assert_eq!(packet.fault_campaigns, CAMPAIGN_COUNT);
+        assert_eq!(
+            packet.crit_coverage.0, packet.crit_coverage.1,
+            "I-QAL8 critical-path coverage"
+        );
+        assert!(packet.mutation_sample_clean, "I-QAL9 mutation sample");
+        assert_eq!(
+            packet.api_inventory.0, packet.api_inventory.1,
+            "REQ-QAL-021 inventory"
+        );
         assert!(
             packet.is_complete(),
             "packet incomplete: {:?}",
