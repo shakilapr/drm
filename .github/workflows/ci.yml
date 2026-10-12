@@ -274,6 +274,29 @@ jobs:
             target/pilot-report.json
             target/packaging-report.json
 
+  closeout:
+    # v1.0 release + program close-out (work-plan M24W4-E1/E2/E3/E4): the
+    # release build across every declared-supported target, the publish set,
+    # the stamped identity (`V10_RELEASED = 1`), the groomed post-1.0 backlog
+    # (`POST_10_BACKLOG = 1`), and the program retrospective (`RETRO_DONE = 1`).
+    # qualification.md §v1.0 Release & Program Close-Out; REQ-QAL-030/031/032/033.
+    # REQ: REQ-QAL-030, REQ-QAL-031, REQ-QAL-032, REQ-QAL-033.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: release candidate fold (V10_RC = 1)
+        run: cargo xtask release --check --json target/release-candidate.json
+      - name: v1.0 release + program close-out (GATE_STATUS(M24W4) = PASS)
+        run: cargo xtask closeout --check --json target/closeout-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: closeout-reports
+          path: |
+            target/release-candidate.json
+            target/closeout-report.json
+
   mcu:
     # MCU host parity + zero-forbidden-heap audit, wired as a permanent blocking
     # gate on every PR/push (regression permanence, AGENTS #14; work-plan

@@ -26,6 +26,8 @@ Owned by E2 unless noted. Written by the weekly plan named in each file's header
 | `packaging.md` | 34 (M24W2) | `docs/algorithms/program/qualification.md` §Release Freeze & Pilot Deployment; `codebase.md` §2.3 |
 | `release-notes.md` | 34 (M24W3) | `docs/algorithms/program/qualification.md` §Phase 34 Gate & v1.0 Release Candidate; `CHANGELOG.md` |
 | `waiver-template.md` | 34 (M24W3) | `docs/algorithms/program/qualification.md` §Phase 34 Gate & v1.0 Release Candidate |
+| `post-1.0-backlog.md` | 34 (M24W4) | `docs/algorithms/program/qualification.md` §v1.0 Release & Program Close-Out; `docs/algorithms/studio/studio-protocol.md` |
+| `program-retrospective.md` | 34 (M24W4) | `docs/algorithms/program/qualification.md` §v1.0 Release & Program Close-Out; `work-plan.md` |
 
 Specs here may not introduce requirements beyond the architecture; each lands with a `source_ref`
 back to the owning architecture/algorithm section.

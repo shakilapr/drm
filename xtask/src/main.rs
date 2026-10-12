@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod closeout;
 mod coverage;
 mod cross_os;
 mod fault;
@@ -43,7 +44,7 @@ fn main() -> std::process::ExitCode {
 fn run(args: &[String]) -> Result<()> {
     let Some(cmd) = args.first() else {
         bail!(
-            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--two-host|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability [--registry|--citations|--matrix] | soak (--duration <h>|--iterations <n>) [--topology <t>] [--ledger <path>] [--parallel <n>] [--memory-bound <mb>] [--report <path>] [--dashboard] | fault [--campaign <name>] [--seed <n>] [--steps <n>] [--list] [--dry-run] [--json <path>] | qualify [--check] [--json <path>] | release [--check] [--json <path>] | freeze [--check] [--json <path>] | pilot [--check] [--json <path>] | package [--check] [--dry-run] [--json <path>] | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
+            "usage: cargo xtask <fmt [--check] | lint | test [--stress|--two-host|--cross-os [--transport udp|tcp|serial | --full]] | check-layering | audit-traceability [--registry|--citations|--matrix] | soak (--duration <h>|--iterations <n>) [--topology <t>] [--ledger <path>] [--parallel <n>] [--memory-bound <mb>] [--report <path>] [--dashboard] | fault [--campaign <name>] [--seed <n>] [--steps <n>] [--list] [--dry-run] [--json <path>] | qualify [--check] [--json <path>] | release [--check] [--json <path>] | freeze [--check] [--json <path>] | pilot [--check] [--json <path>] | package [--check] [--dry-run] [--json <path>] | closeout [--check] [--json <path>] | golden-gen | gen-check [--workspace <path>] | workplan [status|next|watch|mark-done <week>]>"
         );
     };
     let flags = &args[1..];
@@ -60,6 +61,7 @@ fn run(args: &[String]) -> Result<()> {
         "freeze" => freeze::run(flags),
         "pilot" => pilot::run(flags),
         "package" => packaging::run(flags),
+        "closeout" => closeout::run(flags),
         "golden-gen" => golden::generate(flags),
         "gen-check" => gencheck::run(flags),
         "workplan" => workplan::run(flags),

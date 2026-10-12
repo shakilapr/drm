@@ -29,6 +29,10 @@ Scope: Phase 34 whole-system qualification — requirement traceability, fault i
 | `REQ-QAL-phase34-gate` | whole-system qualification gate: the assembled packet is complete and the phase verdict is PASS | `REQ-QAL-027` |
 | `REQ-QAL-v10-rc` | v1.0 release candidate tagged with the stamped deployment identity and release notes drafted | `REQ-QAL-028` |
 | `REQ-QAL-waiver-discipline` | every red evidence line carries a recorded waiver with rationale and review quorum; no silent or informal waivers | `REQ-QAL-029` |
+| `REQ-QAL-v10-released` | v1.0 release executed: release build across every declared-supported target, packages published per codebase §2.3, deployment identity stamped | `REQ-QAL-030` |
+| `REQ-QAL-post-10-backlog` | post-1.0 backlog groomed: Studio deferred list + extension roadmap recorded | `REQ-QAL-031` |
+| `REQ-QAL-retro-done` | program retrospective complete: outcomes vs waves, risk register final state, metrics history | `REQ-QAL-032` |
+| `REQ-QAL-program-complete` | program close-out gate: v1.0 released + backlog groomed + retrospective complete ⇒ `GATE_STATUS(M24W4) = PASS` | `REQ-QAL-033` |
 
 ## Data Structures
 
@@ -294,6 +298,62 @@ pub struct Waiver { pub line: String, pub rationale: String, pub approvers: Vec<
    waiver ledger with a rationale and the review quorum; no silent passes.
 4. Evidence folds into [m24w3.md](../../gates/m24w3.md); the v1.0 tag is M24W4.
 
+## v1.0 Release & Program Close-Out (M24W4)
+
+`REQ-QAL-030`, `REQ-QAL-031`, `REQ-QAL-032`, `REQ-QAL-033`; the final wave.
+Harness: `cargo xtask closeout` (`xtask/src/closeout.rs`); detail:
+[release-notes.md](../../spec/release-notes.md),
+[post-1.0-backlog.md](../../spec/post-1.0-backlog.md),
+[program-retrospective.md](../../spec/program-retrospective.md). The close-out
+folds the v1.0 release candidate (§Phase 34 Gate) into the shipping release and
+closes the program.
+
+```rust
+pub enum TargetKind { Host, Mcu } // declared-supported release targets
+pub struct ReleaseTarget { pub name: String, pub kind: TargetKind, pub surface: String }
+pub struct ReleaseBuild {
+ pub tag: String,                 // final v1.0 tag
+ pub rc_folded: bool,             // v1.0 release candidate complete (V10_RC)
+ pub targets: Vec<TargetOutcome>, // 3 CI runners + supported MCU set, each surface resolves
+ pub packages: (usize, usize),    // publish set resolved/total (codebase §2.3)
+ pub identity: [u8; 16],          // stamped deployment identity (REQ-CORE-085)
+ pub docs_published: bool,        // release notes + README at v1.0
+}
+pub struct Backlog { pub doc_present: bool, pub studio_deferred: bool, pub extension_roadmap: bool }
+pub struct Retrospective { pub doc_present: bool, pub waves_covered: usize, pub risk_register: bool, pub metrics_history: bool }
+pub struct ProgramCloseout { pub release: ReleaseBuild, pub backlog: Backlog, pub retro: Retrospective }
+```
+
+- **v1.0 release** (`REQ-QAL-030`): the release build covers every
+  declared-supported target — the three CI runners (`ubuntu-x86_64`,
+  `ubuntu-aarch64`, `windows-x86_64`) and the locked MCU set (`h743`/Cortex-M7,
+  `f407`/Cortex-M4F, `mcu-bring-up.md` §1) — each target's build surface
+  resolves; the publish set (the declared bundles, codebase §2.3) resolves; and
+  the deployment identity is stamped (non-trivial fingerprint, `REQ-CORE-085`).
+  A missing target surface, an unresolved package, or an unstamped identity
+  fails `cargo xtask closeout --check`. `V10_RELEASED = 1`.
+- **Post-1.0 backlog** (`REQ-QAL-031`): the groomed backlog records the Studio
+  deferred list and the extension roadmap (each with ≥1 entry); a missing doc or
+  an empty section fails the command. `POST_10_BACKLOG = 1`.
+- **Program retrospective** (`REQ-QAL-032`): the retrospective packet maps
+  outcomes to the eight plan waves, records the risk-register final state, and
+  replays the metrics history; all three legs must be present.
+  `RETRO_DONE = 1`.
+- **Program close-out gate** (`REQ-QAL-033`): `cargo xtask closeout --check`
+  succeeds only when `V10_RELEASED`, `POST_10_BACKLOG`, and `RETRO_DONE` all
+  hold; the verdict is `GATE_STATUS(M24W4) = PASS` and the program is complete.
+
+*Program close-out protocol:*
+
+1. `cargo xtask closeout --check` → release build + publish + identity
+   (`V10_RELEASED = 1`).
+2. Backlog groomed (`POST_10_BACKLOG = 1`); retrospective complete
+   (`RETRO_DONE = 1`).
+3. The close-out folds the M24W3 candidate; a red leg is fixed or waived
+   (`REQ-QAL-029`) — never silently dropped.
+4. Evidence folds into [m24w4.md](../../gates/m24w4.md); `GATE_STATUS(M24W4) =
+   PASS` — **program complete**.
+
 ## Edge Cases & Errors
 
 | Case | Result |
@@ -334,3 +394,7 @@ pub struct Waiver { pub line: String, pub rationale: String, pub approvers: Vec<
 | Phase 34 gate: assembled qualification packet complete (`xtask/src/qualify.rs`, `xtask/src/release.rs`) | `REQ-QAL-027` |
 | v1.0 RC: stamped deployment identity + release notes drafted (`xtask/src/release.rs`) | `REQ-QAL-028` |
 | waiver discipline: red line without rationale/quorum blocks (`xtask/src/release.rs`) | `REQ-QAL-029` |
+| v1.0 release: targets + publish set + stamped identity (`xtask/src/closeout.rs`) | `REQ-QAL-030` |
+| post-1.0 backlog: Studio deferred + extension roadmap groomed (`xtask/src/closeout.rs`) | `REQ-QAL-031` |
+| program retrospective: outcomes vs waves + risk register + metrics history (`xtask/src/closeout.rs`) | `REQ-QAL-032` |
+| program close-out gate: `V10_RELEASED` + `POST_10_BACKLOG` + `RETRO_DONE` ⇒ PASS (`xtask/src/closeout.rs`) | `REQ-QAL-033` |

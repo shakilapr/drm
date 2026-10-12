@@ -11,6 +11,24 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- Week M24 W4 tranche: v1.0 release + program close-out. `cargo xtask closeout`
+  (`xtask/src/closeout.rs`) folds the v1.0 release candidate into the shipping
+  release and closes the program: the release build covers every
+  declared-supported target — the three CI runners (`ubuntu-x86_64`,
+  `ubuntu-aarch64`, `windows-x86_64`) and the locked MCU set (`h743`/Cortex-M7,
+  `f407`/Cortex-M4F) — the publish set (crates + bindings packages per codebase
+  §2.3) resolves, and the deployment identity is stamped (REQ-CORE-085)
+  (`V10_RELEASED = 1`, REQ-QAL-030). The post-1.0 backlog is groomed
+  ([post-1.0-backlog.md](docs/spec/post-1.0-backlog.md); `POST_10_BACKLOG = 1`,
+  REQ-QAL-031) and the program retrospective is complete
+  ([program-retrospective.md](docs/spec/program-retrospective.md); outcomes vs
+  waves, risk-register final state, metrics history; `RETRO_DONE = 1`,
+  REQ-QAL-032). `cargo xtask closeout --check` succeeds only when all three hold,
+  so `GATE_STATUS(M24W4) = PASS` — program complete (REQ-QAL-033). Final release
+  notes, migration notes, and the announcement are in
+  [release-notes.md](docs/spec/release-notes.md); gate evidence
+  ([m24w4.md](docs/gates/m24w4.md)); metrics
+  [metrics-m24.md](docs/metrics/metrics-m24.md).
 - Week M24 W3 tranche: Phase 34 gate + v1.0 release candidate. `cargo xtask
   qualify --check` assembles the whole-system packet — traceability (`I-QAL1`),
   fault/soak (`I-QAL2`), repro (`I-QAL3`), conformance (`I-QAL4`), perf

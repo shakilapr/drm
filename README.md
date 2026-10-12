@@ -1,5 +1,10 @@
 # DRM — Decentralized Robotics Middleware
 
+**Status: v1.0 released.** The API is frozen (`DRM_ABI_VERSION`), the
+whole-system qualification packet is complete, and release bundles ship for
+Linux x86_64, Linux aarch64, Windows x86_64, and the locked MCU targets
+(`h743`, `f407`). See [release notes](docs/spec/release-notes.md).
+
 ## Purpose
 
 DRM is a decentralized, contract-driven data middleware designed for deterministic, high-throughput robotics and computer systems on Linux and Windows.

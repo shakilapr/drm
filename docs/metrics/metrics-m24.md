@@ -175,3 +175,55 @@ cargo xtask check-layering && cargo xtask audit-traceability
 
 REQ: REQ-QAL-027, REQ-QAL-028, REQ-QAL-029, REQ-QAL-018, REQ-QAL-006,
 REQ-CORE-085.
+
+## M24W4 — v1.0 Release + Program Close-Out
+
+| Variable | Target | Measured |
+|---|---|---|
+| `V10_RELEASED` | v1.0 tagged + published (packages, docs, announcement) | 1 — `cargo xtask closeout --check`; [m24w4.md](../gates/m24w4.md) |
+| `POST_10_BACKLOG` | post-1.0 backlog groomed (Studio deferred list + extension roadmap) | 1 — [post-1.0-backlog.md](../spec/post-1.0-backlog.md) |
+| `RETRO_DONE` | program retrospective complete | 1 — [program-retrospective.md](../spec/program-retrospective.md) |
+| `EFFORT_DAYS_ACTUAL` | 5 per engineer | 5 |
+
+Deliverables:
+
+- **v1.0 release** ([closeout.rs](../../xtask/src/closeout.rs) `ReleaseBuild`):
+  the release build covers the three CI runners (`ubuntu-x86_64`,
+  `ubuntu-aarch64`, `windows-x86_64`) and the locked MCU set
+  (`h743`/Cortex-M7, `f407`/Cortex-M4F), the publish set (the declared bundles,
+  codebase §2.3) resolves, and the deployment identity is stamped
+  (`REQ-CORE-085`). `V10_RELEASED = 1`, `REQ-QAL-030`. Release notes:
+  [release-notes.md](../spec/release-notes.md).
+- **Post-1.0 backlog** ([post-1.0-backlog.md](../spec/post-1.0-backlog.md)):
+  the Studio deferred list and the extension roadmap, each with entries;
+  `POST_10_BACKLOG = 1`, `REQ-QAL-031`.
+- **Program retrospective**
+  ([program-retrospective.md](../spec/program-retrospective.md)): outcomes vs
+  the eight plan waves, the risk-register final state, and the metrics history;
+  `RETRO_DONE = 1`, `REQ-QAL-032`.
+- **Program close-out gate** ([closeout.rs](../../xtask/src/closeout.rs)):
+  `--check` succeeds only when all three variables hold;
+  `GATE_STATUS(M24W4) = PASS` — program complete, `REQ-QAL-033`.
+- **Gate evidence** ([m24w4.md](../gates/m24w4.md)): variables ⇄ evidence and
+  the close-out fold.
+
+### Weekly gate checklist (chaired by E3, Friday)
+
+- [x] `V10_RELEASED = 1`; `POST_10_BACKLOG = 1`; `RETRO_DONE = 1`
+- [x] Variables measured; PR hygiene (no plan edits)
+- **`GATE_STATUS(M24W4) = PASS` — PROGRAM COMPLETE**
+
+### How to reproduce
+
+```text
+cargo xtask closeout --check --json target/closeout-report.json
+cargo xtask release --check --json target/release-candidate.json
+cargo xtask qualify --check --json target/qualification-packet.json
+cargo xtask test
+cargo xtask fmt --check && cargo xtask lint
+cargo clippy --workspace --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+cargo xtask check-layering && cargo xtask audit-traceability
+```
+
+REQ: REQ-QAL-030, REQ-QAL-031, REQ-QAL-032, REQ-QAL-033, REQ-QAL-028,
+REQ-QAL-027, REQ-QAL-006, REQ-CORE-085.
