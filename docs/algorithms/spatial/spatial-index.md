@@ -237,8 +237,31 @@ fn swap_subtree(&mut self, slot: SubtreeSlotId, new_geom: &StaticGeom) -> Result
 | `spatial_numeric_grid` (±ULP boundaries, NaN, huge values) | I-X14 |
 | `spatial_proximity_union` (grid ∪ BVH two-source union) | I-X5/I-X6 |
 | `spatial_proximity_complete` (10k random scenes vs brute force, grid+BVH union) | I-X6: 0 misses |
-| perf: candidate factor vs brute force | documented |
+| `proximity_false_positive_factor` (adversarial dense scene, factor reported) | I-X6: superset, 0 misses |
+| perf: candidate factor vs brute force | measured — 1.810 over 10k random scenes, 14.934 on the adversarial dense scene; a superset over-approximates by design (`I-X6`), so the factor is documented, never gated |
+| merge strategy (EXP, M22W1-E1-T2) | index-owned pre-merge union chosen — see §Proximity Merge Strategy |
 | code audit | I-X10 |
+
+### Proximity Merge Strategy (EXP, M22W1-E1-T2)
+
+Three candidates were compared: **grid-only**, **caller-side union**, and the
+**index-owned pre-merge union** now implemented. The index-owned union is
+chosen.
+
+| Strategy | Completeness (`I-X6`) | Cost | Verdict |
+|---|---|---|---|
+| grid-only | **fails** — the static BVH source is dropped, so static-overlap hits are missed by construction | lowest | rejected |
+| caller-side union (caller queries grid and BVH separately, then merges) | passes, but only if every call site re-implements the frame conversion and the epoch handshake correctly | pushes `I-X5`/`I-X11` correctness onto each caller | rejected |
+| index-owned pre-merge (`union_nearby`) | passes — both sources merge into one `CandidateSet` before it leaves the index | one frame check + one epoch re-read, inside the index | **chosen** |
+
+Rationale: completeness and coherence are invariants of the index, not of its
+callers. `nearby`/`region` merge the grid's superset cells with the
+static AABB-overlap hits into the caller's scratch and deduplicate there, so a
+caller can neither forget a source (grid-only's failure) nor corrupt the
+`I-X11` epoch handshake by interleaving its own queries (the caller-side risk).
+The measured factors above are the resulting over-approximation; they are
+reported, not gated, because a deliberate superset legitimately has false
+positives (`I-X6`).
 
 ## Implementation Status (M21W1)
 
