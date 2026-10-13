@@ -55,30 +55,49 @@ within budget but the closest to it (71 %).
 
 ## Findings (defects the exercise surfaced)
 
-1. **Generated Rust does not compile for bounded strings/arrays > 32 bytes.**
-   `tests/ros2_compat/translated/.drm/gen/rust/std_msgs/string/target.rs` emits
-   `#[derive(Clone, Debug, Default, PartialEq)]` over `pub data: [u8; 256]`, and
-   `[u8; 256]` does not implement `Default`:
-   `error[E0277]: the trait bound [u8; 256]: Default is not satisfied`. Every
-   bounded string and every `bytes[<=N]`/fixed array above 32 bytes produces this,
-   i.e. most string-bearing topics. The fake-input round-trip harness
-   (`cache/scratch/ros2_roundtrip/main.rs`) fails to compile for this reason.
-2. **No gate compiles generated code, so (1) is invisible.**
-   `cargo xtask gen-check` reports `clean (0 topics, 0 nodes)` — it neither sees
-   these topics nor type-checks the rendered output; it compares rendered text.
-3. **Two node directories with the same name silently drop one node.**
-   `demos/nodes/talker` and `std_msgs/nodes/talker` coexist (different manifest
-   names, `talker` and `chatter_src`); `drm info` listed only two of the three
-   nodes and `drm build` failed with
-   `V-SW-1: topic demos/chatter is consumed by [listener] but has no publisher`.
-   Renaming the directory to `typed_pub` fixed it. No diagnostic names the
-   collision.
-4. **`cargo xtask fmt --check` is red on the committed tree when the secondary
-   formatters are installed.** With `prettier` on `PATH` it fails with
-   `Code style issues found in 225 files`. The gate is only green because
-   `ruff`/`taplo`/`markdownlint` are absent here (`xtask fmt: skip … (not
-   installed)`); a write-mode `cargo xtask fmt` rewrote 226 tracked files
-   (markdown reflow), which was reverted.
+Status as of the fix tranche; each item names its gate.
+
+1. **Generated Rust did not compile for bounded strings/arrays > 32 bytes.**
+   `#[derive(Clone, Debug, Default, PartialEq)]` over `pub data: [u8; 256]`
+   failed with `error[E0277]: the trait bound [u8; 256]: Default is not
+   satisfied` for every string-bearing topic, because `std` implements
+   `Default` only for arrays of 0..=32 elements (rust-lang/rust#61415; the
+   lifting PR was rejected). **Fixed** — the renderer emits an explicit
+   `Default` impl with zero literals per field. Gate:
+   `codegen_all::gen_rust_bounded_topic_compiles_and_round_trips` (the previous
+   compile tests all used `a: u8, b: u64`, which has no array field, so the
+   defect was invisible). The harness now round-trips **12/12** topics.
+2. **`cargo xtask gen-check` still does not compile generated code** — it
+   compares rendered text (`regen_diff`) and, run from a root without
+   `packages/`, reports `clean (0 topics, 0 nodes)`. The compile regression is
+   now covered by (1)'s test rather than by gen-check itself. **Partly fixed.**
+3. **Two node directories with the same name silently dropped one node.**
+   `demos/nodes/talker` and `std_msgs/nodes/talker` collapsed in the stem map
+   before the identity check; `drm info` listed two of three nodes and the build
+   failed with a misleading `V-SW-1 … has no publisher`. **Fixed** — the
+   collision is now a `ModelError::DuplicateNodeDir` naming the shared
+   directory. Gate: `model_nodes::nodes_duplicate_directory_rejected`, plus an
+   end-to-end `drm build` that reports the duplicate instead of failing on the
+   downstream symptom.
+4. **`cargo xtask fmt --check` was red on the committed tree with the secondary
+   formatters installed** (`Code style issues found in 225 files`), and a
+   write-mode `cargo xtask fmt` would have rewritten all 40 byte-exact
+   `tests/fixtures/golden` JSON vectors and reflowed the hand-wrapped markdown
+   tree. **Fixed** — `.prettierignore` scopes prettier away from the goldens,
+   the markdown tree and the separate `apps/studio` project (228 → 1 file), and
+   the single real violation (a generated TS union arm on one over-long line)
+   is emitted wrapped. `cargo xtask fmt --check` is now green *with* prettier
+   present, and gen-check stays byte-clean.
+5. **Documentation drift on generated artifact paths.** Both the bindings doc
+   and `architecture.md` named `.drm/gen/rust/…/mod.rs` and
+   `.drm/gen/cpp/types/…`; the renderer writes `…/target.rs` and
+   `…/<pkg>/<topic>/target.hpp`. **Fixed.**
+6. **A renderer change does not invalidate existing generated trees.** After
+   fixing (1), `drm build` reported `64 generated (0 rendered)` and left the
+   stale broken modules in place; only deleting `.drm/gen` forced a re-render.
+   The invalidation fingerprint covers the schema and layout, not the renderer
+   version. `gen-check` catches it (fresh render vs on-disk tree), but a plain
+   `drm build` does not. **Open.**
 
 ## Not covered
 

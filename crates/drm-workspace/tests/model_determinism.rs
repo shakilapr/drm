@@ -150,6 +150,7 @@ fn model_conflicts() {
                 }
                 other @ (drm_workspace::model::ModelError::DuplicateTopic { .. }
                 | drm_workspace::model::ModelError::DuplicateNode { .. }
+                | drm_workspace::model::ModelError::DuplicateNodeDir { .. }
                 | drm_workspace::model::ModelError::NodeManifest { .. }
                 | drm_workspace::model::ModelError::UnknownTopic { .. }
                 | drm_workspace::model::ModelError::Topology { .. }
