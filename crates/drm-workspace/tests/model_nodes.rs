@@ -108,6 +108,22 @@ fn nodes_duplicate_identity_rejected() {
     );
 }
 
+/// REQ: REQ-TOOL-045 — two node directories sharing a name are reported, not
+/// silently collapsed: discovery keys nodes by directory name, so the second
+/// manifest used to overwrite the first before any identity check ran.
+#[test]
+fn nodes_duplicate_directory_rejected() {
+    let a = manifest("alpha", &[], &[]);
+    let b = manifest("beta", &[], &[]);
+    let t = tree_with(&[("talker", a), ("talker", b)]);
+    let errs = fixture_errs("duplicate node directory", build(&t));
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e, ModelError::DuplicateNodeDir { stem } if stem == "talker")),
+        "errors: {errs:?}"
+    );
+}
+
 /// REQ: REQ-TOOL-047 — manifest surface is closed: unknown keys, empty
 /// names, and wrong-typed entries are rejected with the stem named.
 #[test]

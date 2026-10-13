@@ -137,6 +137,13 @@ pub enum ModelError {
         /// Second defining file stem.
         second: String,
     },
+    /// Two node directories share a name. Discovery keys nodes by directory
+    /// name, so the collision would otherwise silently drop one node's
+    /// manifest before any identity check runs.
+    DuplicateNodeDir {
+        /// The shared directory name.
+        stem: String,
+    },
     /// Topic file failed schema parsing or layout derivation; carries every
     /// diagnostic.
     Parse {
@@ -206,6 +213,12 @@ impl fmt::Display for ModelError {
                 second,
             } => {
                 write!(f, "duplicate node `{node}` in `{first}` and `{second}`")
+            }
+            Self::DuplicateNodeDir { stem } => {
+                write!(
+                    f,
+                    "duplicate node directory `{stem}`: node directories are unique by name across packages"
+                )
             }
             Self::Parse { topic, diagnostics } => {
                 write!(f, "topic `{topic}`: {} defect(s)", diagnostics.len())
@@ -349,7 +362,12 @@ fn build_nodes(
 ) {
     let mut stems: BTreeMap<&str, &Vec<u8>> = BTreeMap::new();
     for (stem, src) in sources {
-        stems.insert(stem.as_str(), src);
+        // A repeated directory name would otherwise overwrite the earlier
+        // manifest here, silently dropping that node before the identity check
+        // below can see it. REQ: REQ-TOOL-045.
+        if stems.insert(stem.as_str(), src).is_some() {
+            errs.push(ModelError::DuplicateNodeDir { stem: stem.clone() });
+        }
     }
     let mut declared: BTreeMap<NodeName, &str> = BTreeMap::new();
     for (stem, src) in &stems {
