@@ -154,7 +154,12 @@ export type StudioResponse =
   | HelloAck
   | ({ result: "snapshot" } & WorkspaceSnapshot)
   | ({ result: "verify" } & VerifySummary)
-  | { result: "mutation_result"; revision: number; render: string; changeset: string }
+  | {
+      result: "mutation_result";
+      revision: number;
+      render: string;
+      changeset: string;
+    }
   | { result: "conflict"; revision: number }
   | { result: "conflict_external_changed"; changeset: string }
   | { result: "build_accepted"; revision: number }

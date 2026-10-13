@@ -6,7 +6,7 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 
 | Command | Purpose |
 |---|---|
-| `xtask fmt` | rustfmt, clang-format, ruff, prettier, taplo, markdownlint (`--check` in CI) |
+| `xtask fmt` | rustfmt, clang-format, ruff, prettier, taplo, markdownlint (`--check` in CI). Prettier's scope is set by [.prettierignore](../.prettierignore): the byte-exact `tests/fixtures/` vectors, the hand-wrapped markdown tree, and the separate `apps/studio` project are excluded — prettier would rewrite the goldens and reflow the docs |
 | `xtask lint` | clippy `-D warnings`, mypy, eslint, yamllint, markdownlint |
 | `xtask test` | unit + property + doc tests, all languages |
 | `xtask check-layering` | crate dependency-layer verification (codebase §2.2 R6) |

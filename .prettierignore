@@ -1,0 +1,16 @@
+# Prettier scope for `cargo xtask fmt` (xtask/src/main.rs `fmt`).
+#
+# Byte-exact reference vectors. Prettier rewrites these JSON files, which
+# breaks the byte-for-byte golden comparisons (tests/fixtures/golden/**,
+# tests/fixtures/spatial/query_vectors.json).
+tests/fixtures/
+
+# Hand-maintained prose, wrapped at a fixed width. Prettier's markdown
+# formatter rewrites list continuation indentation across the whole docs tree
+# and work-plan.md (observed: CHANGELOG.md lost the continuation indent of
+# every wrapped bullet), so the markdown tree is excluded deliberately.
+*.md
+
+# Separate pnpm project with its own toolchain (apps/studio/package.json);
+# the root prettier invocation has no config for it.
+apps/studio/
