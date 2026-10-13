@@ -992,6 +992,16 @@ const fn rust_type(p: Prim) -> &'static str {
     }
 }
 
+/// Zero literal for a primitive in a generated `Default` impl: floats need a
+/// float literal (`0` does not coerce to `f64`), everything else is `0`.
+/// REQ: REQ-TOOL-029.
+const fn rust_zero(p: Prim) -> &'static str {
+    match p {
+        Prim::F32 | Prim::F64 => "0.0",
+        _ => "0",
+    }
+}
+
 /// Emits the Rust endian/geometry helper functions for a topic module.
 /// REQ: REQ-TOOL-042.
 #[allow(clippy::too_many_lines)]
@@ -1274,7 +1284,7 @@ fn topic_rust(topic: &str, entry: &TopicEntry) -> String {
     let _ = writeln!(s, "pub const SAMPLE_MAX: usize = {max};");
     let _ = writeln!(s, "const HEADER_END: usize = {header_end};");
     s.push('\n');
-    let _ = writeln!(s, "#[derive(Clone, Debug, Default, PartialEq)]");
+    let _ = writeln!(s, "#[derive(Clone, Debug, PartialEq)]");
     let _ = writeln!(s, "pub struct {ty} {{");
     for field in &entry.schema.fields {
         match &field.ty {
@@ -1303,6 +1313,49 @@ fn topic_rust(topic: &str, entry: &TopicEntry) -> String {
             }
         }
     }
+    let _ = writeln!(s, "}}");
+    // `Default` is written out, never derived: `std` implements it only for
+    // arrays of 0..=32 elements, so a derived `Default` fails to compile for
+    // every bounded string/bytes/fixed array above 32 bytes
+    // (rust-lang/rust#61415; the lifting PR was rejected). REQ: REQ-TOOL-029.
+    let _ = writeln!(s, "impl Default for {ty} {{");
+    let _ = writeln!(s, "    fn default() -> Self {{");
+    let _ = writeln!(s, "        Self {{");
+    for field in &entry.schema.fields {
+        match &field.ty {
+            Type::Prim(prim) => {
+                let _ = writeln!(s, "            {}: {},", field.name, rust_zero(*prim));
+            }
+            Type::Enum { .. } => {
+                let _ = writeln!(s, "            {}: 0,", field.name);
+            }
+            Type::FixedArray { elem, n } => {
+                let _ = writeln!(
+                    s,
+                    "            {}: [{}; {}],",
+                    field.name,
+                    rust_zero(*elem),
+                    n
+                );
+            }
+            Type::String { max } | Type::Bytes { max } => {
+                let _ = writeln!(s, "            {}_len: 0,", field.name);
+                let _ = writeln!(s, "            {}: [0; {}],", field.name, max);
+            }
+            Type::Bounded { elem, max } => {
+                let _ = writeln!(s, "            {}_len: 0,", field.name);
+                let _ = writeln!(
+                    s,
+                    "            {}: [{}; {}],",
+                    field.name,
+                    rust_zero(*elem),
+                    max
+                );
+            }
+        }
+    }
+    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
     s.push('\n');
     emit_helpers_rust(&mut s);

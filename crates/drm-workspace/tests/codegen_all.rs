@@ -275,6 +275,68 @@ mod codegen_all {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// REQ: REQ-TOOL-024, REQ-TOOL-029, REQ-BIND-011 — the generated Rust module
+    /// for a topic carrying bounded strings/bytes and arrays above 32 bytes must
+    /// compile and round-trip. Regression guard for the derived-`Default`
+    /// defect: `std` implements `Default` only for arrays of 0..=32 elements, so
+    /// a derived impl fails to compile for `[u8; 256]`
+    /// (rust-lang/rust#61415; the lifting PR was rejected).
+    #[test]
+    fn gen_rust_bounded_topic_compiles_and_round_trips() {
+        let t = tree(&[(
+            "wide",
+            "name: string[64]\nblob: bytes[<=256]\npixels: u8[64]\nratio: f64\ncount: u32\n",
+        )]);
+        let root = generate(&t, "rust-wide");
+        let driver = "\
+#[path = \"control/wide/target.rs\"]
+mod wide;
+
+fn main() {
+    let mut v = wide::ControlWide::default();
+    let text = b\"wide-topic\";
+    v.name_len = text.len() as u32;
+    v.name[..text.len()].copy_from_slice(text);
+    v.blob_len = 4;
+    v.blob[..4].copy_from_slice(&[1, 2, 3, 4]);
+    v.pixels[..2].copy_from_slice(&[0xAB, 0xCD]);
+    v.ratio = 0.5;
+    v.count = 7;
+
+    let mut buf = vec![0u8; wide::SAMPLE_MAX];
+    let n = wide::encode(&v, &mut buf).expect(\"encode\");
+    let back = wide::decode(&buf[..n]).expect(\"decode\");
+    assert_eq!(back, v);
+    assert_eq!(back.name_len, 10);
+    assert_eq!(back.blob_len, 4);
+    assert_eq!(back.pixels[0], 0xAB);
+    assert_eq!(back.ratio, 0.5);
+    assert_eq!(back.count, 7);
+}
+";
+        let driver_path = root.join(".drm/gen/rust/driver_wide.rs");
+        fs::write(&driver_path, driver).unwrap_or_else(|e| unreachable!("write driver: {e}"));
+        if !tool_found("rustc") {
+            eprintln!("rustc not installed; skipping Rust compile assertion");
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        let exe = root.join("driver_rust_wide");
+        let status = Command::new("rustc")
+            .args(["--edition", "2024", "--crate-type", "bin"])
+            .arg(&driver_path)
+            .arg("-o")
+            .arg(&exe)
+            .status()
+            .unwrap_or_else(|e| unreachable!("rustc spawn: {e}"));
+        assert!(
+            status.success(),
+            "rustc must compile the generated bounded-topic module"
+        );
+        assert!(run_exe(&exe), "bounded topic encode/decode round-trip");
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// REQ: REQ-TOOL-024, REQ-TOOL-029, REQ-BIND-011 — the generated Python topic
     /// module imports and round-trips the canonical golden bytes.
     #[test]

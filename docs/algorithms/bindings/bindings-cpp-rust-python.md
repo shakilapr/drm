@@ -105,11 +105,17 @@ fn latest(&self) -> PyResult<Option<Copy>> {
 *Generated two-layer output:*
 
 ```text
-.drm/gen/cpp/types/control/target.hpp   # schema, byte-backed accessors, owned type, encode/decode
-.drm/gen/cpp/nodes/controller.hpp       # namespace drm::node::controller — only manifest topics
-.drm/gen/rust/control/target/mod.rs     # drm_generated::types::control::Target
-.drm/gen/rust/nodes/controller.rs       # pub mod node_controller — capability facade
+.drm/gen/cpp/control/target/target.hpp   # schema, byte-backed accessors, owned type, encode/decode
+.drm/gen/cpp/nodes/controller.hpp         # namespace drm::node::controller — only manifest topics
+.drm/gen/rust/control/target/target.rs    # `pub struct ControlTarget` + `encode`/`decode`/`SAMPLE_MAX`
+.drm/gen/rust/nodes/controller.rs         # pub mod node_controller — capability facade
 ```
+
+The Rust topic module derives `Clone`, `Debug` and `PartialEq` and implements `Default`
+**explicitly, never by derive**: `std` implements `Default` only for arrays of 0..=32
+elements, so a derived impl cannot compile for the `[u8; N]` fields that a `string[N]`,
+`bytes[<=N]` or fixed-array declaration produces (rust-lang/rust#61415). Guarded by
+`codegen_all::gen_rust_bounded_topic_compiles_and_round_trips`.
 
 The types layer is shared by every node using the topic (codegen-invalidation.md); the facade layer is node-scoped and sole owner of endpoint operations. The raw C ABI stays below both; open-time authorization still rejects undeclared topics — static languages get the restriction at compile time, dynamic languages at first use, and neither performs per-message checks.
 

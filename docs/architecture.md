@@ -655,7 +655,7 @@ Generated bindings use stable, predictable, topic- and language-based directory 
 ```text
 .drm/gen/c/control/target/target.h
 .drm/gen/cpp/control/target/target.hpp
-.drm/gen/rust/control/target/mod.rs
+.drm/gen/rust/control/target/target.rs
 .drm/gen/python/control/target/target.py
 ```
 
