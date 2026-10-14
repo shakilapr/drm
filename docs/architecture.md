@@ -152,6 +152,19 @@ Decentralized shared-memory middlewares often fail when attempting to manage com
 - **Session-Scoped Persistence**:
   Shared-memory persistence is strictly an **opportunistic optimization** for process crash/restart recovery within an operating system session; correctness never depends on it. DRM does not guarantee shared-memory persistence across machine reboots, and platform lifetime rules differ: on Linux the POSIX name survives while mapped even if the publisher exits, while on Windows a pagefile-backed section ceases to exist when its last handle closes. If the last holder exits on a platform where the segment dies, a restarted publisher simply recreates it fresh under the same epoch rules — stale-history availability is a bonus, never a contract. Following a system reboot, publishers recreate their required segments fresh.
 
+### Attached-Channel Data Operations
+
+Programs that attach to a segment a different process created publish and read
+through the attached data path: the reserved CCB, ring, consumer-record, slot
+generation, and payload regions of the segment are addressed through the
+attachment's validated offsets. Publisher authority stays singular per topic
+(one writer; consumers are read-only), the transient-borrow and hazard rules
+are unchanged, and a restart epoch bump invalidates pre-restart cursors. The
+normative algorithm and its test matrix live in
+[attached-data-path.md](algorithms/runtime/attached-data-path.md); the rationale
+is ADR [0007](adr/0007-cross-process-channel-data-operations.md)
+(`REQ-CORE-102`…`REQ-CORE-107`).
+
 ## Memory Architecture: Fixed Channels and Structural Isolation
 
 DRM eliminates runtime memory allocators from the data path by exploiting its static knowledge of the robot: topic shapes, maximum payload bounds, consumer borrow rights, queue depths, and hardware placement are known before deployment.
