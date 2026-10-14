@@ -45,6 +45,8 @@
 // REQ: REQ-BIND-004, REQ-BIND-007.
 #![allow(non_camel_case_types)]
 
+pub mod attached;
+
 use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_void};
 use core::ptr;

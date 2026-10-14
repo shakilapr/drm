@@ -95,6 +95,9 @@ The copy-form data path is implemented in `crates/drm-core/src/channel/attached.
 and overflow helpers the in-process `Channel` uses; `HistoryRing::from_mapped`
 views a segment's ring reservation, so one algorithm serves both forms.
 Outstanding in this document: the zero-copy borrow form, consumer hazard
-registration for attached readers, attached required-acknowledgement floors (a
-`reject` channel currently refuses attached publishes), and the C ABI surface
-(`REQ-CORE-107`).
+registration for attached readers, and attached required-acknowledgement floors
+(a `reject` channel currently refuses attached publishes).
+
+The C ABI surface for this path (`drm_attached_open` / `_close` / `_publish` /
+`_read_latest` / `_read_next`) is implemented and covered by
+`crates/drm-ffi/tests/attached_abi.rs` (`REQ-CORE-107`).

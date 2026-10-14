@@ -395,3 +395,26 @@ form is `xtask/src/inventory.rs`; the reviewable form is
 | `abi_spike` (gcc/clang/clang-cl, c99/c11) | compiles clean |
 | `app_log_nonblocking` (operation-count + drop counter) | I-B9/REQ-BIND-023: no wait, no data-plane access |
 | `abi_compat` (v0 golden suite × current exports) | I-A8 one-way |
+
+## Attached (cross-process shared-memory) data path
+
+Append-only addition (`REQ-CORE-107`, ADR 0007,
+[attached-data-path.md](../runtime/attached-data-path.md)). Unlike the endpoint
+group above — whose bodies are backed in-process by a `drm-core` channel — these
+exports create or attach a **real POSIX shared-memory segment**, so a second
+process exchanges samples with the first.
+
+| Export | Behaviour |
+|---|---|
+| `drm_attached_open` | `DRM_ATTACHED_PUBLISHER` acquires the segment's single-writer authority (a live second publisher ⇒ `DRM_ERR_PERMISSION`, I-AT2); `DRM_ATTACHED_CONSUMER` attaches read-only and never creates, with a bounded wait via `timeout_ms` |
+| `drm_attached_close` | Releases authority / detaches; a null handle ⇒ `DRM_ERR_INVALID_ARG` (double close is caller UB, I-A2) |
+| `drm_attached_publish` | Copy publish; `DRM_ERR_BUSY` under a concurrent publish, `DRM_ERR_POOL_EXHAUSTED` when the pool is spent, sequence returned via `out_seq` |
+| `drm_attached_read_latest` | Newest committed sample into caller memory; `DRM_ERR_NO_SAMPLE` when none is committed, `DRM_ERR_RETRY` when the bounded attempt budget is exhausted |
+| `drm_attached_read_next` | Next sequence after the consumer's cursor; `DRM_ERR_GAP` carries the missed count when the reader fell behind the retained window |
+
+Both sides must agree on `segment_name`, `topic_name`, `lock_dir`, the schema and
+layout hashes, `topic_handle`, `sample_max`, `depth`, `pool`, and
+`overflow_policy`; slot alignment is fixed at 8 for these exports. Copy form
+only: no borrowed sample crosses the attachment and external I/O must copy first
+(AGENTS.md #5). Test: `attached_abi_publish_then_read`
+(`crates/drm-ffi/tests/attached_abi.rs`).
