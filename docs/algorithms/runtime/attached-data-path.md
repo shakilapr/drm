@@ -78,12 +78,23 @@ fn release(&self, slot: &mut HazardSlot) -> Result<(), Status>;
 
 ## Test Matrix
 
-| Test | Invariant | Requirement |
-|---|---|---|
-| `attached_publish_read_roundtrip` (two processes, N samples) | I-AT1, I-AT6 | `REQ-CORE-102`, `REQ-CORE-103` |
-| `attached_second_publisher_refused` | I-AT2 | `REQ-CORE-104` |
-| `attached_consumer_stalled_reclaimed` | I-AT3 | `REQ-CORE-103` |
-| `attached_borrow_copy_only` | I-AT4 | `REQ-CORE-103` |
-| `attached_epoch_restart_observed` | I-AT5 | `REQ-CORE-106` |
-| `attached_equivalence_vs_channel` | I-AT6 | `REQ-CORE-105` |
-| `attached_abi_append_only` | — | `REQ-CORE-107` |
+| Test | Invariant | Requirement | Status |
+|---|---|---|---|
+| `attached_publish_read_roundtrip` (two processes, N samples) | I-AT1, I-AT6 | `REQ-CORE-102`, `REQ-CORE-103` | implemented |
+| `attached_second_publisher_refused` (`perf-matrix` cross-process leg) | I-AT2 | `REQ-CORE-104` | covered by the lifecycle harness |
+| `attached_consumer_stalled_reclaimed` | I-AT3 | `REQ-CORE-103` | pending |
+| `attached_borrow_copy_only` | I-AT4 | `REQ-CORE-103` | pending |
+| `attached_epoch_restart_observed` | I-AT5 | `REQ-CORE-106` | pending |
+| `attached_equivalence_vs_channel` | I-AT6 | `REQ-CORE-105` | pending |
+| `attached_abi_append_only` | — | `REQ-CORE-107` | pending |
+
+## Implementation Status
+
+The copy-form data path is implemented in `crates/drm-core/src/channel/attached.rs`
+(`AttachedChannel::publish` / `read_latest` / `read_next`), reusing the ring, pool,
+and overflow helpers the in-process `Channel` uses; `HistoryRing::from_mapped`
+views a segment's ring reservation, so one algorithm serves both forms.
+Outstanding in this document: the zero-copy borrow form, consumer hazard
+registration for attached readers, attached required-acknowledgement floors (a
+`reject` channel currently refuses attached publishes), and the C ABI surface
+(`REQ-CORE-107`).

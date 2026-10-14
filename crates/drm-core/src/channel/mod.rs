@@ -5,6 +5,7 @@
 //! REQ-CORE-039/040/060/059 (overflow), REQ-CORE-011/012/013/028/029/096/097/003
 //! (delivery), REQ-CORE-058/056/057/095/023/021 (reclamation).
 
+pub mod attached;
 pub mod ccb;
 pub mod freshness;
 pub mod lifecycle;

@@ -7,6 +7,8 @@
 use std::mem::{align_of, size_of};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use std::ptr::NonNull;
+
 use crate::channel::ccb::ChannelControlBlock;
 use drm_types::Status;
 
@@ -79,8 +81,61 @@ impl ReadOrder {
 /// Circular history ring of depth R over a fixed cell array.
 /// REQ: REQ-CORE-066.
 pub struct HistoryRing {
-    entries: Box<[RingCell]>,
+    cells: RingCells,
     r: u64,
+}
+
+/// Ring storage: activation-owned cells, or a view over an attached segment's
+/// ring reservation
+/// ([attached-data-path.md](../../../../docs/algorithms/runtime/attached-data-path.md)
+/// I-AT1/I-AT6). Both forms expose the same `RingCell` array, and every
+/// mutation goes through the cells' own atomics, so the algorithm is shared.
+enum RingCells {
+    /// Activation-time owned allocation (control plane only).
+    Owned(Box<[RingCell]>),
+    /// Borrowed view over a validated attachment region; never freed here.
+    Mapped {
+        /// First cell of the reservation.
+        ptr: NonNull<RingCell>,
+        /// Cell count (= ring depth).
+        depth: usize,
+    },
+}
+
+// SAFETY: every `RingCell` is a pair of atomic banks, so concurrent access is
+// synchronized by the cells themselves rather than by Rust aliasing rules — the
+// same contract the activation-owned form already relied on (`Box<[RingCell]>`
+// is `Send + Sync` because all of its fields are atomics). The mapped variant
+// additionally requires the attachment to outlive the ring value, which
+// `from_mapped` documents as a caller invariant.
+unsafe impl Send for RingCells {}
+// SAFETY: see the `Send` impl above.
+unsafe impl Sync for RingCells {}
+
+impl RingCells {
+    /// Cell `i`; callers hold the ring's own index bound.
+    fn cell(&self, i: usize) -> &RingCell {
+        match self {
+            Self::Owned(cells) => &cells[i],
+            // SAFETY: `from_mapped` received a region of `depth` `RingCell`s
+            // inside a validated attachment, and `i` is the ring's own
+            // `cell_index` bound (< depth).
+            Self::Mapped { ptr, .. } => unsafe { &*ptr.as_ptr().add(i) },
+        }
+    }
+
+    /// Every cell, in index order.
+    fn iter(&self) -> impl Iterator<Item = &RingCell> {
+        (0..self.len()).map(|i| self.cell(i))
+    }
+
+    /// Cell count.
+    fn len(&self) -> usize {
+        match self {
+            Self::Owned(cells) => cells.len(),
+            Self::Mapped { depth, .. } => *depth,
+        }
+    }
 }
 
 impl HistoryRing {
@@ -97,13 +152,37 @@ impl HistoryRing {
             .map(|_| RingCell::zeroed())
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        Ok(Self { entries, r })
+        Ok(Self {
+            cells: RingCells::Owned(entries),
+            r,
+        })
     }
 
     /// Depth R.
     #[must_use]
     pub fn depth(&self) -> u64 {
         self.r
+    }
+
+    /// Views an attached segment's ring reservation as the history ring
+    /// ([attached-data-path.md](../../../../docs/algorithms/runtime/attached-data-path.md)
+    /// I-AT1/I-AT6): `ptr` addresses `depth` `RingCell`s inside an
+    /// already-validated attachment, which must outlive the returned value.
+    /// Mutations go through the cells' own atomics, so the algorithm is shared
+    /// with the activation-owned form.
+    /// REQ: REQ-CORE-102, REQ-CORE-103.
+    ///
+    /// # Errors
+    /// [`Status::InvalidConfig`] when `depth` is 0.
+    pub fn from_mapped(ptr: NonNull<RingCell>, depth: usize) -> Result<Self, Status> {
+        if depth == 0 {
+            return Err(Status::InvalidConfig);
+        }
+        let r = u64::try_from(depth).map_err(|_| Status::InvalidConfig)?;
+        Ok(Self {
+            cells: RingCells::Mapped { ptr, depth },
+            r,
+        })
     }
 
     /// Cell index for sequence `s` (total: depth is bounded by `usize::MAX`
@@ -141,7 +220,7 @@ impl HistoryRing {
     /// [`Status::InvalidData`] on odd (writer-active) stamp;
     /// [`Status::RingStampExhausted`] when the stamp space is exhausted.
     pub fn preflight_commit(&self, s: u64) -> Result<u64, Status> {
-        let cell = &self.entries[Self::cell_index(self.r, s)];
+        let cell = self.cells.cell(Self::cell_index(self.r, s));
         let stable = cell.banks[Self::bank_index(self.r, s)]
             .stamp
             .load(Ordering::Relaxed);
@@ -156,7 +235,7 @@ impl HistoryRing {
     /// REQ: REQ-CORE-065.
     pub fn commit(&self, s: u64, slot: u32, generation: u64, stable: u64) {
         let i = Self::cell_index(self.r, s);
-        let bank = &self.entries[i].banks[Self::bank_index(self.r, s)];
+        let bank = &self.cells.cell(i).banks[Self::bank_index(self.r, s)];
         bank.stamp.store(stable + 1, Ordering::SeqCst);
         bank.sequence.store(s, Ordering::Relaxed);
         bank.slot.store(slot, Ordering::Relaxed);
@@ -208,7 +287,7 @@ impl HistoryRing {
         if s < ws.saturating_sub(self.r) {
             return Err(LookupErr::AgedOut);
         }
-        let cell = &self.entries[Self::cell_index(self.r, s)];
+        let cell = self.cells.cell(Self::cell_index(self.r, s));
         let bank = &cell.banks[Self::bank_index(self.r, s)];
         let e = Self::read_bank(bank, ReadOrder).ok_or(LookupErr::AgedOut)?;
         if e.sequence != s {
@@ -234,7 +313,7 @@ impl HistoryRing {
         if s < ws.saturating_sub(self.r) {
             return Err(LookupErr::AgedOut);
         }
-        let cell = &self.entries[Self::cell_index(self.r, s)];
+        let cell = self.cells.cell(Self::cell_index(self.r, s));
         let bank = &cell.banks[Self::bank_index(self.r, s)];
         let a = bank.stamp.load(Ordering::SeqCst);
         if a & 1 != 0 {
@@ -283,7 +362,7 @@ impl HistoryRing {
     /// # Errors
     /// [`Status::RingStampExhausted`] when a stamp cannot advance.
     pub fn repair_incomplete_banks(&self) -> Result<(), Status> {
-        for cell in &self.entries {
+        for cell in self.cells.iter() {
             for bank in &cell.banks {
                 let stamp = bank.stamp.load(Ordering::SeqCst);
                 if stamp & 1 != 0 {
@@ -389,9 +468,9 @@ mod tests {
     #[test]
     fn repair_odd_stamps() {
         let ring = assert_ok(HistoryRing::new(2));
-        ring.entries[0].banks[0].stamp.store(9, Ordering::SeqCst);
+        ring.cells.cell(0).banks[0].stamp.store(9, Ordering::SeqCst);
         assert!(ring.repair_incomplete_banks().is_ok());
-        assert_eq!(ring.entries[0].banks[0].stamp.load(Ordering::SeqCst), 10);
+        assert_eq!(ring.cells.cell(0).banks[0].stamp.load(Ordering::SeqCst), 10);
         assert!(HistoryRing::atomics_lock_free());
         assert!(HistoryRing::new(0).is_err());
     }
@@ -404,15 +483,15 @@ mod tests {
         use drm_types::Status;
         let ring = assert_ok(HistoryRing::new(2));
         // Odd stamp = writer active ⇒ InvalidData before any commit.
-        ring.entries[0].banks[0].stamp.store(1, Ordering::SeqCst);
+        ring.cells.cell(0).banks[0].stamp.store(1, Ordering::SeqCst);
         assert_eq!(ring.preflight_commit(0), Err(Status::InvalidData));
         // No room for the +2 stable window: the largest even stamp ⇒ exhausted.
-        ring.entries[0].banks[0]
+        ring.cells.cell(0).banks[0]
             .stamp
             .store(u64::MAX - 1, Ordering::SeqCst);
         assert_eq!(ring.preflight_commit(0), Err(Status::RingStampExhausted));
         // Repair of an odd stamp that cannot advance by one ⇒ RingStampExhausted.
-        ring.entries[0].banks[0]
+        ring.cells.cell(0).banks[0]
             .stamp
             .store(u64::MAX, Ordering::SeqCst);
         assert_eq!(
@@ -420,9 +499,9 @@ mod tests {
             Err(Status::RingStampExhausted)
         );
         // A repairable odd stamp becomes even.
-        ring.entries[0].banks[0].stamp.store(5, Ordering::SeqCst);
+        ring.cells.cell(0).banks[0].stamp.store(5, Ordering::SeqCst);
         assert!(ring.repair_incomplete_banks().is_ok());
-        assert_eq!(ring.entries[0].banks[0].stamp.load(Ordering::SeqCst), 6);
+        assert_eq!(ring.cells.cell(0).banks[0].stamp.load(Ordering::SeqCst), 6);
     }
 
     /// REQ: REQ-CORE-061 — sequence exhaustion guard fires before payload write (I7).
