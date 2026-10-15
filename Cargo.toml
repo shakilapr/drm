@@ -17,7 +17,12 @@ members = [
     "bindings/python/native",
     "xtask",
 ]
-exclude = ["tests/fuzz", "tests/conformance"]
+exclude = [
+    "tests/fuzz",
+    "tests/conformance",
+    "tests/integration/primitive/apps/producer",
+    "tests/integration/primitive/apps/consumer",
+]
 
 [workspace.package]
 version = "0.1.0"

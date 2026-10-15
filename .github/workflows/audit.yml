@@ -34,7 +34,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Phase 0: the fixture generates, caches, verifies itself, and exchanges data
+      # between two independently built applications. A vacuous fixture fails.
+      - run: cargo xtask integration --check
       - run: cargo xtask gen-check
+      # The repo-root TypeScript surface declares no DRM packages, so it is checked
+      # on its own rather than as a vacuous DRM pass.
+      - run: cargo xtask gen-check --workspace . --ts-only
 
   docs-examples:
     if: false

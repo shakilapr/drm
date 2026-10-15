@@ -10,7 +10,7 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 | `xtask lint` | clippy `-D warnings`, mypy, eslint, yamllint, markdownlint |
 | `xtask test` | unit + property + doc tests, all languages |
 | `xtask check-layering` | crate dependency-layer verification (codebase §2.2 R6) |
-| `xtask gen-check` | regenerate against fixtures; fail on diff (codebase §3.1 R6) |
+| `xtask gen-check` | strict generation check (codebase §3.1 R6): **the default workspace is the Phase 0 fixture** `tests/integration/primitive`. It refuses to pass while verifying nothing — no `packages/`, no topics, no nodes, or no generated artifacts are each a failure — and then diffs the committed/on-disk tree against a fresh render. `--workspace <dir>` checks another workspace; `--ts-only` checks only the generated TypeScript surface (used for the repo-root `studio-protocol`) |
 | `xtask audit-zero-alloc` | data-path allocation audit (codebase §3.2) |
 | `xtask perf-matrix` | system performance matrix: measures the fixture payload classes (`tests/perf/workspace`), checks the p99 budgets + baseline bands, and records the cross-process segment lifecycle; `--workspace <dir>`, `--json <path>`, `--quick` (`xtask/src/perf.rs`, [bench-methodology.md](../docs/spec/bench-methodology.md) §System perf matrix) |
 | `xtask audit-traceability` | REQ citation coverage; flags `--registry`, `--citations`, `--matrix` |
@@ -21,6 +21,7 @@ All repository automation is invoked through `xtask` (codebase.md §5.1). No one
 
 | Command | Purpose |
 |---|---|
+| `xtask integration` | Phase 0 integration fixture: `--workspace <dir>` (default `tests/integration/primitive`), `--check`. Generates the fixture's artifacts, proves an unchanged re-plan is fully cached, runs the strict `gen-check` over it, builds the **two independent fixture applications** and runs them against one shared-memory segment, asserting every sample arrives in order. `--ts-only` delegates to the TypeScript surface check (`xtask/src/integration.rs`, [tests/integration/primitive/README.md](../tests/integration/primitive/README.md)) |
 | `xtask golden-gen` | regenerate `tests/fixtures/golden/` byte vectors (idempotent) |
 | `xtask soak` | long-duration stability suite; `--duration <h>` or `--iterations <n>`, `--topology <single-machine\|two-machine-sim\|physical-pair>`, `--parallel <n>` (isolated target dirs), `--memory-bound <mb>` (I-QAL2 memory-boundedness, I-MB9), `--report <path>`, `--ledger <path>`, `--dashboard`. Rotating topologies, I-QAL2 evidence ledger, three-consecutive-clean gate, zero-false-positive anomaly threshold band (`xtask/src/soak.rs`, [soak-ledger.md](../docs/spec/soak-ledger.md)) |
 | `xtask fault` | fault-injection campaigns: `--campaign <publisher-crash\|exhaustion-burst\|subscriber-kill\|serial-bomb\|link-storm>`, `--seed <n>`, `--steps <n>`, `--list`, `--dry-run`, `--json <path>`. Runs the five runtime/transport campaigns (`FAULT_CAMPAIGNS`) and records the deterministic replay digest (`xtask/src/fault.rs`, [fault-injection.md](../docs/spec/fault-injection.md)) |

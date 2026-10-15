@@ -182,6 +182,12 @@ pub fn render() -> &'static str {
 /// # Errors
 /// A missing or hand-edited generated module.
 pub fn check(root: &Path) -> Result<()> {
+    // A workspace that does not declare `studio-protocol` has no TS surface to
+    // verify: demanding its generated module would be a false red for every
+    // workspace that legitimately ships no TS package.
+    if !root.join("packages/studio-protocol").is_dir() {
+        return Ok(());
+    }
     let path = root.join(OUTPUT_REL);
     let committed = match fs::read_to_string(&path) {
         Ok(text) => text,

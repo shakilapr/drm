@@ -1,0 +1,15 @@
+[package]
+name = "consumer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Phase 0 fixture application: reads a DRM topic's shared-memory segment.
+# Deliberately a separate cargo project from `producer` so the fixture proves two
+# independently built binaries can meet on one segment.
+[dependencies]
+drm-core = { path = "../../../../../crates/drm-core" }
+
+[[bin]]
+name = "consumer"
+path = "src/main.rs"

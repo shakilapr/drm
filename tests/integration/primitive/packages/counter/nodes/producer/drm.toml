@@ -1,0 +1,3 @@
+name = "producer"
+publishes = ["counter/value"]
+consumes = []
