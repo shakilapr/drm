@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use drm_types::{Status, blake3_128};
@@ -26,6 +27,29 @@ mod render;
 /// units so a changed renderer re-runs (I-G2 edge case "generator version
 /// bump"). REQ: REQ-TOOL-027.
 pub const GENERATOR_VERSION: u32 = 1;
+
+/// Renderer sources whose bytes define the generator identity: the renderer
+/// itself plus this module (output paths, banners, plan/execute behaviour).
+/// REQ: REQ-TOOL-027.
+const GENERATOR_SOURCES: [&str; 2] = [include_str!("mod.rs"), include_str!("render.rs")];
+
+/// Generator identity: a digest over [`GENERATOR_SOURCES`], folded into every
+/// unit fingerprint so that *changing the renderer* regenerates the affected
+/// artifacts without depending on a hand-maintained version bump.
+/// ([codegen-invalidation.md](../../../docs/algorithms/toolchain/codegen-invalidation.md)
+/// I-G2; ADR [0008](../../../docs/adr/0008-generator-identity-in-the-codegen-cache-key.md).)
+/// REQ: REQ-TOOL-027.
+#[must_use]
+pub fn generator_identity() -> [u8; 16] {
+    static IDENTITY: OnceLock<[u8; 16]> = OnceLock::new();
+    *IDENTITY.get_or_init(|| {
+        let mut buf: Vec<u8> = Vec::new();
+        for src in GENERATOR_SOURCES {
+            buf.extend_from_slice(src.as_bytes());
+        }
+        blake3_128(&buf)
+    })
+}
 
 /// Default codegen options tag (empty). REQ: REQ-TOOL-027.
 pub const DEFAULT_OPTIONS: &str = "";
@@ -292,13 +316,27 @@ pub fn out_path(root: &Path, lang: Lang, kind: GenKind, identity: &str) -> PathB
 }
 
 /// Topic fingerprint: `hash(canonical_schema, topic_identity, generator_version,
-/// options)`. Schema identity includes both the schema hash and the canonical
-/// layout hash. REQ: REQ-TOOL-027.
+/// generator_identity, options)`. Schema identity includes both the schema hash
+/// and the canonical layout hash. REQ: REQ-TOOL-027.
 #[must_use]
 pub fn topic_fingerprint(topic: &str, entry: &TopicEntry, options: &str) -> [u8; 16] {
+    topic_fingerprint_with_generator(topic, entry, options, generator_identity())
+}
+
+/// [`topic_fingerprint`] with an explicit generator identity — the component
+/// that makes a renderer change invalidate affected units (ADR 0008).
+/// REQ: REQ-TOOL-027.
+#[must_use]
+pub fn topic_fingerprint_with_generator(
+    topic: &str,
+    entry: &TopicEntry,
+    options: &str,
+    generator: [u8; 16],
+) -> [u8; 16] {
     let mut buf: Vec<u8> = Vec::new();
     buf.extend_from_slice(b"DRM-GEN-TOPIC\0");
     buf.extend_from_slice(&GENERATOR_VERSION.to_le_bytes());
+    buf.extend_from_slice(&generator);
     push_str(&mut buf, topic);
     buf.extend_from_slice(&entry.schema_hash);
     buf.extend_from_slice(&layout_hash(&entry.layout));
@@ -312,6 +350,18 @@ pub fn topic_fingerprint(topic: &str, entry: &TopicEntry, options: &str) -> [u8;
 /// (I-G6). REQ: REQ-TOOL-027, REQ-TOOL-028.
 #[must_use]
 pub fn node_fingerprint(node: &NodeEntry, model: &WorkspaceModel, options: &str) -> [u8; 16] {
+    node_fingerprint_with_generator(node, model, options, generator_identity())
+}
+
+/// [`node_fingerprint`] with an explicit generator identity (ADR 0008).
+/// REQ: REQ-TOOL-027, REQ-TOOL-028.
+#[must_use]
+pub fn node_fingerprint_with_generator(
+    node: &NodeEntry,
+    model: &WorkspaceModel,
+    options: &str,
+    generator: [u8; 16],
+) -> [u8; 16] {
     let mut caps: Vec<(u8, &str)> = Vec::new();
     for topic in &node.publishes {
         caps.push((0, topic));
@@ -324,6 +374,7 @@ pub fn node_fingerprint(node: &NodeEntry, model: &WorkspaceModel, options: &str)
     let mut buf: Vec<u8> = Vec::new();
     buf.extend_from_slice(b"DRM-GEN-NODE\0");
     buf.extend_from_slice(&GENERATOR_VERSION.to_le_bytes());
+    buf.extend_from_slice(&generator);
     buf.extend_from_slice(&u32::try_from(caps.len()).unwrap_or(u32::MAX).to_le_bytes());
     for (direction, topic) in caps {
         buf.push(direction);
@@ -354,6 +405,22 @@ pub fn plan_with(
     root: &Path,
     options: &str,
 ) -> GenPlan {
+    plan_with_generator(model, prev, root, options, generator_identity())
+}
+
+/// [`plan_with`] with an explicit generator identity — the generator component of
+/// every unit's cache key (ADR 0008). Planning against a database written by a
+/// different generator identity marks the affected units dirty, which is how a
+/// renderer change regenerates artifacts.
+/// REQ: REQ-TOOL-027.
+#[must_use]
+pub fn plan_with_generator(
+    model: &WorkspaceModel,
+    prev: &FingerprintDb,
+    root: &Path,
+    options: &str,
+    generator: [u8; 16],
+) -> GenPlan {
     let mut expected = BTreeSet::new();
     let mut dirty = Vec::new();
 
@@ -361,7 +428,7 @@ pub fn plan_with(
         for lang in LANGS {
             let out = out_path(root, lang, GenKind::Topic, topic);
             expected.insert(out.clone());
-            let fingerprint = topic_fingerprint(topic, entry, options);
+            let fingerprint = topic_fingerprint_with_generator(topic, entry, options, generator);
             let key = FingerprintKey::new(GenKind::Topic, lang, topic.clone());
             if prev.get(&key) == Some(fingerprint) && out.is_file() {
                 continue;
@@ -381,7 +448,7 @@ pub fn plan_with(
         for lang in LANGS {
             let out = out_path(root, lang, GenKind::NodeApi, node);
             expected.insert(out.clone());
-            let fingerprint = node_fingerprint(entry, model, options);
+            let fingerprint = node_fingerprint_with_generator(entry, model, options, generator);
             let key = FingerprintKey::new(GenKind::NodeApi, lang, node.clone());
             if prev.get(&key) == Some(fingerprint) && out.is_file() {
                 continue;

@@ -8,7 +8,7 @@ Scope: language binding generators (C/C++/Rust/Python) — stable shared output 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
 | `REQ-TOOL-gen-stable-paths` | `.drm/gen/<lang>/<topic>/<file>` shared per topic+language | `REQ-TOOL-029` |
-| `REQ-TOOL-gen-fingerprint` | directed capabilities: hash(schema, topic_identity, generator_version, options); node APIs hash directed publish/consume | `REQ-TOOL-027` |
+| `REQ-TOOL-gen-fingerprint` | directed capabilities: hash(schema, topic_identity, generator_version, **generator_identity**, options); node APIs hash directed publish/consume | `REQ-TOOL-027` |
 | `REQ-TOOL-gen-expected-outputs` | plan carries full expected tree, distinct from dirty units | `REQ-TOOL-026` |
 | `REQ-TOOL-gen-node-api-unit` | node-scoped API invalidated by declaration changes alone | `REQ-TOOL-028` |
 | `REQ-TOOL-gen-atomic-replace` | platform atomic replace; canceled run leaves no partial file | `REQ-TOOL-024` |
@@ -60,7 +60,7 @@ fn plan(model: &WorkspaceModel, prev: &FingerprintDb) -> GenPlan {
  for lang in LANGS {
  let out = out_path(lang, GenKind::Topic, topic);
  expected.insert(out.clone());
- let fp = hash(canon_schema_bytes(topic), topic, GENERATOR_VERSION, options);
+ let fp = hash(canon_schema_bytes(topic), topic, GENERATOR_VERSION, generator_identity(), options);
  if prev.get(&FingerprintKey::new(Topic, lang, topic)) == Some(fp) && out_exists(lang, topic) { continue; }
  dirty.push(render(lang, GenKind::Topic, topic, model, fp));
  }
@@ -74,7 +74,7 @@ fn plan(model: &WorkspaceModel, prev: &FingerprintDb) -> GenPlan {
  expected.insert(out.clone());
  let caps = node.publish.iter().sorted().map(|t| Cap(t, Publish, schema_hash(model, t), layout(model, t)))
   .chain(node.consume.iter().sorted().map(|t| Cap(t, Consume, schema_hash(model, t), layout(model, t))));
- let fp = hash(caps.collect::<Vec<_>>(), GENERATOR_VERSION, options);
+ let fp = hash(caps.collect::<Vec<_>>(), GENERATOR_VERSION, generator_identity(), options);
  if prev.get(&FingerprintKey::new(NodeApi, lang, &node.name)) == Some(fp) && out_exists(lang, &node.name) { continue; }
  dirty.push(render(lang, GenKind::NodeApi, &node.name, model, fp));
  }
@@ -136,6 +136,7 @@ fn node_header(node: &NodeEntry, model: &WorkspaceModel) -> String
 | Case | Result |
 |---|---|
 | Generator version bump | all topic + node API fingerprints differ ⇒ rerender; identical rendered bytes ⇒ mtime preserved (I-G2) |
+| Renderer edited (generator identity changes) | same effect without a hand-maintained bump: every unit's cache key moves, so affected artifacts rerender (ADR [0008](../../adr/0008-generator-identity-in-the-codegen-cache-key.md)) |
 | Topic direction swapped (consume → publish) | node API fingerprint changes ⇒ regenerated (I-G8) |
 | Node declaration edit, schema unchanged | node API unit regenerated (I-G6) |
 | Unchanged output absent from `dirty_units` | retained — reconciliation uses `expected_outputs` (I-G3) |

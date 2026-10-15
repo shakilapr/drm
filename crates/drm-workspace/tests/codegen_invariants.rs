@@ -15,8 +15,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use drm_workspace::codegen::{
-    FingerprintDb, FingerprintKey, GenKind, Lang, execute, existing_generated, node_fingerprint,
-    out_path, plan, regen_diff,
+    FingerprintDb, FingerprintKey, GenKind, Lang, execute, existing_generated, generator_identity,
+    node_fingerprint, node_fingerprint_with_generator, out_path, plan, plan_with_generator,
+    regen_diff, topic_fingerprint_with_generator,
 };
 use drm_workspace::model::handles::{AssignmentHistory, HandleTable};
 use drm_workspace::model::{PackageInput, TreeInput, WorkspaceModel, build};
@@ -430,5 +431,73 @@ fn gen_atomicity() {
             got.len()
         );
     }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// ADR [0008](../../docs/adr/0008-generator-identity-in-the-codegen-cache-key.md)
+/// / REQ: REQ-TOOL-027 — the generator identity participates in every unit's cache
+/// key: a changed identity (i.e. an edited renderer) marks the affected artifacts
+/// dirty, while re-planning under the same identity stays cached.
+#[test]
+fn gen_generator_identity_invalidates_and_caches() {
+    let mut t = tree(&[("target", "a: u8\nb: u64\n")]);
+    t.nodes.push((
+        "controller".to_string(),
+        manifest("controller", &["control/target"], &[]).into_bytes(),
+    ));
+    let m = model(&t);
+    let root = scratch("genid");
+
+    // Two stand-ins for distinct renderer revisions.
+    let mine = [0x11_u8; 16];
+    let theirs = [0x22_u8; 16];
+
+    // Build once, then re-plan under the same identity: fully cached.
+    let mut db = FingerprintDb::default();
+    execute(
+        &plan_with_generator(&m, &db, &root, "", mine),
+        &mut db,
+        &root,
+    )
+    .unwrap_or_else(|e| unreachable!("execute: {e:?}"));
+    let same = plan_with_generator(&m, &db, &root, "", mine);
+    assert!(
+        same.dirty_units.is_empty(),
+        "an unchanged generator must stay cached, got {} dirty unit(s)",
+        same.dirty_units.len()
+    );
+
+    // A different generator identity invalidates the affected units.
+    let other = plan_with_generator(&m, &db, &root, "", theirs);
+    assert!(
+        other
+            .dirty_units
+            .iter()
+            .any(|u| u.kind == GenKind::Topic && u.key.identity == "control/target"),
+        "renderer change must dirty the topic unit"
+    );
+    assert!(
+        other
+            .dirty_units
+            .iter()
+            .any(|u| u.kind == GenKind::NodeApi && u.key.identity == "controller"),
+        "renderer change must dirty the node API unit"
+    );
+
+    // Both fingerprint kinds really do fold the identity in.
+    assert_ne!(
+        topic_fingerprint_with_generator("control/target", &m.topics["control/target"], "", mine),
+        topic_fingerprint_with_generator("control/target", &m.topics["control/target"], "", theirs),
+        "topic fingerprint must depend on the generator identity"
+    );
+    assert_ne!(
+        node_fingerprint_with_generator(&m.nodes["controller"], &m, "", mine),
+        node_fingerprint_with_generator(&m.nodes["controller"], &m, "", theirs),
+        "node fingerprint must depend on the generator identity"
+    );
+
+    // The shipped identity is the renderer's own digest, not a placeholder.
+    assert_ne!(generator_identity(), [0_u8; 16]);
+
     let _ = fs::remove_dir_all(&root);
 }
