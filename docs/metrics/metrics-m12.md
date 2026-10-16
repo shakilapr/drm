@@ -31,7 +31,7 @@ Deliverables:
   as PID + creation `FILETIME`, incarnation-safe and never consulted by
   reclamation (`I-W5`).
 - Platform naming: `windows_section_name`/`windows_name_conforms`
-  (`Local\drm_<deployment_id>_<topic_hash>`) with a platform-neutral unit test
+  (`Local\drm_<deployment_id>_<topic_slot>`) with a platform-neutral unit test
   (`shm::tests::windows_name_conformance`) so the rule is exercised on every
   host; `SegmentName`/`backend_segment_name` select the platform form.
 - `drm-core` gains a `cfg(windows)` `windows-sys` dependency (Foundation,

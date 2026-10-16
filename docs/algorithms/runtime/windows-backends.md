@@ -17,7 +17,7 @@ Scope: Windows implementations of the platform seams — shared-memory sections 
 ## Data Structures
 
 ```rust
-// Named section: Local\drm_<deployment_id>_<topic_hash> (deployment-identity.md scoping).
+// Named section: Local\drm_<deployment_id>_<topic_slot> (deployment-identity.md scoping).
 // The remainder of a `Local\`/`Global\`-prefixed mapping name may not contain backslashes and
 // canonical topics contain '\' hierarchy — so generated handles, never topic strings.
 fn create_exclusive(name, size) -> Result<Mapping> {

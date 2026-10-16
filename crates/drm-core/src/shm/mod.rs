@@ -49,13 +49,13 @@ pub const WINDOWS_NAME_MAX: usize = 255;
 pub const WINDOWS_LOCAL_PREFIX: &str = "Local\\";
 
 /// Builds the Windows generated section name
-/// `Local\drm_<deployment_id>_<topic_hash>` (windows-backends.md §Data
+/// `Local\drm_<deployment_id>_<topic_slot>` (windows-backends.md §Data
 /// Structures). Pure string form, evaluated on every host so the naming rule is
 /// unit-tested even where `CreateFileMappingW` is unavailable.
 /// REQ: REQ-CORE-078, REQ-CORE-088.
 #[must_use]
-pub fn windows_section_name(deploy_id: &str, topic_hash: u64) -> String {
-    format!("{WINDOWS_LOCAL_PREFIX}drm_{deploy_id}_{topic_hash:016x}")
+pub fn windows_section_name(deploy_id: &str, slot: u64) -> String {
+    format!("{WINDOWS_LOCAL_PREFIX}drm_{deploy_id}_{slot:016x}")
 }
 
 /// Windows mapping-name conformance (I0/I-W parity): `Local\` prefix, non-empty
@@ -85,8 +85,8 @@ pub fn posix_name_conforms(name: &str) -> bool {
         && name.len() <= NAME_MAX
 }
 
-/// Generated backend segment name — `/drm.<deployment_id>.<topic_hash>` on POSIX,
-/// `Local\drm_<deployment_id>_<topic_hash>` on Windows (architecture §Scoped
+/// Generated backend segment name — `/drm.<deployment_id>.<topic_slot>` on POSIX,
+/// `Local\drm_<deployment_id>_<topic_slot>` on Windows (architecture §Scoped
 /// Shared-Memory Namespaces). Canonical topic paths never reach the kernel
 /// namespace; the descriptor retains the canonical topic and validates it at
 /// attach.
@@ -135,18 +135,20 @@ impl fmt::Debug for SegmentName {
 }
 
 /// Builds the platform generated segment name; length-checked at verify (I0).
-/// POSIX `/drm.<deployment_id>.<topic_hash>`; Windows
-/// `Local\drm_<deployment_id>_<topic_hash>`.
+/// POSIX `/drm.<deployment_id>.<topic_slot>`; Windows
+/// `Local\drm_<deployment_id>_<topic_slot>`. The field is the deployment-local
+/// topic slot from the committed handle table, zero-padded to 16 hex digits —
+/// never a hash of the topic path (deployment-identity.md §Protocols).
 /// REQ: REQ-CORE-078, REQ-CORE-088.
 ///
 /// # Errors
-/// [`ShmError::Io`] (`InvalidInput`) when the deployment id or formatted hash
+/// [`ShmError::Io`] (`InvalidInput`) when the deployment id or formatted slot
 /// violates name conformance.
-pub fn backend_segment_name(deploy_id: &str, topic_hash: u64) -> Result<SegmentName, ShmError> {
+pub fn backend_segment_name(deploy_id: &str, slot: u64) -> Result<SegmentName, ShmError> {
     #[cfg(unix)]
-    let raw = format!("/drm.{deploy_id}.{topic_hash:016x}");
+    let raw = format!("/drm.{deploy_id}.{slot:016x}");
     #[cfg(windows)]
-    let raw = windows_section_name(deploy_id, topic_hash);
+    let raw = windows_section_name(deploy_id, slot);
     #[cfg(not(any(unix, windows)))]
     let raw = String::new();
     SegmentName::new(&raw)
@@ -560,15 +562,23 @@ mod tests {
         ));
     }
 
-    /// REQ: REQ-CORE-088 — POSIX generated name family format.
+    /// REQ: REQ-CORE-088 — POSIX generated name family format. The field is the
+    /// deployment-local topic slot, zero-padded to 16 hex digits; there is no
+    /// topic hashing (deployment-identity.md §Protocols).
     #[cfg(unix)]
     #[test]
     fn backend_name_format() {
-        let name = backend_segment_name("dep-1", 0x0102_0304_0506_0708);
+        let one = backend_segment_name("dep-1", 1);
         assert!(
-            name.as_ref()
-                .is_ok_and(|n| n.as_str() == "/drm.dep-1.0102030405060708"),
-            "{name:?}"
+            one.as_ref()
+                .is_ok_and(|n| n.as_str() == "/drm.dep-1.0000000000000001"),
+            "{one:?}"
+        );
+        let wide = backend_segment_name("dep-1", u64::MAX);
+        assert!(
+            wide.as_ref()
+                .is_ok_and(|n| n.as_str() == "/drm.dep-1.ffffffffffffffff"),
+            "{wide:?}"
         );
     }
 

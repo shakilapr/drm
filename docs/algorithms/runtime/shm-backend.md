@@ -13,7 +13,7 @@ Registration-Lock Authority, §Process Lifecycle (fork), §Hard Real-Time Precom
 
 | Provisional slug | Architecture anchor | Numeric ID |
 |---|---|---|
-| `REQ-CORE-shm-generated-names` | backend-safe opaque names: `/drm.<dep_id>.<topic_hash>` | `REQ-CORE-088` |
+| `REQ-CORE-shm-generated-names` | backend-safe opaque names: `/drm.<dep_id>.<topic_slot>` | `REQ-CORE-088` |
 | `REQ-CORE-shm-create-exclusive` | §Segment Creation — `O_CREAT \| O_EXCL`, exactly one creator | `REQ-CORE-072` |
 | `REQ-CORE-shm-consumer-never-create` | consumers wait and open existing | `REQ-CORE-071` |
 | `REQ-CORE-shm-stale-classification` | classify before exact-size attach; recover / adopt / reject | `REQ-CORE-098` |
@@ -30,8 +30,8 @@ Registration-Lock Authority, §Process Lifecycle (fork), §Hard Real-Time Precom
 // POSIX SHM names: leading slash required, no further slashes, <= NAME_MAX. Canonical topic
 // paths never reach the kernel namespace (deployment-identity.md); the descriptor retains the
 // canonical topic and validates it at attach.
-pub struct SegmentName(Arc<str>); // "/drm.<deployment_id>.<topic_hash>"
-fn backend_segment_name(deploy_id: &str, topic_hash: u64) -> SegmentName; // length-checked at verify
+pub struct SegmentName(Arc<str>); // "/drm.<deployment_id>.<topic_slot>"
+fn backend_segment_name(deploy_id: &str, slot: u64) -> SegmentName; // length-checked at verify
 
 pub struct Mapping { ptr: NonNull<u8>, len: usize, owned: bool }
 // RAII: Drop ⇒ munmap for an OWNED kernel mapping; fd closes after mmap.
