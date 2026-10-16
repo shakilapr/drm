@@ -16,6 +16,9 @@ use crate::shm::{
     backend_segment_name,
 };
 use drm_types::Status;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::Path;
 
 /// Compiled contract fingerprint: hash over the node's own interface inputs
 /// (ABI version, topic schemas/layouts, declared interfaces), truncated to 128
@@ -133,5 +136,199 @@ pub fn clean<S: ShmBackend, L: LockBackend>(
     Ok(CleanReport::Cleaned)
 }
 
+// ---------------------------------------------------------------------------
+// Generated deployment configuration (deployment-identity.md §Data Structures;
+// REQ-CORE-108). The toolchain emits it; the runtime loads it so no caller ever
+// hand-builds an expectation.
+// ---------------------------------------------------------------------------
+
+/// `format_version` of the emitted `deployment.json` this runtime understands. A
+/// configuration from any other version is refused rather than interpreted
+/// loosely. REQ: REQ-CORE-108.
+pub const CONFIG_FORMAT_VERSION: u64 = 2;
+
+/// One topic's connection data. The runtime validates it once, at attach.
+/// REQ: REQ-CORE-108, REQ-CORE-088.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicConnection {
+    /// Deployment-local topic slot; generated names derive from it.
+    pub slot: u64,
+    /// Canonical schema content hash (32 lowercase hex).
+    pub schema_hash: String,
+    /// Canonical layout hash (32 lowercase hex).
+    pub layout_hash: String,
+    /// Maximum payload bytes per sample.
+    pub payload_capacity: u64,
+    /// Segment alignment.
+    pub slot_align: u64,
+    /// Ring depth `R`.
+    pub history_depth: u64,
+    /// Payload pool slots.
+    pub pool_size: u64,
+    /// Overflow policy (`overwrite` | `reject`).
+    pub overflow: String,
+}
+
+/// The generated deployment configuration: everything a process needs in order to
+/// start and attach without hand-built expectations (REQ-CORE-108). This is
+/// *runtime* configuration — never compiled into a node binary (I-DP3), which is
+/// why the identity lives here and not in a build artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeploymentConfig {
+    /// Emitted shape version ([`CONFIG_FORMAT_VERSION`]).
+    pub format_version: u64,
+    /// Runtime ABI the artifact was generated against.
+    pub abi_version: u32,
+    /// Deployment instance id, 32 lowercase hex.
+    pub deployment_id: String,
+    /// Toolchain identity-reuse key (informational at runtime).
+    pub inputs_digest: String,
+    /// Node name → expected contract fingerprint (32 lowercase hex).
+    pub fingerprint_expectations: BTreeMap<String, String>,
+    /// Canonical topic path → connection data.
+    pub topics: BTreeMap<String, TopicConnection>,
+}
+
+impl DeploymentConfig {
+    /// Parses and validates generated configuration text.
+    ///
+    /// Validation is strict: an unknown `format_version`, an ABI this binary was
+    /// not built for, or a malformed digest/slot/overflow value is refused. A
+    /// partially understood configuration is never accepted.
+    /// REQ: REQ-CORE-108, REQ-CORE-092.
+    ///
+    /// # Errors
+    /// [`Status::InvalidData`] when the text is malformed or violates a shape
+    /// invariant; [`Status::WrongAbi`] when `abi_version` differs from
+    /// [`drm_types::ABI_VERSION`].
+    pub fn parse(text: &str) -> Result<Self, Status> {
+        let config: Self = serde_json::from_str(text).map_err(|_| Status::InvalidData)?;
+        if config.format_version != CONFIG_FORMAT_VERSION {
+            return Err(Status::InvalidData);
+        }
+        if config.abi_version != drm_types::ABI_VERSION {
+            return Err(Status::WrongAbi);
+        }
+        if digest(&config.deployment_id).is_none() || digest(&config.inputs_digest).is_none() {
+            return Err(Status::InvalidData);
+        }
+        for (node, hex) in &config.fingerprint_expectations {
+            if node.is_empty() || digest(hex).is_none() {
+                return Err(Status::InvalidData);
+            }
+        }
+        for (topic, entry) in &config.topics {
+            if topic.is_empty()
+                || u32::try_from(entry.slot).is_err()
+                || digest(&entry.schema_hash).is_none()
+                || digest(&entry.layout_hash).is_none()
+                || !matches!(entry.overflow.as_str(), "overwrite" | "reject")
+            {
+                return Err(Status::InvalidData);
+            }
+        }
+        Ok(config)
+    }
+
+    /// Loads and validates the configuration at `path`.
+    /// REQ: REQ-CORE-108.
+    ///
+    /// # Errors
+    /// [`Status::NotFound`] when the file is absent (a node must not start
+    /// without a deployment); otherwise as [`Self::parse`].
+    pub fn load(path: &Path) -> Result<Self, Status> {
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Status::NotFound
+            } else {
+                Status::InvalidData
+            }
+        })?;
+        Self::parse(&text)
+    }
+
+    /// The deployment instance id carried by the file.
+    /// REQ: REQ-CORE-084, REQ-CORE-108.
+    ///
+    /// # Errors
+    /// [`Status::InvalidData`] when the id is not 32 lowercase hex.
+    pub fn id(&self) -> Result<DeploymentId, Status> {
+        let bytes = digest(&self.deployment_id).ok_or(Status::InvalidData)?;
+        Ok(DeploymentId::new(u128::from_be_bytes(bytes)))
+    }
+
+    /// This node's expected contract fingerprint, when the deployment records one
+    /// (a node the deployment does not know has no expectation ⇒ `None` ⇒ the
+    /// startup guard refuses with `NotFound`, I-DP1).
+    /// REQ: REQ-CORE-108, REQ-CORE-092.
+    #[must_use]
+    pub fn expectation(&self, node: &str) -> Option<ContractFingerprint> {
+        self.fingerprint_expectations
+            .get(node)
+            .and_then(|hex| digest(hex))
+            .map(ContractFingerprint)
+    }
+
+    /// Connection data for `canonical`, if deployed.
+    /// REQ: REQ-CORE-108.
+    #[must_use]
+    pub fn topic(&self, canonical: &str) -> Option<&TopicConnection> {
+        self.topics.get(canonical)
+    }
+
+    /// The topic-slot table a runtime session carries (canonical topic → slot).
+    /// REQ: REQ-CORE-108, REQ-CORE-088.
+    #[must_use]
+    pub fn slots(&self) -> BTreeMap<String, u32> {
+        self.topics
+            .iter()
+            .filter_map(|(topic, entry)| {
+                u32::try_from(entry.slot)
+                    .ok()
+                    .map(|slot| (topic.clone(), slot))
+            })
+            .collect()
+    }
+}
+
+/// Node startup from a loaded configuration (deployment-identity.md §Functions
+/// `node_startup`): the fingerprint guard runs first, then the shared active hold
+/// is acquired for the node's whole lifetime. The expectation comes from the
+/// generated configuration — never from the caller. REQ: REQ-CORE-108,
+/// REQ-CORE-092, REQ-CORE-069.
+///
+/// # Errors
+/// [`Status::NotFound`] when the deployment records no expectation for `node`;
+/// [`Status::WrongAbi`] on mismatch; [`Status::AlreadyExists`] when a `drm clean`
+/// is in flight.
+pub fn start_session<L: LockBackend>(
+    locks: &L,
+    paths: &LockPaths,
+    config: &DeploymentConfig,
+    node: &str,
+    compiled: ContractFingerprint,
+) -> Result<LockHandle, Status> {
+    node_startup(locks, paths, compiled, config.expectation(node))
+}
+
+/// Parses a 32-lowercase-hex digest.
+fn digest(hex: &str) -> Option<[u8; 16]> {
+    if hex.len() != 32
+        || !hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return None;
+    }
+    let mut out = [0_u8; 16];
+    for (index, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+        let text = std::str::from_utf8(chunk).ok()?;
+        out[index] = u8::from_str_radix(text, 16).ok()?;
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod config_tests;
 #[cfg(test)]
 mod tests;

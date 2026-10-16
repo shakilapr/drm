@@ -9,6 +9,10 @@ license.workspace = true
 [dependencies]
 drm-types = { path = "../drm-types" }
 thiserror.workspace = true
+# Generated deployment configuration parsing (REQ-CORE-108). Startup-only: the
+# config is read once before a session opens, never on the data path.
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.5"

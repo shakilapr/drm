@@ -13,6 +13,7 @@
 //! nodes refuse (`WrongAbi`) against the new one.
 //! REQ: REQ-TOOL-012, REQ-TOOL-083, REQ-TOOL-084.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,6 +65,19 @@ pub fn generate(
     };
     fs::create_dir_all(parent).map_err(|_| Status::InvalidConfig)?;
     let digest = inputs_digest(model, handles);
+    // Generated names derive from the slot alone, so the topic-slot table must be
+    // injective: two topics sharing a slot would attach to one segment
+    // (REQ-CORE-088). A workspace without an assignment table (every topic at the
+    // default slot) is refused rather than silently aliased.
+    let mut seen: BTreeMap<u32, &str> = BTreeMap::new();
+    for topic in runtime_plan(model).topics.keys() {
+        if seen
+            .insert(slot_of(handles, topic), topic.as_str())
+            .is_some()
+        {
+            return Err(Status::InvalidConfig);
+        }
+    }
     let id = fs::read_to_string(&path)
         .ok()
         .and_then(|text| reuse_id(&text, &digest))
@@ -413,6 +427,36 @@ mod tests {
             Some(first_id.as_str()),
             "a contract change must mint a fresh deployment identity"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// REQ: REQ-TOOL-083, REQ-CORE-088 — a topic table whose slots collide is
+    /// refused: generated names derive from the slot, so two topics sharing one
+    /// would attach to the same segment.
+    #[test]
+    fn colliding_slots_refused() {
+        let root = scratch("collide");
+        // Two topics with no assignment table: both default to slot 0, which
+        // would alias one segment.
+        let two = TreeInput {
+            packages: vec![PackageInput {
+                name: "counter".to_string(),
+                topics: vec![
+                    ("value".to_string(), TOPIC.as_bytes().to_vec()),
+                    ("other".to_string(), b"v: u64\n".to_vec()),
+                ],
+            }],
+            nodes: Vec::new(),
+            topology: None,
+        };
+        let two = build(&two).unwrap_or_else(|e| unreachable!("{e:?}"));
+        assert_eq!(
+            generate(&two, &HandleTable::default(), &root).err(),
+            Some(drm_types::Status::InvalidConfig),
+            "an unassigned multi-topic workspace must not alias one segment"
+        );
+        // A single topic at slot 0 is legitimate (handles start at zero).
+        assert!(generate(&model(TOPIC), &HandleTable::default(), &root).is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }
 
