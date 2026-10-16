@@ -13,17 +13,37 @@ Scope: the three-identity model — node contract fingerprints (compiled), deplo
 | `REQ-CORE-startup-guard` | compiled fingerprint ≠ deployment fingerprint ⇒ refuse to start | `REQ-CORE-092` |
 | `REQ-CORE-no-cross-deployment` | new deployment ⇒ new namespace; never adopt/migrate | `REQ-CORE-089` |
 | `REQ-CORE-clean-active-guard` | `drm clean` unlinks only when the exclusive deployment active lock proves no nodes | `REQ-CORE-080` |
+| `REQ-TOOL-deployment-connection-config` | emitted `deployment.json` carries the complete connection data (id, ABI, expectations, per-topic slot/contract/sizing) | `REQ-TOOL-083` |
+| `REQ-TOOL-deployment-identity-reuse` | deployment identity reused while deployment inputs are unchanged; regenerated when they change | `REQ-TOOL-084` |
+| `REQ-CORE-deployment-config-load` | runtime loads `deployment.json`; expectations are never hand-built by a caller | `REQ-CORE-108` |
 
 ## Data Structures
 
 ```rust
-pub struct DeploymentId(u128); // random per deployment generation
+pub struct DeploymentId(u128); // random per deployment generation (CSPRNG, minted by the toolchain)
 pub struct DeploymentConfig { // .drm/deploy/deployment.json (runtime config, not compiled)
- deployment_id: DeploymentId, // serialized as a UUID/hex STRING — 128 bits exceed JSON-safe integers (RFC 8259)
- fingerprint_expectations: BTreeMap<NodeName, ContractFingerprint>,
+format_version: u32, // emitted shape; a consumer refuses a version it does not know
+abi_version: u32, // runtime ABI the artifact was generated against (startup-guard input)
+deployment_id: DeploymentId, // serialized as a UUID/hex STRING — 128 bits exceed JSON-safe integers (RFC 8259)
+inputs_digest: [u8; 16], // emitter bookkeeping: identity reuse key (see Protocols step 2)
+ fingerprint_expectations: BTreeMap<NodeName, ContractFingerprint>, // startup guard input (I-DP1)
+ topics: BTreeMap<TopicName, TopicConnection>, // canonical topic → slot, contract, activation sizing
  routing: RoutePlans, // forwarding trees computed by toolchain (route-derivation.md)
  memory_budgets: BTreeMap<ComputeName, Budget>, // memory-budget.md
- segment_names: BTreeMap<TopicName, u32>, // deployment-local topic-slot table (see Protocols)
+}
+
+// Per-topic connection data: everything a process needs to attach without hand-built expectations.
+// `slot` IS the topic-slot table (`Session::names` derives from it); the remaining fields are the
+// immutable descriptor a consumer validates once at attach (channel-metadata.md).
+pub struct TopicConnection {
+ slot: u32, // deployment-local topic slot from `.drm/ids.json`; generated names derive from it
+ schema_hash: [u8; 16], // canonical schema content hash
+ layout_hash: [u8; 16], // canonical layout hash; compared at attach
+ payload_capacity: u64, // topic_runtime(): maximum payload bytes per sample
+ slot_align: u64, // alignment the channel is laid out with
+ history_depth: u64, // ring depth R
+ pool_size: u64, // payload pool slots (R + H + 1)
+ overflow: Overflow, // overwrite | reject
 }
 
 // Lock identity is DERIVED, never configured: deployment ID → namespace → lock path.
@@ -105,7 +125,9 @@ fn clean(deploy: &DeploymentConfig) -> Result<CleanReport, Status> {
 *Deployment generation (toolchain, `drm deploy`):*
 
 1. `DeploymentId::random()` (CSPRNG); serialized in `deployment.json` as a UUID/hex string (never a JSON number — 128-bit integers are not JSON-interoperable).
-2. Emit `deployment.json` with fingerprint expectations (from workspace-model contract fingerprints), routing tables, budgets, and the topic-slot table: the stable runtime handle for each deployed topic, taken from the committed assignment lockfile `.drm/ids.json` (handle-system.md) — append-only, tombstones preserved, never re-sorted, so adding a topic never renumbers existing slots (handle-system I-H2/I-H5). A new deployment identity is generated when routing/placement/bandwidth changes or when handle assignment changes (`drm ids compact`/`reconcile`).
+2. Emit `deployment.json`: `format_version`, `abi_version`, `deployment_id`, fingerprint expectations (from workspace-model contract fingerprints), the per-topic `TopicConnection` entries (slot + schema/layout hashes + activation sizing), routing tables, and budgets. The slot per topic is the stable runtime handle, taken from the committed assignment lockfile `.drm/ids.json` (handle-system.md) — append-only, tombstones preserved, never re-sorted, so adding a topic never renumbers existing slots (handle-system I-H2/I-H5). A new deployment identity is generated when routing/placement/bandwidth changes or when handle assignment changes (`drm ids compact`/`reconcile`).
+
+   **Identity is reused, not re-minted, on an unchanged rebuild.** The emitter digests its inputs (handle table, per-topic schema and layout hashes, payload capacities, node contract fingerprints) and reuses the `deployment_id` already recorded in `deployment.json` while that digest is unchanged, minting a fresh CSPRNG id only when it moves. Minting unconditionally would orphan a live namespace on every rebuild — nodes would refuse (`WrongAbi`) against a deployment whose segments still exist.
 3. Backend-safe opaque names derive from the ID: segments `drm.<encoded-id>.<slot>`, locks `<runtime_root>/<encoded-id>/…` (Linux `/run/drm`, Windows `%ProgramData%\drm`). The exact topic remains in the immutable descriptor. New deployment ⇒ fresh namespace (I-DP2); no live migration ever. The `<slot>` field is the deployment-local topic slot rendered as 16 lowercase hex digits (`DeploymentId::segment_name(slot)` → `shm::backend_segment_name`), the same value the topic-slot table above carries — **never a hash of the topic path**: a hash collision would make a legitimate channel uninstantiable, and the slot table is append-only so an existing slot never renumbers (I-H2/I-H5).
 
 *Node startup sequence:* guard (fingerprint) → shared active hold → per-topic `segment_open` (secondary validation) → run. Publishers additionally execute the restart barrier of [publisher-lifecycle.md](runtime/publisher-lifecycle.md): publish `first_valid_seq = write_seq` (excludes every prior-run sample), then advance `publisher_epoch` last — consumers derive `NoCurrentSample` from the epoch/floor until the first new-epoch sample.
@@ -126,6 +148,8 @@ fn clean(deploy: &DeploymentConfig) -> Result<CleanReport, Status> {
 | Cleanup racing node startup | exclusive vs shared hold on the same active lock serialize the decision; loser aborts cleanly |
 | Stale segments from dead deployment | cleaned by `drm clean` (no holds) |
 | Fingerprint mismatch on one node only | that node refuses; deployment continues for others (fault isolation) |
+| `deployment.json` of an unknown `format_version` | refused, never interpreted loosely (a newer deployment must not be silently downgraded) |
+| Rebuild with unchanged deployment inputs | same `deployment_id`, same namespace; running nodes unaffected |
 
 ## Test Matrix
 
@@ -140,3 +164,6 @@ fn clean(deploy: &DeploymentConfig) -> Result<CleanReport, Status> {
 | `clean_blocks_while_session_holds` (real multi-process `flock`) | guard retention: shared hold blocks exclusive clean |
 | `restart_no_stale_current` (SIGKILL → restart → no publish → `latest()`) | `NO_CURRENT_SAMPLE`, epoch advanced, prior-run sample unreachable (publisher-lifecycle I-L6/I-L7) |
 | stale-binary × mixed-deployment matrix | per-node refusal |
+| `config_carries_connection_data` | REQ-TOOL-083: every deployed topic carries its slot, schema/layout hashes and activation sizing |
+| `deployment_id_reused_until_inputs_change` | REQ-TOOL-084: unchanged inputs keep the id; a schema or handle change mints a new one |
+| `config_version_refused_when_unknown` | a reader refuses a `format_version` it does not know |

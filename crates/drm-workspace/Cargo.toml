@@ -9,6 +9,9 @@ license.workspace = true
 [dependencies]
 drm-types = { path = "../drm-types" }
 toml.workspace = true
+# Deployment-identity minting (CSPRNG) for `deploy::generate`; toolchain-only, so
+# the runtime crates stay free of randomness.
+getrandom = "0.3"
 
 [features]
 # Phase 33 parser groundwork: spatial field-type keywords + frame-path binding.

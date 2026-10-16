@@ -252,10 +252,18 @@ fn handle_compact_scope() {
         "coordinated redeploy clears tombstones"
     );
 
-    // Deployment artifacts embed handles ⇒ they change ...
+    // Deployment artifacts embed handles ⇒ their contents change, and so does the
+    // identity reuse key (a compacted table must not reuse the old namespace) ...
+    let id = "0123456789abcdef0123456789abcdef";
+    let digest_assigned = deploy::inputs_digest(&model, &assigned);
+    let digest_packed = deploy::inputs_digest(&model, &packed);
     assert_ne!(
-        deploy::render(&model, &assigned),
-        deploy::render(&model, &packed),
+        digest_assigned, digest_packed,
+        "a handle change moves the deployment inputs digest (REQ-TOOL-084)"
+    );
+    assert_ne!(
+        deploy::render_with(&model, &assigned, id, &digest_assigned),
+        deploy::render_with(&model, &packed, id, &digest_packed),
         "handle-dependent deployment artifact changes"
     );
 

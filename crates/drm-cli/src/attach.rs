@@ -12,8 +12,10 @@ use drm_core::channel::Channel;
 
 use crate::error::CliError;
 
-/// Resolves a canonical topic path to its deployment handle.
-/// REQ: REQ-OPS-003.
+/// Resolves a canonical topic path to its deployment slot.
+///
+/// The generated config (`deployment.json`) is the only source of runtime
+/// identities: a caller never constructs one. REQ: REQ-OPS-003, REQ-TOOL-083.
 ///
 /// # Errors
 /// [`CliError::NotFound`] when the deployment metadata or topic is absent;
@@ -28,13 +30,26 @@ pub fn topic_handle(workspace: &Path, topic: &str) -> Result<u32, CliError> {
     })?;
     let value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| CliError::Io(format!("parse {}: {e}", path.display())))?;
-    let handle = value
-        .get("handles")
-        .and_then(|h| h.get(topic))
+    if let Some(version) = value
+        .get("format_version")
+        .and_then(serde_json::Value::as_u64)
+    {
+        let known = drm_workspace::deploy::FORMAT_VERSION;
+        if version != known {
+            return Err(CliError::Io(format!(
+                "deployment metadata at {} is format_version {version}, this tool understands {known}",
+                path.display()
+            )));
+        }
+    }
+    let slot = value
+        .get("topics")
+        .and_then(|t| t.get(topic))
+        .and_then(|t| t.get("slot"))
         .and_then(serde_json::Value::as_u64);
-    match handle {
-        Some(h) => u32::try_from(h)
-            .map_err(|_| CliError::NotFound(format!("topic `{topic}` handle out of range"))),
+    match slot {
+        Some(slot) => u32::try_from(slot)
+            .map_err(|_| CliError::NotFound(format!("topic `{topic}` slot out of range"))),
         None => Err(CliError::NotFound(format!(
             "topic `{topic}` not present in deployment metadata"
         ))),
