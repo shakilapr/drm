@@ -24,50 +24,91 @@ const DEFAULT_WORKSPACE: &str = "tests/integration/primitive";
 /// # Errors
 /// Malformed flags, or any failure [`check`] reports.
 pub fn run(flags: &[String]) -> Result<()> {
-    let (root, ts_only) = parse_workspace(flags)?;
+    let (root, ts_only, explicit) = parse_workspace(flags)?;
     if ts_only {
         return ts_check(&root);
+    }
+    if explicit {
+        return check_workspace(&root);
     }
     check(&root)
 }
 
-/// Strict generation check over `root`.
-///
-/// A check that inspects nothing must not report success, so this refuses three
-/// vacuous states: no `packages/` directory, a workspace declaring no topics, a
-/// workspace declaring no nodes, and a workspace shipping no generated artifacts.
-/// Only then does it compare the committed tree against a fresh render.
-/// REQ: REQ-TOOL-024, REQ-TOOL-045.
+/// Strict generation check over the **mandatory fixture** (`root`): content is
+/// required, because the fixture exists precisely to be verified.
 ///
 /// # Errors
-/// Any vacuous-fixture condition, an invalid workspace model, or any offending
-/// generated file (mismatched, missing, or orphaned).
+/// A missing fixture, a fixture declaring no topics or no nodes, no generated
+/// artifacts, an invalid model, or any offending generated file.
 pub fn check(root: &Path) -> Result<()> {
+    check_with(root, true)
+}
+
+/// Generation check over an explicitly named workspace.
+///
+/// A DRM workspace may legitimately declare no DRM content (nothing to generate),
+/// so an empty one is reported, not failed; content that *is* declared must still
+/// ship its artifacts.
+/// REQ: REQ-TOOL-024.
+///
+/// # Errors
+/// Declared content whose generated artifacts are absent, an invalid model, or any
+/// offending generated file.
+pub fn check_workspace(root: &Path) -> Result<()> {
+    check_with(root, false)
+}
+
+/// Shared body: `require_content` distinguishes the mandatory fixture (which must
+/// not be empty) from an arbitrary workspace (which may be).
+///
+/// # Errors
+/// As [`check`] / [`check_workspace`].
+fn check_with(root: &Path, require_content: bool) -> Result<()> {
+    // A path that does not exist at all is never a legitimate subject: a typo in a
+    // CI invocation must not read as "nothing to check".
+    if !root.is_dir() {
+        bail!(
+            "gen-check: `{}` does not exist — a missing subject is a failure, not a pass",
+            root.display()
+        );
+    }
     ts_check(root)?;
     if !root.join("packages").is_dir() {
-        bail!(
-            "gen-check: no `packages/` under `{}` — checking nothing is a failure, not a pass",
+        if require_content {
+            bail!(
+                "gen-check: the mandatory fixture has no `packages/` under `{}` — its absence is a failure, not a pass",
+                root.display()
+            );
+        }
+        println!(
+            "gen-check: `{}` declares no packages; nothing to check",
             root.display()
         );
+        return Ok(());
     }
     let model = model_at(root)?;
-    if model.topics.is_empty() {
-        bail!(
-            "gen-check: `{}` declares no topics — a fixture that verifies nothing must fail",
+    if model.topics.is_empty() || model.nodes.is_empty() {
+        if require_content {
+            bail!(
+                "gen-check: the mandatory fixture `{}` declares {} topic(s) and {} node(s) — it must declare at least one of each to verify anything",
+                root.display(),
+                model.topics.len(),
+                model.nodes.len()
+            );
+        }
+        // A workspace with no DRM content is legitimate; say so plainly rather than
+        // reporting a bare "clean", which would read as a verification that happened.
+        println!(
+            "gen-check: `{}` declares no DRM topics or nodes; nothing to check",
             root.display()
         );
-    }
-    if model.nodes.is_empty() {
-        bail!(
-            "gen-check: `{}` declares no nodes — a fixture that verifies nothing must fail",
-            root.display()
-        );
+        return Ok(());
     }
     let present =
         existing_generated(root).map_err(|e| anyhow!("gen-check: walk generated tree: {e:?}"))?;
     if present.is_empty() {
         bail!(
-            "gen-check: `{}` ships no generated artifacts, but declares {} topic(s) and {} node(s) — expected output is absent",
+            "gen-check: `{}` declares {} topic(s) and {} node(s) but ships no generated artifacts — expected output is absent",
             root.display(),
             model.topics.len(),
             model.nodes.len()
@@ -108,14 +149,18 @@ pub fn ts_check(root: &Path) -> Result<()> {
     crate::studio_ts::check(root)
 }
 
-/// Parses `--workspace <path>` (default: [`DEFAULT_WORKSPACE`]) and `--ts-only`
-/// (verify only the generated TypeScript surface). REQ: REQ-TOOL-024.
+/// Parses `--workspace <path>` (default: the mandatory fixture
+/// [`DEFAULT_WORKSPACE`]) and `--ts-only`. Returns `(root, ts_only, explicit)`:
+/// an explicitly named workspace may legitimately be empty, the mandatory fixture
+/// may not.
+/// REQ: REQ-TOOL-024.
 ///
 /// # Errors
 /// Unknown flags or a missing path argument.
-fn parse_workspace(flags: &[String]) -> Result<(PathBuf, bool)> {
+fn parse_workspace(flags: &[String]) -> Result<(PathBuf, bool, bool)> {
     let mut root = PathBuf::from(DEFAULT_WORKSPACE);
     let mut ts_only = false;
+    let mut explicit = false;
     let mut i = 0;
     while i < flags.len() {
         match flags.get(i).map(String::as_str) {
@@ -125,13 +170,14 @@ fn parse_workspace(flags: &[String]) -> Result<(PathBuf, bool)> {
                     .get(i + 1)
                     .ok_or_else(|| anyhow!("gen-check: --workspace needs a path"))?;
                 root = PathBuf::from(path);
+                explicit = true;
                 i += 1;
             }
             other => bail!("gen-check flags: {other:?} (expected --workspace <path>, --ts-only)"),
         }
         i += 1;
     }
-    Ok((root, ts_only))
+    Ok((root, ts_only, explicit))
 }
 
 /// Builds the workspace model under `root` (the check's input).
@@ -338,21 +384,37 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// REQ: REQ-TOOL-024 — every state in which the gate would verify nothing
-    /// must fail: absent `packages/`, no topics, no nodes, no generated
-    /// artifacts. This is the vacuous-green defect the gate now refuses.
+    /// REQ: REQ-TOOL-024 — the mandatory fixture must never be vacuous (absence,
+    /// emptiness, and missing artifacts each fail), while a workspace that is
+    /// *named explicitly* may legitimately declare no DRM content. Declared
+    /// content without artifacts fails in both modes.
     #[test]
-    fn vacuous_fixtures_fail() {
-        // 1. No `packages/` directory at all.
+    fn mandatory_fixture_is_never_vacuous() {
+        // 1. Absent entirely: a failure as the fixture, legitimate as a workspace.
         let none = scratch("vacuous-none");
         fs::remove_dir_all(none.join("packages")).unwrap_or_else(|e| unreachable!("rm: {e}"));
         assert!(
             super::check(&none).is_err(),
-            "an absent packages/ directory must fail"
+            "an absent mandatory fixture must fail"
+        );
+        assert!(
+            super::check_workspace(&none).is_ok(),
+            "an explicitly named workspace may legitimately be empty"
         );
         let _ = fs::remove_dir_all(&none);
 
-        // 2. Topics but no nodes.
+        // 1b. A path that does not exist is never legitimate, in either mode.
+        let missing = none.join("does-not-exist");
+        assert!(
+            super::check(&missing).is_err(),
+            "a missing fixture path must fail"
+        );
+        assert!(
+            super::check_workspace(&missing).is_err(),
+            "a missing workspace path must fail rather than report nothing to check"
+        );
+
+        // 2. Topics but no nodes: not a fixture, and nothing to verify.
         let no_nodes = scratch("vacuous-nodes");
         fs::write(
             no_nodes.join("packages/control/topics/target.drm"),
@@ -360,15 +422,19 @@ mod tests {
         )
         .unwrap_or_else(|e| unreachable!("write: {e}"));
         let Err(err) = super::check(&no_nodes) else {
-            unreachable!("a workspace without nodes must fail")
+            unreachable!("a fixture must declare a topic and a node")
         };
         assert!(
-            err.to_string().contains("no nodes"),
+            err.to_string().contains("at least one of each"),
             "message names the cause: {err}"
+        );
+        assert!(
+            super::check_workspace(&no_nodes).is_ok(),
+            "a workspace with no DRM nodes is not an error"
         );
         let _ = fs::remove_dir_all(&no_nodes);
 
-        // 3. Topics and a node, but no generated artifacts committed.
+        // 3. Declared content with no artifacts: a failure in both modes.
         let no_output = scratch("vacuous-output");
         fs::write(
             no_output.join("packages/control/topics/target.drm"),
@@ -389,9 +455,13 @@ mod tests {
             err.to_string().contains("no generated artifacts"),
             "message names the cause: {err}"
         );
+        assert!(
+            super::check_workspace(&no_output).is_err(),
+            "declared content without artifacts fails for an explicit workspace too"
+        );
         let _ = fs::remove_dir_all(&no_output);
 
-        // 4. The default workspace is the fixture, never the repository root.
+        // 4. The mandatory fixture is the default subject, never the repo root.
         assert_eq!(super::DEFAULT_WORKSPACE, "tests/integration/primitive");
     }
 }

@@ -240,7 +240,7 @@ Artifact rules:
 | `xtask lint` | clippy `-D warnings`, mypy, eslint, yamllint, markdownlint |
 | `xtask test` | unit + property + doc tests, all languages |
 | `xtask check-layering` | crate dependency-layer verification (§2.2 R6) |
-| `xtask gen-check` | strict generation check (§3.1 R6): the default workspace is the Phase 0 fixture (`tests/integration/primitive`); no `packages/`, no topics, no nodes, or no generated artifacts each fail instead of passing vacuously |
+| `xtask gen-check` | strict generation check (§3.1 R6): the default subject is the mandatory fixture `tests/integration/primitive` (≥1 topic, ≥1 node, artifacts present — absence, emptiness or missing output each fail). An explicitly named `--workspace` may be legitimately empty, but declared content must ship its artifacts |
 | `xtask audit-zero-alloc` | data-path allocation audit (§3.2) |
 | `xtask audit-traceability` | REQ citation coverage (§3.1 R2) |
 | `xtask docs` | build docs + execute examples headless |

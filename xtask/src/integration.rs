@@ -34,6 +34,9 @@ const LOCK_DIR: &str = "target/integration-locks";
 /// # Errors
 /// A missing or vacuous fixture, a generation/verification failure, a build
 /// failure, or an exchange that does not deliver every sample.
+// Linear fixture procedure: generate, verify, provision, build, exchange. Splitting
+// it further would hide the sequence the phase is defined by.
+#[allow(clippy::too_many_lines)]
 pub fn run(flags: &[String]) -> Result<()> {
     let (root, check, ts_only) = parse(flags)?;
     if ts_only {
@@ -92,7 +95,7 @@ pub fn run(flags: &[String]) -> Result<()> {
              the sequential assertion would depend on the writer's pace"
         );
     }
-    let sample_max = u64::try_from(entry.layout.sample_max).context("sample_max")?;
+    let sample_max = entry.layout.sample_max;
     let schema = hex(&entry.schema_hash);
     let layout = hex(&layout_hash(&entry.layout));
     let segment = "/drm.integration.primitive";
@@ -244,7 +247,11 @@ fn attribute(text: &str, key: &str) -> Result<u64> {
 
 /// Lowercase hex rendering of a digest (what the fixture apps parse).
 fn hex(bytes: &[u8; 16]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::with_capacity(32), |mut acc, b| {
+        let _ = write!(acc, "{b:02x}");
+        acc
+    })
 }
 
 /// `cargo` for the active toolchain.
