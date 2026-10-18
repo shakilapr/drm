@@ -65,6 +65,11 @@ pub enum Command {
     },
     /// `drm info` — read-only model + verify projection (REQ-TOOL-045).
     Info,
+    /// `drm deploy` — generate the deployment connection config and report the
+    /// deployment identity (REQ-TOOL-083, REQ-TOOL-084).
+    Deploy,
+    /// `drm clean` — guarded teardown of the deployment namespace (REQ-CORE-080).
+    Clean,
     /// `drm dev [--once]` — watch skeleton (REQ-TOOL-016).
     Dev {
         /// Stop after the initial build (smoke mode).
@@ -121,6 +126,8 @@ Usage:
   drm [--workspace <dir>] assign <topic> --consume <node>
   drm [--workspace <dir>] assign <topic> --publish <node>
   drm [--workspace <dir>] build [--target <node>]...
+  drm [--workspace <dir>] deploy
+  drm [--workspace <dir>] clean
   drm [--workspace <dir>] info
   drm [--workspace <dir>] dev [--once]
   drm [--workspace <dir>] echo <topic> [--raw]
@@ -298,6 +305,8 @@ fn build_command(positionals: &[String], flags: Flags) -> Result<Command, String
             _ => Err(format!("unexpected `build` argument `{}`", positionals[2])),
         },
         Some("info") => Ok(Command::Info),
+        Some("deploy") => Ok(Command::Deploy),
+        Some("clean") => Ok(Command::Clean),
         Some("dev") => Ok(Command::Dev { once }),
         Some("echo") => {
             let topic = positionals

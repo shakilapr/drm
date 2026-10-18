@@ -19,6 +19,8 @@ pub mod args;
 pub mod assign;
 pub mod attach;
 pub mod build;
+mod clean;
+mod deploy;
 pub mod dev;
 pub mod echo;
 pub mod error;
@@ -60,6 +62,8 @@ pub fn run(raw: &[String]) -> Result<(), CliError> {
             build::run(&root, &targets)
         }
         Command::Info => info::run(&args.workspace),
+        Command::Deploy => deploy::run(&args.workspace),
+        Command::Clean => clean::run(&args.workspace),
         Command::Dev { once } => dev::run(&args.workspace, once),
         Command::Echo { topic, raw } => echo::run(&args.workspace, &topic, raw),
         Command::Hz { topic } => hz::run(&args.workspace, &topic),
