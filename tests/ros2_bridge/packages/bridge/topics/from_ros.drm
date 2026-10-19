@@ -1,0 +1,6 @@
+# Serialized ROS 2 message inbound (bridge publishes what a ROS subscription
+# received). The bound must cover the largest declared ROS message type.
+@history: 8
+@pool_size: 16
+@overflow: overwrite
+data: u8[<=4096]

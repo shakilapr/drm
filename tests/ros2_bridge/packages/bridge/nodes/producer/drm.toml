@@ -1,0 +1,5 @@
+name = "producer"
+publishes = ["bridge/to_ros"]
+consumes = []
+[build]
+command = ['sh', '-c', 'test -n "$DRM_GEN_INCLUDE" && test -f "$DRM_DEPLOY_METADATA"']

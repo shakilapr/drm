@@ -564,7 +564,6 @@ For each topic, DRM traces the graph from publisher placement to consumer placem
   This integrates third-party devices directly into the unified communication graph without maintaining parallel export lists or separate routing tables.
 
 ## The Boundary Router
-
 When data travels between separate physical devices, the **`drm-router`** daemon runs on each computer to bridge local shared memory with external physical links:
 
 - **Topic Filtering**: Transmits only topics mapped to remote consumers across that specific physical link.
@@ -579,6 +578,26 @@ When data travels between separate physical devices, the **`drm-router`** daemon
 - **Two-Way Import**: When an external microcontroller or companion computer sends sensor data across a link, the local boundary router receives it and writes it directly into the local shared-memory domain. Local nodes consume it identically to any local topic without knowing it crossed a physical boundary. A validated frame is delivered locally and forwarded on each egress branch independently; a failure on one branch never suppresses local delivery or sibling branches.
 
 Physical link disconnections affect only topics traveling across that specific link. All local processes continue communicating across shared memory with zero interruption.
+
+## External Middleware Bridges
+
+A third-party middleware is reached through an explicit **bridge process**, never by teaching the core about its protocol. A bridge is an ordinary DRM node from the local deployment's point of view and an ordinary peer from the foreign middleware's point of view; DRM's shared-memory domain retains exactly one publisher per topic.
+
+**Structure.** A bridge attaches to DRM over the public attached data API ([§Attached-Channel Data Operations](#attached-channel-data-operations)) — in practice the C ABI, so one implementation serves every language a foreign middleware favors — and speaks the foreign protocol natively. It is not a broker, holds no registry, and introduces no second writer: publishing into DRM means being the deployment's declared publisher for that topic.
+
+**Serialization is the bridge's business, not the core's.** DRM's canonical layout is its own; a foreign wire format (for example CDR) is encoded and decoded inside the bridge. The core never learns a foreign encoding, and `drm-core` gains no dependency on any external middleware.
+
+**Declared mapping.** A bridge's channel set is explicit configuration naming, per direction, the foreign endpoint and the DRM canonical topic. Undeclared topics are never bridged, and a message whose foreign type identity or serialized size does not fit the declared DRM bounds is rejected with an explicit status — never truncated, never silently resized.
+
+**Capacity is checked, not discovered.** A bridge honors the declared payload bound, history depth, and pool capacity of the DRM side. A foreign publisher whose message exceeds the bound is refused by the bridge; a DRM topic whose retention cannot absorb the bridge's pace follows its declared overflow policy, exactly as for a native node.
+
+**No feedback loops.** A bridge that both reads and writes the same topic is rejected at configuration time: with one publisher per topic per direction, an echo path must be expressed as two distinct topics.
+
+**QoS translation is explicit.** Foreign reliability and durability settings map to declared DRM delivery semantics where the mapping is real, and are refused where it is not. A bridge never claims a guarantee the DRM topic does not carry.
+
+**Types move by serialized payload.** Until typed conversion exists, a bridge carries samples as serialized bytes and DRM applications treat that payload as opaque. Typed foreign↔DRM field conversion is a separate, later capability; a bridge must not imply it.
+
+**Isolation.** A bridge process failing, restarting, or stalling affects only its declared topics: other topics, other bridges, and all local DRM traffic continue. The bridge holds no lock or resource that a local publisher needs.
 
 ## The DRM Compiler Architecture
 

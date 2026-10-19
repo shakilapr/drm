@@ -1,0 +1,9 @@
+# The bridge process: a normal DRM endpoint that publishes what ROS sent and
+# consumes what ROS should receive (architecture §External Middleware Bridges).
+# It is built out of tree (CMake + rclcpp), so its adapter only checks that DRM's
+# generated artifacts are present, like the mixed_robot example nodes.
+name = "ros_bridge"
+publishes = ["bridge/from_ros"]
+consumes = ["bridge/to_ros"]
+[build]
+command = ['sh', '-c', 'test -n "$DRM_GEN_INCLUDE" && test -f "$DRM_DEPLOY_METADATA"']
