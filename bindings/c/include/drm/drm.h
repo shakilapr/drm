@@ -128,11 +128,13 @@ drm_status drm_borrow_release(drm_consumer *consumer, uint32_t token);
  * segment, so a second process can exchange topic samples with the first.
  *
  * Both sides must agree on segment_name, topic_name, lock_dir, the two hashes,
- * topic_handle, sample_max, depth, pool, and overflow_policy; the slot
- * alignment is fixed at 8 for these exports. `mode` is DRM_ATTACHED_CONSUMER
- * (read-only, never creates; timeout_ms bounds the wait) or
- * DRM_ATTACHED_PUBLISHER (acquires the single-writer authority; a second live
- * publisher returns DRM_ERR_PERMISSION, I-AT2). */
+ * topic_handle, sample_max, depth, pool, and overflow_policy. The payload-slot
+ * alignment is part of the segment layout: drm_attached_open fixes it at 8, and
+ * drm_attached_open_aligned takes the deployment's `slot_align` (a topic of
+ * `u8[<=N]` reports 4, so a bridge serving it must use the aligned form). `mode`
+ * is DRM_ATTACHED_CONSUMER (read-only, never creates; timeout_ms bounds the
+ * wait) or DRM_ATTACHED_PUBLISHER (acquires the single-writer authority; a
+ * second live publisher returns DRM_ERR_PERMISSION, I-AT2). */
 #define DRM_ATTACHED_CONSUMER ((uint8_t)0)
 #define DRM_ATTACHED_PUBLISHER ((uint8_t)1)
 

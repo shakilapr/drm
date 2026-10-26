@@ -71,6 +71,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     unsigned long received = 0;
+    unsigned long gaps = 0;
     int last_ok = 1;
     for (int attempt = 0; attempt < 3000 && received < expect; ++attempt) {
         size_t len = 0;
@@ -109,6 +110,10 @@ int main(int argc, char **argv) {
             } else {
                 last_ok = 0;
             }
+        } else if (status == DRM_ERR_GAP) {
+            /* The reader fell behind the retained window: normal when the writer
+             * runs ahead, but it must be counted rather than hidden. */
+            ++gaps;
         } else if (status != DRM_ERR_NO_SAMPLE && status != DRM_ERR_RETRY) {
             fprintf(stderr, "peer: read -> %d\n", status);
             break;
@@ -116,7 +121,8 @@ int main(int argc, char **argv) {
         struct timespec pause = {0, 5 * 1000 * 1000};
         nanosleep(&pause, NULL);
     }
-    printf("PEER_OK received=%lu last_intact=%s\n", received, last_ok ? "yes" : "no");
+    printf("PEER_OK received=%lu gaps=%lu last_intact=%s\n", received, gaps,
+           last_ok ? "yes" : "no");
     fflush(stdout);
     free(buffer);
     drm_attached_close(handle);
