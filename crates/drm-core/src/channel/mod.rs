@@ -14,6 +14,7 @@ pub mod pattern;
 pub mod pool;
 pub mod precommit;
 mod reclaim;
+pub mod registration;
 
 pub use overflow::OverflowPolicy;
 

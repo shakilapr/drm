@@ -47,6 +47,20 @@ impl HazardWord {
         unpack(self.0.load(order))
     }
 
+    /// The packed word verbatim (registration close compares it against the exact
+    /// generation-bearing empty word, I-CR4).
+    /// REQ: REQ-CORE-005.
+    #[must_use]
+    pub fn raw(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    /// Overwrites the word verbatim (claim's normalize step, I-CR7).
+    /// REQ: REQ-CORE-007.
+    pub fn store_raw(&self, word: u64) {
+        self.0.store(word, Ordering::SeqCst);
+    }
+
     /// REQ: REQ-CORE-030 — protect/install or clear (`SeqCst` CAS); `false` = raced.
     pub fn compare_exchange(&self, expected: u64, new: u64) -> bool {
         self.0
@@ -79,6 +93,10 @@ pub struct ConsumerRec {
     pub active: AtomicBool,
     /// This endpoint's single hazard word.
     pub hazard: HazardWord,
+    /// Registration state word (`RegistrationState`; 0 = `Vacant`).
+    state_word: AtomicU32,
+    /// Persisted acknowledgement floor (first sequence still needed).
+    ack_seq: AtomicU64,
     /// Registered owner `pid` snapshot (diagnostic; the 4-byte `owner_pid` slot).
     owner_pid: AtomicI32,
     /// Registered owner start-ticks snapshot (diagnostic `owner_start`).
@@ -88,6 +106,83 @@ pub struct ConsumerRec {
 }
 
 impl ConsumerRec {
+    /// Registration state word (consumer-registration.md `RegistrationState`).
+    /// The `active` flag is the hazard protocol's fast view of the same fact;
+    /// this word is the owner's state machine (`Vacant`/`Claiming`/`Active`/
+    /// `Closing`).
+    /// REQ: REQ-CORE-007.
+    ///
+    /// # Errors
+    /// [`Status::InvalidData`] for a state word this runtime does not know.
+    pub fn state(&self) -> Result<crate::channel::registration::RegistrationState, Status> {
+        crate::channel::registration::RegistrationState::from_raw(
+            self.state_word.load(Ordering::Acquire),
+        )
+    }
+
+    /// Publishes a registration state. `Active` and `Closing` keep the hazard
+    /// protocol's `active` flag consistent: borrows are permitted only while
+    /// `Active`, and a `Closing` record still protects an outstanding borrow.
+    /// REQ: REQ-CORE-007, REQ-CORE-005.
+    pub fn set_state(&self, state: crate::channel::registration::RegistrationState) {
+        self.state_word.store(state as u32, Ordering::Release);
+        self.active.store(
+            matches!(
+                state,
+                crate::channel::registration::RegistrationState::Active
+            ),
+            Ordering::Release,
+        );
+    }
+
+    /// Current registration generation (0 = never claimed).
+    /// REQ: REQ-CORE-007.
+    #[must_use]
+    pub fn generation_word(&self) -> u32 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    /// Publishes the next registration generation.
+    /// REQ: REQ-CORE-007.
+    pub fn set_generation(&self, generation: u32) {
+        self.generation.store(generation, Ordering::Relaxed);
+    }
+
+    /// The whole hazard word (generation + slot), for the close check that must
+    /// match the *exact* generation-bearing empty word (I-CR4).
+    /// REQ: REQ-CORE-005.
+    #[must_use]
+    pub fn hazard_word(&self) -> u64 {
+        self.hazard.raw()
+    }
+
+    /// Stores a hazard word verbatim (claim's normalize-then-publish sequence).
+    /// REQ: REQ-CORE-007, I-CR7.
+    pub fn set_hazard_word(&self, word: u64) {
+        self.hazard.store_raw(word);
+    }
+
+    /// Persisted acknowledgement floor: the first sequence this consumer still
+    /// needs. Only ever rises (`fetch_max`), so a restart cannot re-deliver an
+    /// already-acknowledged sequence.
+    /// REQ: REQ-CORE-005.
+    #[must_use]
+    pub fn ack_floor(&self) -> u64 {
+        self.ack_seq.load(Ordering::Acquire)
+    }
+
+    /// Folds `floor` into the persisted acknowledgement floor.
+    /// REQ: REQ-CORE-005.
+    pub fn raise_ack_floor(&self, floor: u64) {
+        self.ack_seq.fetch_max(floor, Ordering::Relaxed);
+    }
+
+    /// Publishes the owning endpoint's identity snapshot (diagnostic only).
+    /// REQ: REQ-CORE-008.
+    pub fn set_identity(&self, me: ProcessIdentity) {
+        self.record_identity(me);
+    }
+
     /// New record in the `Active` state; the hazard word starts at
     /// `{generation, NONE}` (the acquisition CAS's empty form). The owner
     /// identity starts unrecorded (`{pid: 0, start_ticks: 0}`); a claimant
@@ -98,6 +193,10 @@ impl ConsumerRec {
             generation: AtomicU32::new(generation),
             active: AtomicBool::new(true),
             hazard: HazardWord(AtomicU64::new(pack(generation, HAZARD_NONE))),
+            state_word: AtomicU32::new(
+                crate::channel::registration::RegistrationState::Active as u32,
+            ),
+            ack_seq: AtomicU64::new(0),
             owner_pid: AtomicI32::new(0),
             owner_start: AtomicU64::new(0),
             reg_lock: AtomicBool::new(false),

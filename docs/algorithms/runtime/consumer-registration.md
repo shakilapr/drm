@@ -182,9 +182,23 @@ monotonically with a CAS-max.
 
 ## Test Matrix
 
-| Case | Expected |
-|---|---|
-| `consumer_claim_race` | exactly one owner |
+All cases below are implemented in `crates/drm-core/tests/consumer_registration.rs`
+against the real `flock` backend; the module is `drm_core::channel::registration`.
+
+| Case | Expected | Status |
+|---|---|---|
+| `consumer_claim_race` | exactly one owner | implemented |
+| `consumer_claim_order` | I-CR2 | implemented |
+| `consumer_generation_reuse` | stale clear fails | implemented |
+| `consumer_close_borrowed` | I-CR4 | implemented |
+| `consumer_claiming_orphan` (kill between `Claiming` and hazard store) | I-CR7: slot selectable, normalizer repairs under lock | implemented |
+| `required_reattach_resume` | first request equals persisted `ack_seq`; no acknowledged replay | implemented |
+| `consumer_acquisition_recheck` | a demoted or reused record refuses new borrows | implemented |
+| `consumer_close_vs_acquire` (Loom: close interleaved at every acquisition boundary) | I-CR6: hazard installed after close's check never survives to a Vacant record; payload never read after demotion | pending (Loom lane) |
+| `consumer_close_reentrant` (close → Busy → guard release → re-close) | I-CR4: second close completes `Closing → Vacant` | pending |
+| `consumer_takeover_identity` (lock-based) | I-CR5 | pending |
+| kill in each claim step | recoverable without live-owner takeover | pending |
+| `diagnostic_claim_bound` | scans at most `diagnostic_count`; no channel growth | pending |
 | `consumer_claim_order` | I-CR2 |
 | `consumer_generation_reuse` | stale clear fails |
 | `consumer_close_borrowed` | I-CR4 |
