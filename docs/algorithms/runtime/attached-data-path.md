@@ -61,7 +61,13 @@ fn release(&self, slot: &mut HazardSlot) -> Result<(), Status>;
 ## Invariants
 
 - **I-AT1 RegionDiscipline**: every operation addresses the segment only through
-  the `AttachedView` offsets; bounds are established once at attach.
+  the `AttachedView` offsets; bounds are established once at attach. The payload
+  **stride** is part of that agreement: `slot_align` is not carried in the
+  descriptor, so attach proves it rather than trusting the caller —
+  `payload_offset + pool_size * align_up(sample_max, slot_align)` must equal the
+  descriptor's `segment_size` exactly, or the attachment is refused
+  (`InvalidData`). A stride mismatch moves every slot after the first, so
+  accepting it would return other samples' bytes as a valid sample.
 - **I-AT2 SingleWriter**: `publish` is reachable only through a publisher
   authority acquired by `publisher_open`; consumers hold no write capability
   (AGENTS.md #4).
@@ -81,6 +87,7 @@ fn release(&self, slot: &mut HazardSlot) -> Result<(), Status>;
 | Test | Invariant | Requirement | Status |
 |---|---|---|---|
 | `attached_publish_read_roundtrip` (two processes, N samples) | I-AT1, I-AT6 | `REQ-CORE-102`, `REQ-CORE-103` | implemented |
+| `attached_slot_align_mismatch_refused` (stride ≠ descriptor size) | I-AT1 | `REQ-CORE-103` | implemented |
 | `attached_second_publisher_refused` (`perf-matrix` cross-process leg) | I-AT2 | `REQ-CORE-104` | covered by the lifecycle harness |
 | `attached_consumer_stalled_reclaimed` | I-AT3 | `REQ-CORE-103` | pending |
 | `attached_borrow_copy_only` | I-AT4 | `REQ-CORE-103` | pending |

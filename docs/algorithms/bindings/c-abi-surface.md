@@ -406,7 +406,8 @@ process exchanges samples with the first.
 
 | Export | Behaviour |
 |---|---|
-| `drm_attached_open` | `DRM_ATTACHED_PUBLISHER` acquires the segment's single-writer authority (a live second publisher ⇒ `DRM_ERR_PERMISSION`, I-AT2); `DRM_ATTACHED_CONSUMER` attaches read-only and never creates, with a bounded wait via `timeout_ms` |
+| `drm_attached_open` | `DRM_ATTACHED_PUBLISHER` acquires the segment's single-writer authority (a live second publisher ⇒ `DRM_ERR_PERMISSION`, I-AT2); `DRM_ATTACHED_CONSUMER` attaches read-only and never creates, with a bounded wait via `timeout_ms`. Lays the payload pool out with the fixed `slot_align = 8` |
+| `drm_attached_open_aligned` | Same contract, with the deployment's `slot_align` supplied by the caller (`0` ⇒ the fixed 8). The stride is part of the segment layout, so a deployment whose generated alignment is smaller than 8 needs this form: `drm_attached_open` would create a segment size its own consumers refuse |
 | `drm_attached_close` | Releases authority / detaches; a null handle ⇒ `DRM_ERR_INVALID_ARG` (double close is caller UB, I-A2) |
 | `drm_attached_publish` | Copy publish; `DRM_ERR_BUSY` under a concurrent publish, `DRM_ERR_POOL_EXHAUSTED` when the pool is spent, sequence returned via `out_seq` |
 | `drm_attached_read_latest` | Newest committed sample into caller memory; `DRM_ERR_NO_SAMPLE` when none is committed, `DRM_ERR_RETRY` when the bounded attempt budget is exhausted |
@@ -414,7 +415,11 @@ process exchanges samples with the first.
 
 Both sides must agree on `segment_name`, `topic_name`, `lock_dir`, the schema and
 layout hashes, `topic_handle`, `sample_max`, `depth`, `pool`, and
-`overflow_policy`; slot alignment is fixed at 8 for these exports. Copy form
+`overflow_policy`. The payload-slot alignment is the deployment's `slot_align`:
+`drm_attached_open` fixes it at 8, `drm_attached_open_aligned` takes it
+explicitly, and an attach that does not reproduce the descriptor's segment size
+is refused (I-AT1) rather than reading another slot's bytes. Copy form
 only: no borrowed sample crosses the attachment and external I/O must copy first
 (AGENTS.md #5). Test: `attached_abi_publish_then_read`
-(`crates/drm-ffi/tests/attached_abi.rs`).
+(`crates/drm-ffi/tests/attached_abi.rs`), `attached_slot_align_mismatch_refused`
+(`crates/drm-core/tests/attached_channel.rs`).
