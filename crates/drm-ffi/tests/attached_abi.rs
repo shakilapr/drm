@@ -18,8 +18,8 @@ use std::ptr;
 
 use drm_core::shm::{PosixShm, SegmentName, ShmBackend};
 use drm_ffi::attached::{
-    drm_attached, drm_attached_close, drm_attached_open, drm_attached_publish,
-    drm_attached_read_latest, drm_attached_read_next,
+    drm_attached, drm_attached_close, drm_attached_open, drm_attached_open_aligned,
+    drm_attached_publish, drm_attached_read_latest, drm_attached_read_next,
 };
 
 /// Success code documented in `drm.h`.
@@ -128,4 +128,128 @@ fn attached_abi_publish_then_read() {
     }
     let _ = PosixShm.unlink(&seg);
     let _ = std::mem::size_of::<*mut c_void>();
+}
+
+/// `REQ-CORE-107`, `REQ-CORE-103` — a deployment whose `slot_align` is not the
+/// ABI's fixed 8 must be able to create and attach its own segment through the C
+/// ABI. `drm_attached_open_aligned` takes the generated alignment, so both sides
+/// agree on the stride; the fixed-8 entry point would lay out a different
+/// segment size and the aligned consumer would refuse it (I-AT1).
+#[test]
+fn attached_abi_aligned_segment_round_trip() {
+    /// Alignment a `u8[<=N]` deployment declares (`struct_align` of the layout).
+    const ALIGN: u64 = 4;
+    /// Its own topic handle: the publisher lock is per handle, and the
+    /// fixed-alignment test above runs concurrently in another thread.
+    const ALIGNED_HANDLE: u32 = HANDLE + 1;
+    /// A capacity that is NOT a multiple of 8, so align 4 and align 8 really do
+    /// produce different strides (20 vs 24). With a multiple of 8 the two
+    /// alignments coincide and the test would prove nothing.
+    const CAPACITY: u64 = 20;
+
+    let name = format!("/drm.attached.abi.aligned.{}", std::process::id());
+    let cname = std::ffi::CString::new(name.clone()).expect("segment name");
+    std::fs::create_dir_all("/tmp/drm-attached-abi-locks").expect("lock dir");
+    let seg = SegmentName::new(&name).expect("segment name");
+    let _ = PosixShm.unlink(&seg);
+    let locks = c"/tmp/drm-attached-abi-locks";
+    let hashes = [7_u8; 16];
+
+    // SAFETY: test scaffolding over the exported C ABI; every pointer is valid.
+    unsafe {
+        let mut publisher: *mut drm_attached = ptr::null_mut();
+        let rc = drm_attached_open_aligned(
+            cname.as_ptr(),
+            c"drm/attached/abi".as_ptr(),
+            locks.as_ptr(),
+            hashes.as_ptr(),
+            hashes.as_ptr(),
+            ALIGNED_HANDLE,
+            CAPACITY,
+            DEPTH,
+            POOL,
+            0,
+            1,
+            /*timeout_ms=*/ 1_000,
+            ALIGN,
+            &raw mut publisher,
+        );
+        assert_eq!(rc, DRM_OK, "aligned publisher open");
+
+        for n in 0u64..3 {
+            let mut payload = [0_u8; CAPACITY as usize];
+            payload[..8].copy_from_slice(&n.to_le_bytes());
+            let rc =
+                drm_attached_publish(publisher, payload.as_ptr(), payload.len(), ptr::null_mut());
+            assert_eq!(rc, DRM_OK, "publish {n}");
+        }
+
+        // A consumer that knows the same deployment alignment attaches and reads
+        // the samples the publisher wrote — the stride agrees.
+        let mut consumer: *mut drm_attached = ptr::null_mut();
+        let rc = drm_attached_open_aligned(
+            cname.as_ptr(),
+            c"drm/attached/abi".as_ptr(),
+            locks.as_ptr(),
+            hashes.as_ptr(),
+            hashes.as_ptr(),
+            ALIGNED_HANDLE,
+            CAPACITY,
+            DEPTH,
+            POOL,
+            0,
+            0,
+            /*timeout_ms=*/ 1_000,
+            ALIGN,
+            &raw mut consumer,
+        );
+        assert_eq!(rc, DRM_OK, "aligned consumer open");
+
+        let mut buf = [0_u8; CAPACITY as usize];
+        let mut len = 0usize;
+        let mut seen = Vec::new();
+        let mut missed = u64::MAX;
+        loop {
+            let rc = drm_attached_read_next(
+                consumer,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &raw mut len,
+                &raw mut missed,
+            );
+            if rc != DRM_OK {
+                break;
+            }
+            seen.push(u64::from_le_bytes(buf[..8].try_into().expect("head")));
+        }
+        assert_eq!(seen, vec![0, 1, 2], "aligned sequential window");
+
+        // A consumer that assumes the ABI default (8) must be refused rather than
+        // handed another slot's bytes.
+        let mut wrong: *mut drm_attached = ptr::null_mut();
+        let rc = drm_attached_open(
+            cname.as_ptr(),
+            c"drm/attached/abi".as_ptr(),
+            locks.as_ptr(),
+            hashes.as_ptr(),
+            hashes.as_ptr(),
+            ALIGNED_HANDLE,
+            CAPACITY,
+            DEPTH,
+            POOL,
+            0,
+            0,
+            /*timeout_ms=*/ 200,
+            &raw mut wrong,
+        );
+        assert_ne!(
+            rc, DRM_OK,
+            "a fixed-8 consumer must refuse an align-4 segment"
+        );
+        assert!(wrong.is_null(), "a refused open leaves the handle null");
+
+        assert_eq!(drm_attached_close(consumer), DRM_OK);
+        assert_eq!(drm_attached_close(publisher), DRM_OK);
+    }
+    let _ = PosixShm.unlink(&seg);
 }

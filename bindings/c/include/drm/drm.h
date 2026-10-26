@@ -141,6 +141,18 @@ drm_status drm_attached_open(const char *segment_name, const char *topic_name, c
                              uint32_t topic_handle, uint64_t sample_max, uint64_t depth,
                              uint64_t pool, uint8_t overflow_policy, uint8_t mode,
                              uint64_t timeout_ms, drm_attached **out);
+
+/* Same as drm_attached_open, but the payload-slot alignment is the deployment's
+ * `slot_align` instead of the fixed 8. The stride is part of the segment layout,
+ * so a publisher that assumes 8 creates a segment whose size a deployment-
+ * configured consumer must refuse. `slot_align` 0 means "use the fixed 8".
+ * Append-only addition (REQ-CORE-107); drm_attached_open keeps its shape. */
+drm_status drm_attached_open_aligned(const char *segment_name, const char *topic_name,
+                                     const char *lock_dir, const uint8_t *schema_hash,
+                                     const uint8_t *layout_hash, uint32_t topic_handle,
+                                     uint64_t sample_max, uint64_t depth, uint64_t pool,
+                                     uint8_t overflow_policy, uint8_t mode, uint64_t timeout_ms,
+                                     uint64_t slot_align, drm_attached **out);
 drm_status drm_attached_close(drm_attached *handle);
 
 /* Copy publish; `out_seq` (optional) receives the sequence the sample took. */

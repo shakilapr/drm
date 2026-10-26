@@ -115,6 +115,12 @@ fn expectation(
 /// `MODE_CONSUMER` (never creates; `timeout_ms` bounds the wait for the segment).
 /// Both sides must pass the same `segment_name`, `topic_name`, hashes, handle, and
 /// sizes, and the same `lock_dir` the publisher uses.
+///
+/// This entry point lays the payload pool out with `slot_align = 8`. A deployment
+/// whose generated `slot_align` is smaller must use
+/// [`drm_attached_open_aligned`] instead: the stride is part of the segment's
+/// layout, so a publisher that assumes 8 creates a segment whose size no
+/// deployment-configured consumer will accept.
 /// REQ: REQ-CORE-107, REQ-CORE-102, REQ-CORE-104.
 ///
 /// # Safety
@@ -135,6 +141,105 @@ pub unsafe extern "C" fn drm_attached_open(
     overflow_policy: u8,
     mode: u8,
     timeout_ms: u64,
+    out: *mut *mut drm_attached,
+) -> drm_status {
+    // SAFETY: the caller contract is identical to this function's own.
+    unsafe {
+        open_impl(
+            segment_name,
+            topic_name,
+            lock_dir,
+            schema_hash,
+            layout_hash,
+            topic_handle,
+            sample_max,
+            depth,
+            pool,
+            overflow_policy,
+            mode,
+            timeout_ms,
+            SLOT_ALIGN,
+            out,
+        )
+    }
+}
+
+/// Opens a segment laid out with an explicit payload-slot alignment.
+///
+/// Identical to [`drm_attached_open`] except that the caller supplies the
+/// deployment's `slot_align` (from the generated connection data) instead of the
+/// fixed 8. A consumer passes it to validate the publisher's layout; a publisher
+/// passes it to create the segment with the size its deployment declares. An
+/// alignment of 0 means "use the fixed 8", so a caller that has no deployment
+/// value behaves exactly like [`drm_attached_open`].
+/// REQ: REQ-CORE-107, REQ-CORE-102, REQ-CORE-104.
+///
+/// # Safety
+/// Every pointer is null or valid for its documented length; `out` is writable.
+#[must_use]
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn drm_attached_open_aligned(
+    segment_name: *const c_char,
+    topic_name: *const c_char,
+    lock_dir: *const c_char,
+    schema_hash: *const u8,
+    layout_hash: *const u8,
+    topic_handle: u32,
+    sample_max: u64,
+    depth: u64,
+    pool: u64,
+    overflow_policy: u8,
+    mode: u8,
+    timeout_ms: u64,
+    slot_align: u64,
+    out: *mut *mut drm_attached,
+) -> drm_status {
+    let align = if slot_align == 0 {
+        SLOT_ALIGN
+    } else {
+        slot_align
+    };
+    // SAFETY: the caller contract is identical to this function's own.
+    unsafe {
+        open_impl(
+            segment_name,
+            topic_name,
+            lock_dir,
+            schema_hash,
+            layout_hash,
+            topic_handle,
+            sample_max,
+            depth,
+            pool,
+            overflow_policy,
+            mode,
+            timeout_ms,
+            align,
+            out,
+        )
+    }
+}
+
+/// Shared body of the two open entry points.
+///
+/// # Safety
+/// As [`drm_attached_open`].
+#[allow(clippy::too_many_arguments)]
+unsafe fn open_impl(
+    segment_name: *const c_char,
+    topic_name: *const c_char,
+    lock_dir: *const c_char,
+    schema_hash: *const u8,
+    layout_hash: *const u8,
+    topic_handle: u32,
+    sample_max: u64,
+    depth: u64,
+    pool: u64,
+    overflow_policy: u8,
+    mode: u8,
+    timeout_ms: u64,
+    slot_align: u64,
     out: *mut *mut drm_attached,
 ) -> drm_status {
     if let Err(status) = unsafe { zero_out(out) } {
@@ -158,7 +263,7 @@ pub unsafe extern "C" fn drm_attached_open(
         );
         let spec = LayoutSpec {
             flags: 0,
-            slot_align: SLOT_ALIGN,
+            slot_align,
         };
         match mode {
             MODE_PUBLISHER => {
@@ -255,7 +360,7 @@ pub unsafe extern "C" fn drm_attached_publish(
     let Endpoint::Publisher(publisher) = &boxed.endpoint else {
         return Status::Permission.code();
     };
-    let Ok(channel) = AttachedChannel::new(publisher.mapping(), &publisher.view, SLOT_ALIGN) else {
+    let Ok(channel) = AttachedChannel::derive(publisher.mapping(), &publisher.view) else {
         return Status::InvalidData.code();
     };
     match channel.publish(payload) {
@@ -300,7 +405,7 @@ pub unsafe extern "C" fn drm_attached_read_latest(
     let Endpoint::Consumer { consumer, state } = &mut boxed.endpoint else {
         return Status::Permission.code();
     };
-    let Ok(channel) = AttachedChannel::new(consumer.mapping(), &consumer.view, SLOT_ALIGN) else {
+    let Ok(channel) = AttachedChannel::derive(consumer.mapping(), &consumer.view) else {
         return Status::InvalidData.code();
     };
     let state = state.get_or_insert_with(|| channel.reader());
@@ -355,7 +460,7 @@ pub unsafe extern "C" fn drm_attached_read_next(
     let Endpoint::Consumer { consumer, state } = &mut boxed.endpoint else {
         return Status::Permission.code();
     };
-    let Ok(channel) = AttachedChannel::new(consumer.mapping(), &consumer.view, SLOT_ALIGN) else {
+    let Ok(channel) = AttachedChannel::derive(consumer.mapping(), &consumer.view) else {
         return Status::InvalidData.code();
     };
     let state = state.get_or_insert_with(|| channel.reader());

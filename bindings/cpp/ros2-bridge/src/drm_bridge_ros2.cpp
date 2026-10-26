@@ -269,11 +269,14 @@ drm_status open_channel(Channel *channel, const std::string &segment, const std:
     const int attempts = waiting ? 250 : 1;
     drm_status status = DRM_ERR_NOT_FOUND;
     for (int attempt = 0; attempt < attempts; ++attempt) {
-        status = drm_attached_open(segment.c_str(), channel->drm_topic.c_str(), lock_dir.c_str(),
-                                   schema, layout, static_cast<uint32_t>(channel->connection.slot),
-                                   channel->connection.payload_capacity,
-                                   channel->connection.history_depth, channel->connection.pool_size,
-                                   overflow, mode, /*timeout_ms=*/5000, &channel->attached);
+        // The deployment's own slot alignment, not the ABI's fixed default: the
+        // stride is part of the segment layout, so a bridge that assumed 8 would
+        // create (or fail to validate) a segment the deployment never declared.
+        status = drm_attached_open_aligned(
+            segment.c_str(), channel->drm_topic.c_str(), lock_dir.c_str(), schema, layout,
+            static_cast<uint32_t>(channel->connection.slot), channel->connection.payload_capacity,
+            channel->connection.history_depth, channel->connection.pool_size, overflow, mode,
+            /*timeout_ms=*/5000, channel->connection.slot_align, &channel->attached);
         if (status != DRM_ERR_NOT_FOUND)
             break;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
