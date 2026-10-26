@@ -18,6 +18,9 @@ DEP=tests/ros2_bridge/.drm/deploy/deployment.json
 LOCKS=/tmp/drm-bridge-locks
 BRIDGE=./bindings/cpp/ros2-bridge/build/drm_bridge_ros2
 ID=$(python3 -c "import json;print(json.load(open('$DEP'))['deployment_id'])")
+# Payload-slot alignment of the declared topics: part of the segment layout, so
+# every side reads it from the same generated config instead of assuming 8.
+ALIGN=$(python3 -c "import json;d=json.load(open('$DEP'));print(next(iter(d['topics'].values()))['slot_align'])")
 H1=335486d6659ba456dfde687646f45dde
 H2=f93b232c3f35db0e0f0b1ec8994e613b
 
@@ -33,7 +36,7 @@ echo "== direction A: DRM peer -> bridge -> ROS =="
 # the bridge attaches and only then advertises the ROS topic, and `ros2 topic
 # echo` needs an advertised topic to resolve the type. The publisher therefore
 # keeps publishing throughout (400 x 50ms = 20s).
-/tmp/drm_peer_pub pub "$(seg 1)" bridge/to_ros "$LOCKS" "$H1" "$H2" 1 4100 8 16 400 \
+/tmp/drm_peer_pub pub "$(seg 1)" bridge/to_ros "$LOCKS" "$H1" "$H2" 1 4100 8 16 400 "$ALIGN" \
   > /tmp/peer_pub.log 2>&1 &
 PUB=$!
 sleep 1
@@ -57,7 +60,7 @@ rm -f /dev/shm/drm."$ID".* 2>/dev/null
   --duration 20 > /tmp/bridge_b.log 2>&1 &
 BR2=$!
 sleep 3
-/tmp/drm_peer_sub sub "$(seg 0)" bridge/from_ros "$LOCKS" "$H1" "$H2" 0 4100 8 16 5 ROS-TO-DRM \
+/tmp/drm_peer_sub sub "$(seg 0)" bridge/from_ros "$LOCKS" "$H1" "$H2" 0 4100 8 16 5 ROS-TO-DRM "$ALIGN" \
   > /tmp/peer_sub.log 2>&1 &
 SUB=$!
 sleep 1

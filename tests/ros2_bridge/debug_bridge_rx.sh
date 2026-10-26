@@ -7,6 +7,9 @@ export ROS_DOMAIN_ID=49 DRM_BRIDGE_DEBUG=1
 export LD_LIBRARY_PATH="/root/projects/drm/target/release:${LD_LIBRARY_PATH:-}"
 DEP=tests/ros2_bridge/.drm/deploy/deployment.json
 ID=$(python3 -c "import json;print(json.load(open('$DEP'))['deployment_id'])")
+# Payload-slot alignment of the declared topics: part of the segment layout, so
+# every side reads it from the same generated config instead of assuming 8.
+ALIGN=$(python3 -c "import json;d=json.load(open('$DEP'));print(next(iter(d['topics'].values()))['slot_align'])")
 rm -f /dev/shm/drm."$ID".* 2>/dev/null
 mkdir -p /tmp/drm-bridge-locks; rm -f /tmp/drm-bridge-locks/* 2>/dev/null
 

@@ -20,6 +20,9 @@ DEP=tests/ros2_bridge/.drm/deploy/deployment.json
 LOCKS=/tmp/drm-bridge-locks
 BRIDGE=./bindings/cpp/ros2-bridge/build/drm_bridge_ros2
 ID=$(python3 -c "import json;print(json.load(open('$DEP'))['deployment_id'])")
+# Payload-slot alignment of the declared topics: part of the segment layout, so
+# every side reads it from the same generated config instead of assuming 8.
+ALIGN=$(python3 -c "import json;d=json.load(open('$DEP'));print(next(iter(d['topics'].values()))['slot_align'])")
 H1=335486d6659ba456dfde687646f45dde
 H2=f93b232c3f35db0e0f0b1ec8994e613b
 seg() { printf '/drm.%s.%016x' "$ID" "$1"; }
@@ -38,7 +41,7 @@ run_case() {
   local br=$!
   sleep 2
   /tmp/drm_peer_sub sub "$(seg 0)" bridge/from_ros "$LOCKS" "$H1" "$H2" 0 4100 8 16 3 \
-    "-" > /tmp/ps_$pkg.log 2>&1 &
+    "-" "$ALIGN" > /tmp/ps_$pkg.log 2>&1 &
   local sub=$!
   sleep 1
   # Publish through the package's own type support so the bytes are real CDR.
@@ -55,6 +58,10 @@ run_case() {
 
   if grep -q "received=[1-9]" /tmp/ps_$pkg.log 2>/dev/null; then
     echo "PASS  $pkg  ros->drm ($type on $topic)"
+  elif grep -qi "not a subscribable message type" /tmp/pb_$pkg.log 2>/dev/null; then
+    # A service/action interface is not a message: the bridge refusing it with a
+    # diagnostic IS the required behaviour (I-BR5), not a transport failure.
+    echo "PASS  $pkg  refused as required: $type is not a message type (I-BR5)"
   elif grep -qi "unknown type\|does not appear\|not found" /tmp/pp_$pkg.log /tmp/pb_$pkg.log 2>/dev/null; then
     echo "SKIP  $pkg  type support not resolvable in this install"
   else

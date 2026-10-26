@@ -15,6 +15,9 @@ DEP=tests/ros2_bridge/.drm/deploy/deployment.json
 LOCKS=/tmp/drm-bridge-locks
 BRIDGE=./bindings/cpp/ros2-bridge/build/drm_bridge_ros2
 ID=$(python3 -c "import json;print(json.load(open('$DEP'))['deployment_id'])")
+# Payload-slot alignment of the declared topics: part of the segment layout, so
+# every side reads it from the same generated config instead of assuming 8.
+ALIGN=$(python3 -c "import json;d=json.load(open('$DEP'));print(next(iter(d['topics'].values()))['slot_align'])")
 H1=335486d6659ba456dfde687646f45dde
 H2=f93b232c3f35db0e0f0b1ec8994e613b
 seg() { printf '/drm.%s.%016x' "$ID" "$1"; }
@@ -46,7 +49,7 @@ reset_shm
   --duration 14 > /tmp/tf_bridge.log 2>&1 &
 BR=$!
 sleep 2
-/tmp/drm_peer_sub sub "$(seg 0)" bridge/from_ros "$LOCKS" "$H1" "$H2" 0 4100 8 16 2 - \
+/tmp/drm_peer_sub sub "$(seg 0)" bridge/from_ros "$LOCKS" "$H1" "$H2" 0 4100 8 16 2 - "$ALIGN" \
   > /tmp/tf_sub.log 2>&1 &
 SUB=$!
 sleep 1
@@ -69,13 +72,17 @@ URDF='<?xml version="1.0"?><robot name="probe"><link name="base_link"/><link nam
   --duration 16 > /tmp/rsp_bridge.log 2>&1 &
 BR=$!
 sleep 2
-/tmp/drm_peer_sub sub "$(seg 0)" bridge/from_ros "$LOCKS" "$H1" "$H2" 0 4100 8 16 2 - \
+/tmp/drm_peer_sub sub "$(seg 0)" bridge/from_ros "$LOCKS" "$H1" "$H2" 0 4100 8 16 2 - "$ALIGN" \
   > /tmp/rsp_sub.log 2>&1 &
 SUB=$!
 timeout 14 ros2 run robot_state_publisher robot_state_publisher \
-  --ros-args -p robot_description:="$URDF" > /tmp/rsp_node.log 2>&1 &
+  --ros-args -p robot_description:="$URDF" -p ignore_timestamp:=true > /tmp/rsp_node.log 2>&1 &
 RSP=$!
 sleep 3
+# `robot_state_publisher` discards a JointState whose header stamp is zero (its
+# default `ignore_timestamp` is false), and `ros2 topic pub` sends no stamp by
+# default — so without `ignore_timestamp` the node publishes nothing on /tf and
+# the case would report a DRM failure that is really a harness omission.
 timeout 8 ros2 topic pub -r 5 /joint_states sensor_msgs/msg/JointState \
   "{name: ['j1'], position: [0.5]}" > /dev/null 2>&1
 sleep 2
@@ -93,7 +100,7 @@ reset_shm
   --duration 14 > /tmp/tele_bridge.log 2>&1 &
 BR=$!
 sleep 2
-/tmp/drm_peer_sub sub "$(seg 0)" bridge/from_ros "$LOCKS" "$H1" "$H2" 0 4100 8 16 2 - \
+/tmp/drm_peer_sub sub "$(seg 0)" bridge/from_ros "$LOCKS" "$H1" "$H2" 0 4100 8 16 2 - "$ALIGN" \
   > /tmp/tele_sub.log 2>&1 &
 SUB=$!
 sleep 1
@@ -119,7 +126,7 @@ sleep 2
 timeout 14 ros2 bag record -o /tmp/drm_bag /drm_bag_topic > /tmp/bag_rec.log 2>&1 &
 REC=$!
 sleep 2
-/tmp/drm_peer_pub pub "$(seg 1)" bridge/to_ros "$LOCKS" "$H1" "$H2" 1 4100 8 16 60 \
+/tmp/drm_peer_pub pub "$(seg 1)" bridge/to_ros "$LOCKS" "$H1" "$H2" 1 4100 8 16 60 "$ALIGN" \
   > /tmp/bag_pub.log 2>&1
 sleep 2
 wait $REC 2>/dev/null
@@ -143,7 +150,7 @@ if command -v Xvfb >/dev/null 2>&1; then
   DISPLAY=:77 timeout 12 rviz2 -d /dev/null > /tmp/rviz_node.log 2>&1 &
   RV=$!
   sleep 3
-  /tmp/drm_peer_pub pub "$(seg 1)" bridge/to_ros "$LOCKS" "$H1" "$H2" 1 4100 8 16 40 \
+  /tmp/drm_peer_pub pub "$(seg 1)" bridge/to_ros "$LOCKS" "$H1" "$H2" 1 4100 8 16 40 "$ALIGN" \
     > /tmp/rviz_pub.log 2>&1
   sleep 2
   # rviz2 running without crashing is the transport-level evidence; it needs a
