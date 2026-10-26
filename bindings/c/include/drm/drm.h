@@ -133,15 +133,14 @@ drm_status drm_borrow_release(drm_consumer *consumer, uint32_t token);
  * (read-only, never creates; timeout_ms bounds the wait) or
  * DRM_ATTACHED_PUBLISHER (acquires the single-writer authority; a second live
  * publisher returns DRM_ERR_PERMISSION, I-AT2). */
-#define DRM_ATTACHED_CONSUMER  ((uint8_t)0)
+#define DRM_ATTACHED_CONSUMER ((uint8_t)0)
 #define DRM_ATTACHED_PUBLISHER ((uint8_t)1)
 
-drm_status drm_attached_open(const char *segment_name, const char *topic_name,
-                             const char *lock_dir, const uint8_t *schema_hash,
-                             const uint8_t *layout_hash, uint32_t topic_handle,
-                             uint64_t sample_max, uint64_t depth, uint64_t pool,
-                             uint8_t overflow_policy, uint8_t mode, uint64_t timeout_ms,
-                             drm_attached **out);
+drm_status drm_attached_open(const char *segment_name, const char *topic_name, const char *lock_dir,
+                             const uint8_t *schema_hash, const uint8_t *layout_hash,
+                             uint32_t topic_handle, uint64_t sample_max, uint64_t depth,
+                             uint64_t pool, uint8_t overflow_policy, uint8_t mode,
+                             uint64_t timeout_ms, drm_attached **out);
 drm_status drm_attached_close(drm_attached *handle);
 
 /* Copy publish; `out_seq` (optional) receives the sequence the sample took. */
@@ -155,8 +154,8 @@ drm_status drm_attached_publish(drm_attached *handle, const uint8_t *data, size_
  * fell behind the retained window. */
 drm_status drm_attached_read_latest(drm_attached *handle, uint8_t *buf, size_t cap,
                                     size_t *out_len);
-drm_status drm_attached_read_next(drm_attached *handle, uint8_t *buf, size_t cap,
-                                  size_t *out_len, uint64_t *out_missed);
+drm_status drm_attached_read_next(drm_attached *handle, uint8_t *buf, size_t cap, size_t *out_len,
+                                  uint64_t *out_missed);
 
 #ifdef __cplusplus
 }

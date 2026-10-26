@@ -102,6 +102,11 @@ fn fmt(flags: &[String]) -> Result<()> {
 
 /// REQ: REQ-QAL-006 — `xtask lint`: clippy `-D warnings` plus installed secondary
 /// linters (mypy, eslint, yamllint, markdownlint); missing tools skipped locally.
+///
+/// eslint is resolved from the repo's own `node_modules/.bin` rather than `PATH`:
+/// a globally installed eslint without this workspace's dependencies dies on a
+/// missing `@eslint/js` config import, which reads as a lint failure. Frontend
+/// dependencies are only installed for the (currently gated) frontend job.
 fn lint(flags: &[String]) -> Result<()> {
     if !flags.is_empty() {
         bail!("lint takes no flags");
@@ -124,11 +129,24 @@ fn lint(flags: &[String]) -> Result<()> {
         ("yamllint", vec![".github", "xtask"]),
         ("markdownlint", vec!["."]),
     ] {
-        if tool_found(tool) {
-            spawn(tool, &args).with_context(|| format!("xtask lint: {tool}"))?;
+        // eslint must be the repo-local install: a global one cannot resolve this
+        // workspace's `@eslint/js` config import, so it fails for reasons the
+        // repository cannot fix. Frontend deps are installed by the frontend job.
+        let local = format!("node_modules/.bin/{tool}");
+        let binary = if tool == "eslint" {
+            if !std::path::Path::new(&local).exists() {
+                eprintln!("xtask lint: skip eslint (no repo-local node_modules)");
+                continue;
+            }
+            local.as_str()
         } else {
+            tool
+        };
+        if !tool_found(binary) {
             eprintln!("xtask lint: skip {tool} (not installed)");
+            continue;
         }
+        spawn(binary, &args).with_context(|| format!("xtask lint: {tool}"))?;
     }
     Ok(())
 }
@@ -249,7 +267,10 @@ fn clang_format(check: bool) -> Result<()> {
     Ok(())
 }
 
-/// REQ: REQ-QAL-006 — recursive file walker used by the audits.
+/// REQ: REQ-QAL-006 — recursive file walker used by the audits. Build output
+/// (`build/`, `target/`, `.drm/`) is skipped: it is generated, gitignored, and
+/// one `CMake` compiler-probe file is not clang-formatted, so descending into it
+/// would fail the format gate on files nobody wrote.
 fn walk(root: &str) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![std::path::PathBuf::from(root)];
@@ -260,6 +281,13 @@ fn walk(root: &str) -> Vec<std::path::PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                if matches!(name, "build" | "target" | ".drm" | "node_modules") {
+                    continue;
+                }
                 stack.push(path);
             } else {
                 out.push(path);
