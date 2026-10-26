@@ -69,16 +69,69 @@ impl<'m> AttachedChannel<'m> {
     ///
     /// `slot_align` must be the alignment the segment was laid out with (the
     /// `LayoutSpec` passed to `publisher_open`/`consumer_open`); it is not part of
-    /// the descriptor, so the caller supplies it.
+    /// the descriptor, so it is *proved* here rather than trusted: the stride it
+    /// implies must reproduce the descriptor's `segment_size` exactly. A wrong
+    /// alignment changes the stride, which shifts every payload slot after the
+    /// first — a reader would then hand back another sample's bytes as a valid
+    /// sample instead of failing (I-AT1).
     ///
     /// # Errors
     /// [`Status::InvalidData`] when the mapping is smaller than the layout the
-    /// descriptor describes.
+    /// descriptor describes, or when `slot_align` does not reproduce the
+    /// descriptor's segment size.
     /// REQ: REQ-CORE-102, REQ-CORE-103.
     pub fn new(mapping: &'m Mapping, view: &AttachedView, slot_align: u64) -> Result<Self, Status> {
         let slot_align = slot_align.max(1);
         let stride = stride_of(view.descriptor.payload_capacity, slot_align);
         let end = region_end(view, stride).ok_or(Status::InvalidConfig)?;
+        if end != view.descriptor.segment_size {
+            return Err(Status::InvalidData);
+        }
+        if u64::try_from(mapping.len()).unwrap_or(u64::MAX) < end {
+            return Err(Status::InvalidData);
+        }
+        Ok(Self {
+            base: mapping.ptr(),
+            len: mapping.len(),
+            view: view.clone(),
+            stride,
+            slot_align,
+            _mapping: mapping,
+        })
+    }
+
+    /// Binds the data operations to an attachment without being told the
+    /// alignment: the stride is recovered from the descriptor's own
+    /// `segment_size` (`(segment_size - payload_offset) / pool_size`), so a
+    /// caller that does not know the deployment's `slot_align` — every
+    /// non-Rust binding — still addresses the right slots.
+    ///
+    /// # Errors
+    /// [`Status::InvalidConfig`] when the descriptor's sizes do not divide
+    /// evenly or the recovered stride is not an alignment of the payload
+    /// capacity, and [`Status::InvalidData`] when the mapping is smaller than
+    /// the layout.
+    /// REQ: REQ-CORE-102, REQ-CORE-103.
+    pub fn derive(mapping: &'m Mapping, view: &AttachedView) -> Result<Self, Status> {
+        let descriptor = &view.descriptor;
+        let pool_bytes = descriptor
+            .segment_size
+            .checked_sub(view.payload_offset)
+            .ok_or(Status::InvalidConfig)?;
+        if descriptor.pool_size == 0 || pool_bytes % descriptor.pool_size != 0 {
+            return Err(Status::InvalidConfig);
+        }
+        let stride = pool_bytes / descriptor.pool_size;
+        // The layout aligns the capacity up to `slot_align`; recover the
+        // alignment the stride implies rather than assuming one.
+        let capacity = descriptor.payload_capacity.max(1);
+        let slot_align = (1..=8)
+            .find(|align| stride_of(capacity, *align) == stride)
+            .ok_or(Status::InvalidConfig)?;
+        let end = region_end(view, stride).ok_or(Status::InvalidConfig)?;
+        if end != descriptor.segment_size {
+            return Err(Status::InvalidData);
+        }
         if u64::try_from(mapping.len()).unwrap_or(u64::MAX) < end {
             return Err(Status::InvalidData);
         }

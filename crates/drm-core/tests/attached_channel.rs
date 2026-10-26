@@ -215,3 +215,84 @@ fn attached_child_reader() -> Result<(), Box<dyn std::error::Error>> {
     println!("CHILD_OK newest={newest} window={}", window.len());
     Ok(())
 }
+
+/// A segment laid out with one alignment must not accept an attach that assumes
+/// another: the stride changes, so every payload slot after the first moves and a
+/// reader would return a *different* sample's bytes as a valid sample. Attach
+/// therefore proves the alignment by reproducing the descriptor's segment size
+/// (I-AT1) instead of trusting the caller.
+///
+/// Both directions are covered: a wrong alignment is refused, and the derived
+/// constructor recovers the right stride without being told the alignment.
+/// REQ: REQ-CORE-103.
+#[test]
+fn attached_slot_align_mismatch_refused() -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(LOCK_DIR)?;
+    let name = format!("/drm.attached.align.{}", std::process::id());
+    let segment = SegmentName::new(&name)?;
+    let _ = PosixShm.unlink(&segment);
+    let locks = LockPaths::new(LOCK_DIR);
+    // An odd payload capacity, so every candidate alignment yields a distinct
+    // stride: 1 -> 33, 2 -> 34, 4 -> 36, 8 -> 40, 16 -> 48.
+    let expected = Expectation {
+        payload_capacity: 33,
+        // Its own topic handle: the publisher lock is per handle, and the
+        // round-trip test above holds handle 77 in a parallel test thread.
+        topic_handle: HANDLE + 1,
+        ..expect()
+    };
+    let layout = |align: u64| LayoutSpec {
+        flags: 0,
+        slot_align: align,
+    };
+
+    for align in [4_u64, 8] {
+        let publisher = publisher_open(
+            &PosixShm,
+            &FlockBackend,
+            &locks.publisher(expected.topic_handle),
+            &segment,
+            TOPIC.as_bytes(),
+            &expected,
+            &layout(align),
+        )
+        .map_err(|e| format!("publisher_open align {align}: {e:?}"))?;
+
+        // The right alignment is accepted…
+        AttachedChannel::new(publisher.mapping(), &publisher.view, align)
+            .map_err(|e| format!("attach align {align} refused: {e:?}"))?;
+        // …and any other one is refused rather than reading foreign bytes.
+        for wrong in [1_u64, 2, 4, 8, 16] {
+            if wrong == align {
+                continue;
+            }
+            assert!(
+                AttachedChannel::new(publisher.mapping(), &publisher.view, wrong).is_err(),
+                "a {wrong}-aligned attach must be refused on a {align}-aligned segment"
+            );
+        }
+
+        // The derived form needs no alignment at all and still addresses the
+        // slots the publisher wrote.
+        let derived = AttachedChannel::derive(publisher.mapping(), &publisher.view)
+            .map_err(|e| format!("derive align {align}: {e:?}"))?;
+        derived
+            .publish(&payload_for(7))
+            .map_err(|e| format!("publish via derived align {align}: {e:?}"))?;
+        let mut state = derived.reader();
+        let mut buf = vec![0_u8; usize::try_from(expected.payload_capacity)?];
+        match derived
+            .read_latest(&mut state, &mut buf)
+            .map_err(|e| format!("read_latest via derived: {e:?}"))?
+        {
+            ReadOutcome::Sample => assert_eq!(sequence_of(&buf)?, 7),
+            other => return Err(format!("read_latest via derived: {other:?}").into()),
+        }
+
+        // `derived` borrows the mapping, so it ends before the publisher does.
+        let _ = &derived;
+        drop(publisher);
+        let _ = PosixShm.unlink(&segment);
+    }
+    Ok(())
+}
