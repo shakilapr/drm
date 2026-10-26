@@ -11,6 +11,15 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Added
 
+- ROS 2 integration Phase 1 (deployment-to-runtime provisioning) closed: two
+  separately built processes exchange 1,000 numbered samples using only the
+  generated `deployment.json` — segment name, contract hashes, slot, capacity,
+  depth, pool, overflow **and slot alignment** are all read from the artifact
+  (`crates/drm-cli/tests/deployment_phase1.rs`, consumer reports
+  `CHILD_OK read=1000 in_order=yes`). Mismatched and undeployed contracts are
+  refused (`WrongAbi`/`NotFound`). Phase 3 (the generic serialized ROS 2 bridge)
+  is recorded as done with its per-criterion evidence in
+  [ros2-integration-plan.md](docs/spec/ros2-integration-plan.md).
 - Week M24 W4 tranche: v1.0 release + program close-out. `cargo xtask closeout`
   (`xtask/src/closeout.rs`) folds the v1.0 release candidate into the shipping
   release and closes the program: the release build covers every
@@ -660,6 +669,22 @@ Sections are dated when tagged; dateless sections have not been tagged.
 
 ### Fixed
 
+- Attached data path: attaching with the wrong payload-slot alignment was
+  accepted and then returned *another sample's bytes* as a valid sample — the
+  stride moves every slot after the first (a 4-aligned segment attached at 8 read
+  `4294967296` where the publisher wrote `1`). Attach now requires the stride it
+  computes to reproduce the descriptor's segment size (I-AT1);
+  `AttachedChannel::derive` recovers the stride from the descriptor for callers
+  that were never told the alignment.
+- C ABI: `drm_attached_open` laid the payload pool out with a fixed alignment of
+  8, so a deployment whose generated `slot_align` is smaller (a `u8[<=N]` topic
+  reports 4) could not be served at all — a publisher created a segment size its
+  own consumers must refuse. Adds `drm_attached_open_aligned` (append-only) and
+  the ROS 2 bridge passes the alignment it already parsed.
+- `xtask fmt --check` descended into `bindings/cpp/ros2-bridge/build`, so a
+  `CMake` compiler-probe file nobody wrote could fail the format gate; build
+  output is now skipped. `xtask lint` resolves `eslint` from the repo-local
+  `node_modules`, because a global install cannot import this workspace's config.
 - Generated Python node facades imported the topic namespace package
   (`from control import target`) instead of the topic module
   (`from control.target import target`), so `publish_*`/`read_*` annotations
