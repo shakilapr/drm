@@ -296,7 +296,11 @@ pub fn parse_text(text: &str) -> Result<TopicFile, Vec<Diagnostic>> {
     };
     p.run(&mut diags);
     let file = p.file;
-    if file.attrs.is_empty() && file.fields.is_empty() {
+    // `empty-file` describes a source that declares nothing. When the parse
+    // already reported a defect, the AST is empty *because* of that defect, and
+    // a second, cascading diagnostic only inflates the count the caller shows
+    // ("2 defect(s)" for one real problem). Report the cause, not the symptom.
+    if diags.is_empty() && file.attrs.is_empty() && file.fields.is_empty() {
         diags.push(Diagnostic {
             span: Span {
                 line: 1,

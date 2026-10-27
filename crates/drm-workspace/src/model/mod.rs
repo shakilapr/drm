@@ -221,7 +221,20 @@ impl fmt::Display for ModelError {
                 )
             }
             Self::Parse { topic, diagnostics } => {
-                write!(f, "topic `{topic}`: {} defect(s)", diagnostics.len())
+                // Render the reasons, never just a count: a build failure says
+                // what is wrong with the schema (`unknown-type` at 1:4), which is
+                // the only thing the author can act on. The diagnostic text is
+                // `<line>:<col>: error: <reason>` — the file is the topic's own
+                // `.drm`, already named on the left.
+                write!(f, "topic `{topic}`: {} defect(s)", diagnostics.len())?;
+                for diagnostic in diagnostics {
+                    write!(
+                        f,
+                        "\n  {}:{}: error: {}",
+                        diagnostic.span.line, diagnostic.span.col, diagnostic.reason
+                    )?;
+                }
+                Ok(())
             }
             Self::NodeManifest { stem, message } => write!(f, "node `{stem}`: {message}"),
             Self::UnknownTopic { node, topic } => {
