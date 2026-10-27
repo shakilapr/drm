@@ -20,7 +20,7 @@ renaming work is [Part 2](#part-2--what-renaming-does-fix).
 | # | Issue | Where | Renaming fixes it? |
 |---|---|---|---|
 | 1 | Topic paths cannot match: DRM requires `package/stem` lowercase, always 2 segments; ROS allows `/a/b/c` and uppercase | DRM schema + discovery | **No** — structural |
-| 2 | No record type, no array-of-record, no array-of-strings | DRM schema grammar | **No** — 28.5 % of messages are inexpressible at any bound |
+| 2 | No record type, no array-of-record, no array-of-strings | DRM schema grammar | **No** — 28.5 % of messages are inexpressible as *typed* topics at any bound (transport still works via opaque bytes) |
 | 3 | No services or actions in the C ABI (279 + 41 unreachable) | DRM C ABI | **No** — missing capability |
 | 4 | Payload bound is static and per-topic; ROS messages are unbounded | DRM model vs ROS | **No** — needs a bound chosen per topic, and the bound is a real memory cost |
 | 5 | QoS: a RELIABLE subscriber silently receives nothing from a BEST_EFFORT publisher, which is the default for every sensor driver | bridge default | No — one flag per channel |
@@ -30,6 +30,37 @@ renaming work is [Part 2](#part-2--what-renaming-does-fix).
 | 9 | Every invalid `.drm` file also reports a spurious `empty-file`; the model error prints only a *count* of defects | toolchain | n/a — **fixed** in this change |
 
 Measured, not estimated — see [Evidence](#evidence-how-each-number-was-produced).
+
+---
+
+## Why the existing test suite passes anyway
+
+`tests/ros2_bridge/package_matrix.sh` reports 8 PASS + 1 correct refusal, which
+reads as "ROS 2 packages are compatible". It is not evidence of that:
+
+- **The payloads are empty.** The rows send `{transforms: []}`, `{status: []}`,
+  `{markers: []}` — an `TFMessage`/`DiagnosticArray`/`MarkerArray` with **no
+  elements**. An empty array is 4 bytes of CDR, so every band-D type (issue 2)
+  crosses successfully as a byte blob. The row proves the *typesupport library
+  resolves and an empty body fits the bound*, nothing about the data a real node
+  emits.
+- **The direction is not tested.** The function has a
+  `# --- DRM -> ROS ---` section that deletes the segment, computes
+  `to_ros=1` and then never runs a DRM→ROS exchange; the verdict branch only ever
+  looks at `/tmp/ps_$pkg.log` (the ROS→DRM direction). Verified by reading the
+  function: `local to_ros=0; if [ -s /tmp/ps_$pkg.log ]; then to_ros=1; fi` and
+  then `: "$sub_rc" "$to_ros"`. `run_bridge_probe.sh` does cover DRM→ROS, but
+  with a synthetic `std_msgs/String` peer, not a package.
+- **The QoS is RELIABLE on both sides** (`ros2 topic pub` default, bridge
+  default), so issue 5's BEST_EFFORT black hole never appears.
+- **The bound is 4100 and the messages are small**, so issue 4 never appears.
+
+Consequently the matrix should be read as a smoke test, not a compatibility
+claim; the four gaps above are all outside what it exercises. The honest
+replacement is to drive each row with a *representative instance* (a LaserScan
+with ≥720 beams, a TFMessage with ≥1 transform, a MarkerArray with ≥1 marker) and
+to assert both directions — at which point the failing rows become the work list
+for Part 2.
 
 ---
 
@@ -97,9 +128,13 @@ Band D is the hard one: no `.drm` file expresses it at *any* choice of bounds.
 `TFMessage`, `JointState`, `PointCloud2`, `Path` and `MarkerArray` are all band D.
 `LaserScan`, `Image`, `Odometry` and `CameraInfo` are band C.
 
-This is exactly why the bridge's topics are declared as
-`data: u8[<=4096]` — an opaque byte blob. That works as a *transport* but is
-precisely the thing that makes issue 7 (no decoding) unavoidable.
+**Scope of this blocker — it is not a transport blocker.** The bridge moves data
+as opaque CDR bytes (`data: u8[<=N]`), so a band-D message still crosses:
+measured, a `TFMessage` with 1, 10, 30 and 50 real transforms is delivered intact.
+What band D blocks is the *typed* path — a DRM application declaring the topic
+natively and reading its fields (issue 7) — which is what "change their topics to
+match ours" is trying to achieve. For pure transport only the bound (issue 4) and
+QoS (issue 5) matter.
 
 ### 3. Services and actions have no path at all
 
@@ -209,8 +244,8 @@ drm: V-SW-2: topic `x/t` has multiple publishers [a, b] (REQ-TOOL-064)
 
 The bridge *does* absorb this correctly (it is the single DRM writer and
 aggregates N ROS publishers — verified: 2 ROS publishers on `/tf` → DRM
-consumer received 6 samples), so transport survives. But it means the DRM side
-of `/tf` is a byte-stream, not a transform graph.
+consumer received 6 samples). Transport survives; what does not is a DRM *node*
+broadcasting into `/tf` itself.
 
 **b. There is no tf2 equivalent exposed.** `drm-spatial` *does* have the
 query surface (`TransformTree::latest(target, reference)`,
@@ -223,10 +258,25 @@ query surface (`TransformTree::latest(target, reference)`,
 - `TFMessage` itself is band D (array-of-record), so it cannot even be a typed
   DRM topic.
 
-Net: tf2 works today only as an opaque byte pipe. Any DRM consumer that wants
-"where is `base_link` in `map`" has to parse CDR and rebuild the tree itself.
-This is Phase 6 in `docs/spec/ros2-integration-plan.md` and it is genuinely not
-built.
+Net: tf2 works today only as an opaque byte pipe, and only up to the payload
+bound. Measured through the bridge at the fixture's `payload_capacity = 4100`:
+
+| transforms in one `TFMessage` | delivered |
+|---|---|
+| 10 | yes |
+| 30 | yes |
+| 50 | yes |
+| **52** | **dropped** |
+| 60, 100 | dropped |
+
+So a robot whose `robot_state_publisher` emits ~50 frames in one `/tf` message
+is right at the edge, and anything larger (humanoids, multi-sensor rigs, a
+namespaced fleet) is silently dropped. The CDR body is `4 + 80xN` bytes, so the
+bound admits ~51 transforms.
+
+Any DRM consumer that wants "where is `base_link` in `map`" must also parse CDR
+and rebuild the tree itself. This is Phase 6 in
+`docs/spec/ros2-integration-plan.md` and it is genuinely not built.
 
 ### 7. A DRM application cannot read a bridged payload
 
@@ -371,6 +421,17 @@ Everything below is reproducible from the repo on this host.
   `ros2 topic pub --qos-reliability {best_effort,reliable}`, bridge with and
   without `;best_effort`; DRM consumer `received` counts 0 / 3 / 3; the
   `RELIABILITY_QOS_POLICY` warning captured from the bridge's own log.
+- **`/tf` transform threshold**: `TFMessage` with N synthetic transforms
+  published over `/tfn` at `payload_capacity = 4100`; N ∈ {10, 30, 50, 52, 60,
+  100}; delivered for N ≤ 50, dropped for N ≥ 52 (bridge logs
+  `exceeds the declared bound`).
+- **Existing suite's blind spots**: read `package_matrix.sh`'s `run_case`. The
+  payloads are one-element nested records (`{linear: {x: 0.5}}`) and *empty*
+  arrays (`{transforms: []}`, `{status: []}`, `{markers: []}`) — so no band-D
+  message is ever exercised with content. The `# --- DRM -> ROS ---` block
+  computes `to_ros` and then only asserts on `/tmp/ps_$pkg.log`, i.e. the ROS→DRM
+  leg. The suite reported 9/9 green in the same run in which the QoS and bound
+  probes above failed.
 - **Topic naming**: `packages/tf/topics/tf.drm` → `tf/tf`;
   `packages/Robot/topics/CmdVel.drm` → accepted as `Robot/CmdVel`;
   `packages/robot/topics/nested/deep/lidar.drm` → silently ignored
