@@ -74,12 +74,41 @@ pub fn runtime_plan(model: &WorkspaceModel) -> RuntimePlan {
     RuntimePlan { topics }
 }
 
+/// Default payload-pool slots when a topic declares no `@pool_size`.
+///
+/// A `@history: latest` topic gets the documented triple buffer — one sample for
+/// the latest commit, one for the in-progress publisher write, one held by an
+/// active reader (`architecture.md` §Bulk Latest Topics, `payload-pool.md` I-P6)
+/// — which is also the drop-free floor `R + H + 1` for `R = 1, H = 1`. Any other
+/// history depth gets `R + 1`, the mandatory floor (I-P4).
+///
+/// This deliberately mirrors `drm_core::channel::pool::default_pool_size`:
+/// `drm-workspace` must never depend on `drm-core` (codebase.md layering), so the
+/// rule exists twice by necessity. It drifted once — this function returned
+/// `R + 1` for every topic, which silently dropped the triple buffer and left
+/// every defaulted topic one slot short of drop-free — so `default_pool_sizes_agree`
+/// pins the two implementations together.
+/// REQ: REQ-CORE-041, REQ-CORE-045.
+#[must_use]
+pub const fn default_pool_size(history_is_latest: bool) -> u64 {
+    if history_is_latest { 3 } else { 8 }
+}
+
 /// Per-topic runtime expectations (I-D10: typed values parsed once at build).
 /// REQ: REQ-TOOL-045, REQ-CORE-045.
 #[must_use]
 pub fn topic_runtime(topic: &str, entry: &TopicEntry) -> TopicRuntime {
     let history_depth = entry.attrs.history_depth.unwrap_or(1);
-    let pool_size = entry.attrs.pool_size.unwrap_or(history_depth + 1);
+    let pool_size = entry.attrs.pool_size.unwrap_or_else(|| {
+        // `latest` is either declared (`@history: latest`) or implied by the
+        // absence of a depth: the runtime resolves an undeclared depth to 1, which
+        // *is* the latest case, so both spell the same storage class.
+        let latest = entry.attrs.history_latest || entry.attrs.history_depth.is_none();
+        // The default is a *floor*, never a ceiling: `pool_size >= R + 1` is
+        // mandatory (payload-pool.md I-P4), so a deep history such as
+        // `@history: 128` must not be given the smaller 8-slot default.
+        default_pool_size(latest).max(history_depth.saturating_add(1))
+    });
     let overflow = if entry.attrs.overflow_reject {
         RuntimeOverflow::Reject
     } else {
@@ -166,20 +195,41 @@ mod tests {
             .unwrap_or_else(|| unreachable!("fixture topic `{topic}` present"))
     }
 
-    /// REQ: REQ-CORE-045 — `@history: latest` defaults to `R = 1` and the
-    /// `R + 1` pool floor; an explicit `@pool_size` wins.
+    /// REQ: REQ-CORE-045, REQ-CORE-041 — `@history: latest` defaults to `R = 1`
+    /// with the documented triple-buffer pool (3); a sequential topic defaults to
+    /// 8 but never below its own `R + 1` floor; an explicit `@pool_size` wins.
+    ///
+    /// This test previously asserted 2 and 5 — i.e. it pinned `R + 1` as the
+    /// default and so *protected* the drift from `architecture.md` and
+    /// `payload-pool.md` I-P6 rather than catching it.
     #[test]
     fn runtime_plan_pool_defaults() {
         let m = model(&[
             ("latest", "@history: latest\nx: u8\n"),
+            ("implicit", "x: u8\n"),
             ("depth", "@history: 4\nx: u8\n"),
+            ("deep", "@history: 12\nx: u8\n"),
             ("sized", "@pool_size: 9\n@history: 4\nx: u8\n"),
         ]);
         let plan = runtime_plan(&m);
         assert_eq!(rt(&plan, "control/latest").history_depth, 1);
-        assert_eq!(rt(&plan, "control/latest").pool_size, 2);
+        assert_eq!(
+            rt(&plan, "control/latest").pool_size,
+            3,
+            "the documented triple buffer, not R+1"
+        );
+        assert_eq!(
+            rt(&plan, "control/implicit").pool_size,
+            3,
+            "an undeclared @history is the `latest` case"
+        );
         assert_eq!(rt(&plan, "control/depth").history_depth, 4);
-        assert_eq!(rt(&plan, "control/depth").pool_size, 5);
+        assert_eq!(rt(&plan, "control/depth").pool_size, 8);
+        assert_eq!(
+            rt(&plan, "control/deep").pool_size,
+            13,
+            "the default is a floor: @history: 12 needs R+1 = 13"
+        );
         assert_eq!(rt(&plan, "control/sized").pool_size, 9);
     }
 
