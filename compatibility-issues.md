@@ -28,6 +28,7 @@ renaming work is [Part 2](#part-2--what-renaming-does-fix).
 | 7 | A DRM application cannot decode a bridged payload — no CDR codec anywhere in the repo | DRM core | No — Phase 5 translator |
 | 8 | `drm build` never runs the full verifier, so `V-ID`'s topic-canonicality rule (and all of V-MEM/V-RT/V-RPC) are unreachable | toolchain | n/a — bug |
 | 9 | Every invalid `.drm` file also reports a spurious `empty-file`; the model error prints only a *count* of defects | toolchain | n/a — **fixed** in this change |
+| 10 | The default `pool_size` is specified as 3, implemented as 3 in dead code and as 2 in the shipping path | DRM toolchain vs core | n/a — **fixed** in this change |
 
 Measured, not estimated — see [Evidence](#evidence-how-each-number-was-produced).
 
@@ -192,18 +193,48 @@ Raising the bound is possible (a 1 MiB bound builds cleanly and yields
 `payload_capacity: 1048580`), but the cost is static memory, because the pool is
 preallocated:
 
-| Topic bound | stride | slots | segment |
-|---|---|---|---|
-| `LaserScan` 1080 (8.7 KB) | 8 704 | 16 | 0.1 MB |
-| `MarkerArray` 100 (111 KB) | 113 604 | 16 | 1.8 MB |
-| `Image` 640×480 (900 KB) | 921 660 | 16 | 14.7 MB |
-| `PointCloud2` 64k (1 MB) | 1 048 728 | 16 | 16.8 MB |
-| `Image` 1080p (5.9 MB) | 6 220 860 | 16 | 99.5 MB |
+| Topic bound | stride | slots (default) | segment | as I first wrote it (16) |
+|---|---|---|---|---|
+| `LaserScan` 1080 (8.7 KB) | 8 704 | 2 | **0.02 MB** | 0.1 MB |
+| `MarkerArray` 100 (111 KB) | 113 604 | 2 | **0.23 MB** | 1.8 MB |
+| `Image` 640×480 (900 KB) | 921 660 | 2 | **1.8 MB** | 14.7 MB |
+| `PointCloud2` 64k (1 MB) | 1 048 728 | 2 | **2.1 MB** | 16.8 MB |
+| `Image` 1080p (5.9 MB) | 6 220 860 | 2 | **12.4 MB** | 99.5 MB |
 
-That is the real trade: DRM's zero-copy fixed-slot model versus ROS's
-"allocate whatever the sensor produced". It is a legitimate design difference,
-but it means bridging an image topic costs ~100 MB of pinned shared memory per
-topic, and it must be declared up front.
+**Correction to an earlier version of this document.** The right-hand column is
+wrong: it assumed the bridge fixture's explicit `@pool_size: 16`. DRM's documented
+default for a `@history: latest` topic is a triple buffer (3), and the model
+currently resolves it to 2. An undeclared image topic therefore costs **1.8 MB,
+not 14.7 MB** — an 8× overstatement. The corrected model is the design working as
+intended: a "latest sensor frame" buys ~2 frames of memory, not 16.
+
+Measured with real builds (`cargo run -p drm-cli -- build` on a scratch
+workspace). **Corrected defaults** — after fixing issue 10 the model resolves an
+undeclared `@pool_size` to the documented triple buffer (3) for `latest` and
+`max(8, R+1)` for a sequential topic:
+
+| topic | bound | R | pool (default) | stride | payload |
+|---|---|---|---|---|---|
+| `cam_latest` (latest) | 921 604 | 1 | 3 | 921 604 | 2.76 MB |
+| `scan_latest` (latest) | 8 708 | 1 | 3 | 8 708 | 0.03 MB |
+| `scan_hist8` (`@history: 8`) | 8 708 | 8 | 8 | 8 708 | 0.07 MB |
+| `deep` (`@history: 128`) | 1 028 | 128 | 129 | 1 028 | 0.13 MB |
+| `cmd` (small) | 4 | 1 | 3 | 4 | 0.000012 MB |
+
+As shipped *before* the fix the same plan gave `pool_size: 2` for every latest
+topic — 1.84 MB for the camera topic. So the honest numbers are 1.84 MB (buggy) →
+**2.76 MB (spec-conformant)**; the earlier 14.7 MB figure came from assuming the
+bridge fixture's explicit `@pool_size: 16`.
+
+The real cost driver is the **bound**, not the slot count: memory is
+`align_up(bound, 4) × pool`, and only a history topic multiplies by `R+1`:
+
+That is the honest trade: DRM's zero-copy fixed-slot model versus ROS's
+"allocate whatever the sensor produced". Bridging a 640×480 image topic costs
+**2.76 MB** of pinned shared memory by default (3 slots), ~12 MB if the bound is
+set for 1080p, and ~100 MB only if someone explicitly asks for 16 slots.
+
+The default is issue 10: the specification's triple buffer was not what shipped.
 
 ### 5. QoS: RELIABLE silently receives nothing from BEST_EFFORT
 
@@ -344,6 +375,60 @@ were confirmed to fail when either half of the fix is reverted.
 Net (before the fix): the user saw a number, never the reason. That was the
 biggest obstacle to *diagnosing* compatibility — the rest of this document had to
 be assembled by calling the parser directly.
+
+---
+
+### 10. The default payload-pool size was implemented three times, with three answers (bug) — **fixed**
+
+`docs/architecture.md` and `payload-pool.md` I-P6 say an undeclared
+`@pool_size` on a `@history: latest` topic is a **triple buffer of 3** — "one
+slot for the current latest sample, one for the in-progress publisher write, one
+temporarily held by an active reader". The code disagrees with itself:
+
+| Where | latest | sequential | Used by a build? |
+|---|---|---|---|
+| `architecture.md` §Bulk Latest Topics | 3 | — | specification |
+| `drm-core/src/channel/pool.rs:68` `default_pool_size` | **3** | 8 | **no** — dead code |
+| `drm-workspace/src/model/runtime.rs:82` `topic_runtime` | **2** (`R+1`) | `R+1` | **yes** — this is what ships |
+
+Measured: a `@history: latest` topic with no `@pool_size` builds to
+`history_depth: 1, pool_size: 2`. So
+
+- the documented triple buffer does not exist in any deployment;
+- `default_pool_size()` is reachable only from its own unit test
+  (`pool_default_sizes`), so the `REQ-CORE-041` rule is tested but never applied;
+- and the I-P6 test the doc promises (`pool_default_latest`, "resolves to 3")
+  is **not in the test matrix's implementation** — `pool.rs` has
+  `pool_default_sizes`, which asserts the *unused* helper's numbers, so the
+  documented behaviour has no test.
+
+Consequence for sizing: memory is halved relative to the spec (~1.8 MB instead of
+~2.8 MB for a 640×480 latest topic), which looks like a win, but
+
+- the pool is now `R+1`, one slot short of the drop-free guarantee
+  `pool_size >= R + H + 1` (`H = 1` ⇒ 3), so a consumer holding a sample across a
+  publish can cause a drop on a topic that was never explicitly sized;
+- the shortfall is exactly the case `V-MB11 DropFreeShortfall` is supposed to
+  warn about — and issue 8 means no command runs that verifier, so nothing says
+  so at build time.
+
+Two defensible fixes: make the model use `default_pool_size()` (3 for latest, 8
+for sequential, one rule in one place), or change the documentation to say 2 and
+accept the weaker guarantee. Silently keeping three implementations is the one
+option that cannot be right.
+
+**Fixed** by taking the first option: `drm-workspace::model::runtime::default_pool_size`
+now mirrors the core rule, `topic_runtime` uses it, and — a third discrepancy
+found while fixing — the default is applied as a **floor**, `max(default, R+1)`,
+so a deep history such as `@history: 128` no longer receives the smaller 8-slot
+default and under-shoots the mandatory I-P4 floor. `latest` is recognised whether
+declared (`@history: latest`) or implied (no `@history` at all), and the
+cross-crate agreement is pinned in `crates/drm-cli/tests/pool_default_agreement.rs`
+— the first layer above both crates, since neither may depend on the other.
+
+Measured after the fix: a defaulted `latest` topic ships `pool_size: 3`,
+`@history: 8` ships 8, `@history: 128` ships 129, and an explicit `@pool_size`
+still wins.
 
 ---
 
