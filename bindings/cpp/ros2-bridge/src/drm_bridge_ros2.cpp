@@ -126,10 +126,21 @@ struct Channel {
     TopicConnection connection;
 
     // Declared QoS (architecture §External Middleware Bridges: "QoS translation is
-    // explicit"). Defaults are the ROS defaults; a latched topic such as /tf_static
-    // must declare transient_local or it will never see the retained sample.
+    // explicit"). A latched topic such as /tf_static must declare transient_local
+    // or it will never see the retained sample.
+    //
+    // Reliability is direction-specific, because the two directions create
+    // different ROS endpoints:
+    //   ToDrm  -> a ROS *subscription* (consumes from a ROS publisher). Default
+    //             BEST_EFFORT: a BEST_EFFORT subscription accepts both RELIABLE
+    //             and BEST_EFFORT publishers, so it is never less compatible.
+    //   ToRos  -> a ROS *publisher* (feeds ROS subscribers). Default RELIABLE:
+    //             both RELIABLE and BEST_EFFORT subscribers accept it.
+    // `best_effort_flag` / `reliable_flag` record an explicit mapping flag so the
+    // startup report can distinguish "default" from "flag".
     bool transient_local = false;
-    bool best_effort = false;
+    bool best_effort_flag = false;
+    bool reliable_flag = false;
 
     // DRM side.
     drm_attached *attached = nullptr;
@@ -140,7 +151,41 @@ struct Channel {
     rclcpp::GenericSubscription::SharedPtr subscription;
 };
 
+/// Whether this channel's ROS endpoint ends up BEST_EFFORT.
+///
+/// Subscriptions (ToDrm) default to BEST_EFFORT; publishers (ToRos) default to
+/// RELIABLE. An explicit flag overrides the direction default either way.
+bool channel_is_best_effort(const Channel &channel) {
+    if (channel.direction == Direction::ToDrm) {
+        if (channel.reliable_flag)
+            return false;
+        return true;
+    }
+    if (channel.best_effort_flag)
+        return true;
+    return false;
+}
+
+/// Human-readable provenance of the reliability choice, for the startup report.
+std::string reliability_reason(const Channel &channel) {
+    if (channel.direction == Direction::ToDrm) {
+        if (channel.reliable_flag)
+            return "flag `;reliable`";
+        if (channel.best_effort_flag)
+            return "flag `;best_effort`";
+        return "default for a subscription";
+    }
+    if (channel.best_effort_flag)
+        return "flag `;best_effort`";
+    if (channel.reliable_flag)
+        return "flag `;reliable`";
+    return "default for a publisher";
+}
+
 /// Builds the QoS a channel declared.
+///
+/// The same function serves both ROS endpoints; reliability is resolved
+/// direction-aware by `channel_is_best_effort`.
 rclcpp::QoS qos_for(const Channel &channel) {
     rclcpp::QoS qos(10);
     if (channel.transient_local) {
@@ -148,7 +193,7 @@ rclcpp::QoS qos_for(const Channel &channel) {
     } else {
         qos.durability_volatile();
     }
-    if (channel.best_effort) {
+    if (channel_is_best_effort(channel)) {
         qos.best_effort();
     } else {
         qos.reliable();
@@ -207,8 +252,9 @@ bool parse_mapping(const std::string &spec, Channel *out) {
     } else {
         return false;
     }
-    // Flags: `transient_local` (latched publishers such as /tf_static) and
-    // `best_effort`. Anything else is a configuration error, never silently ignored.
+    // Flags: `transient_local` (latched publishers such as /tf_static),
+    // `best_effort` and `reliable`. Anything else is a configuration error, never
+    // silently ignored.
     size_t start = 0;
     while (start <= flags.size() && !flags.empty()) {
         const size_t end = flags.find(';', start);
@@ -218,8 +264,10 @@ bool parse_mapping(const std::string &spec, Channel *out) {
             if (flag == "transient_local") {
                 out->transient_local = true;
             } else if (flag == "best_effort") {
-                out->best_effort = true;
-            } else if (flag != "reliable" && flag != "volatile") {
+                out->best_effort_flag = true;
+            } else if (flag == "reliable") {
+                out->reliable_flag = true;
+            } else if (flag != "volatile") {
                 std::cerr << "bridge: unknown QoS flag `" << flag << "`\n";
                 return false;
             }
@@ -227,6 +275,11 @@ bool parse_mapping(const std::string &spec, Channel *out) {
         if (end == std::string::npos)
             break;
         start = end + 1;
+    }
+    // Contradictory reliability flags are a configuration error, not a coin flip.
+    if (out->best_effort_flag && out->reliable_flag) {
+        std::cerr << "bridge: QoS flags `best_effort` and `reliable` are mutually exclusive\n";
+        return false;
     }
     out->drm_topic = drm_topic;
     out->ros_topic = ros_name;
@@ -366,6 +419,22 @@ int main(int argc, char **argv) {
     // Open every DRM attachment and build the ROS endpoints.
     for (Channel &channel : channels) {
         const std::string segment = segment_name(config.deployment_id, channel.connection.slot);
+        // QoS self-check: state the chosen reliability and its provenance before the
+        // endpoint exists, so an operator can see a mismatch without waiting on DDS.
+        std::cout << "bridge: QoS " << (channel.direction == Direction::ToDrm ? "subscription"
+                                                                             : "publisher")
+                  << " " << channel.ros_topic << ": "
+                  << (channel_is_best_effort(channel) ? "BEST_EFFORT" : "RELIABLE") << " ("
+                  << reliability_reason(channel) << ")\n";
+        if (channel.direction == Direction::ToDrm && !channel_is_best_effort(channel)) {
+            // A RELIABLE subscription accepts nothing from a BEST_EFFORT publisher,
+            // which is what every ROS sensor driver uses. rclcpp's own warning does
+            // not connect the symptom to the fix, so name the topic and the flag.
+            std::cerr << "bridge: warning: subscription " << channel.ros_topic
+                      << " is RELIABLE; BEST_EFFORT publishers (sensor_data: LaserScan, "
+                         "Image, Imu) will be silently incompatible. Add `;best_effort` to the "
+                         "mapping\n";
+        }
         if (channel.direction == Direction::ToDrm) {
             if (open_channel(&channel, segment, lock_dir, DRM_ATTACHED_PUBLISHER,
                              config.deployment_id) != DRM_OK) {

@@ -11,10 +11,11 @@
 # A package "works" only if its own node/tooling accepted the message. Anything
 # else is reported with the reason, never assumed.
 set +u
-cd /root/projects/drm || exit 1
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT" || exit 1
 source /opt/ros/jazzy/setup.bash >/dev/null 2>&1
 export ROS_DOMAIN_ID=46
-export LD_LIBRARY_PATH="/root/projects/drm/target/release:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$ROOT/target/release:${LD_LIBRARY_PATH:-}"
 
 DEP=tests/ros2_bridge/.drm/deploy/deployment.json
 LOCKS=/tmp/drm-bridge-locks
