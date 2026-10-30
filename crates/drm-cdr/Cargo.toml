@@ -1,0 +1,15 @@
+[package]
+name = "drm-cdr"
+description = "Bounds-checked CDR (ROS 2 / DDS-XTypes little-endian) deserialization; zero dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+[lints]
+workspace = true

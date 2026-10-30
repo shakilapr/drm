@@ -3,6 +3,7 @@
 resolver = "3"
 members = [
     "crates/drm-types",
+    "crates/drm-cdr",
     "crates/drm-core",
     "crates/drm-workspace",
     "crates/drm-spatial",

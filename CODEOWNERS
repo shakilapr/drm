@@ -24,6 +24,7 @@
 # E4 — bindings, CI, fuzz/property/sanitizer infrastructure, benchmarks
 /crates/drm-extension-host/ @drm/e4-bindings
 /crates/drm-record/        @drm/e4-bindings
+/crates/drm-cdr/           @drm/e4-bindings
 /bindings/                 @drm/e4-bindings
 /tests/                    @drm/e4-quality
 /examples/                 @drm/e4-bindings

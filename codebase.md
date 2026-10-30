@@ -124,7 +124,7 @@ Artifact rules:
 ### 2.1 Crate Layers
 | Layer | Crates | May depend on | Must not depend on |
 |---|---|---|---|
-| types | `drm-types` | nothing | — |
+| types | `drm-types`, `drm-cdr` | nothing (`drm-cdr` is a zero-dependency leaf codec) | — |
 | runtime | `drm-core`, `drm-ffi`, `drm-router`, `drm-spatial` | types; lower runtime layers | toolchain, ops, facades |
 | toolchain | `drm-workspace` | types | runtime, ops, facades |
 | ops | `drm-record`, `drm-diag`, `drm-trace`, `drm-rpc` | core, types | each other, toolchain, facades |

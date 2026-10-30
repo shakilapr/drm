@@ -597,6 +597,8 @@ A third-party middleware is reached through an explicit **bridge process**, neve
 
 **Types move by serialized payload.** Until typed conversion exists, a bridge carries samples as serialized bytes and DRM applications treat that payload as opaque. Typed foreign↔DRM field conversion is a separate, later capability; a bridge must not imply it.
 
+**Opt-in CDR decode.** A DRM application may decode a bridged ROS 2 payload with `drm-cdr`, a zero-dependency leaf codec: bounds-checked CDR_LE reads with alignment measured from the post-encapsulation origin. Decoding is explicit and per-payload; the bridge and core remain payload-opaque (REQ-BIND-028).
+
 **Isolation.** A bridge process failing, restarting, or stalling affects only its declared topics: other topics, other bridges, and all local DRM traffic continue. The bridge holds no lock or resource that a local publisher needs.
 
 ## The DRM Compiler Architecture
