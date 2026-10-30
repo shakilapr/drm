@@ -9,7 +9,13 @@ services, 41 actions).
 
 Verdict up front: **renaming topics and patching each ROS codebase is necessary
 but not sufficient.** Four of the blockers are in DRM's own model, and one of
-them cannot be fixed by renaming at any cost. They are listed in
+them cannot be fixed by renaming at any cost.
+
+Status after the fix round: 5 of 10 closed (1, 5, 7, 8, 9, 10 — six, counting the
+pool default). Still open and genuinely structural: **2** (record types, 28.5 %
+of messages inexpressible as typed topics), **3** (no services/actions in the
+C ABI), **4** (static per-topic bound), **6** (federated `/tf` vs single-writer).
+Those are not renaming problems and not bugs — they are missing capability. They are listed in
 [Part 1](#part-1--blockers-in-drm-not-in-the-renaming) below; the mechanical
 renaming work is [Part 2](#part-2--what-renaming-does-fix).
 
@@ -19,14 +25,14 @@ renaming work is [Part 2](#part-2--what-renaming-does-fix).
 
 | # | Issue | Where | Renaming fixes it? |
 |---|---|---|---|
-| 1 | Topic paths cannot match: DRM requires `package/stem` lowercase, always 2 segments; ROS allows `/a/b/c` and uppercase | DRM schema + discovery | **No** — structural |
+| 1 | Topic paths cannot match: DRM requires `package/stem` lowercase, always 2 segments; ROS allows `/a/b/c` and uppercase | DRM schema + discovery | **Fixed** — depth and case now allowed, case collision refused |
 | 2 | No record type, no array-of-record, no array-of-strings | DRM schema grammar | **No** — 28.5 % of messages are inexpressible as *typed* topics at any bound (transport still works via opaque bytes) |
-| 3 | No services or actions in the C ABI (279 + 41 unreachable) | DRM C ABI | **No** — missing capability |
+| 3 | No services or actions in the C ABI (279 + 41 unreachable) | DRM C ABI | **No** — missing capability, untouched |
 | 4 | Payload bound is static and per-topic; ROS messages are unbounded | DRM model vs ROS | **No** — needs a bound chosen per topic, and the bound is a real memory cost |
-| 5 | QoS: a RELIABLE subscriber silently receives nothing from a BEST_EFFORT publisher, which is the default for every sensor driver | bridge default | No — one flag per channel |
+| 5 | QoS: a RELIABLE subscriber silently receives nothing from a BEST_EFFORT publisher, which is the default for every sensor driver | bridge default | **Fixed** — subscriptions default BEST_EFFORT |
 | 6 | tf2 cannot be replaced: `/tf` is federated (N publishers), DRM is single-writer per topic; and DRM Spatial is Rust-only, not in the C ABI | DRM runtime + ABI | No |
-| 7 | A DRM application cannot decode a bridged payload — no CDR codec anywhere in the repo | DRM core | No — Phase 5 translator |
-| 8 | `drm build` never runs the full verifier, so `V-ID`'s topic-canonicality rule (and all of V-MEM/V-RT/V-RPC) are unreachable | toolchain | n/a — bug |
+| 7 | A DRM application cannot decode a bridged payload — no CDR codec anywhere in the repo | DRM core | **Fixed** — `drm-cdr` decodes CDR_LE with a LaserScan example |
+| 8 | `drm build` never runs the full verifier, so `V-ID`'s topic-canonicality rule (and all of V-MEM/V-RT/V-RPC) are unreachable | toolchain | **Fixed** — `build --verify` runs all 11 checks |
 | 9 | Every invalid `.drm` file also reports a spurious `empty-file`; the model error prints only a *count* of defects | toolchain | n/a — **fixed** in this change |
 | 10 | The default `pool_size` is specified as 3, implemented as 3 in dead code and as 2 in the shipping path | DRM toolchain vs core | n/a — **fixed** in this change |
 
