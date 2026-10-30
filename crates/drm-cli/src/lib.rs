@@ -57,9 +57,10 @@ pub fn run(raw: &[String]) -> Result<(), CliError> {
         Command::Build {
             targets,
             workspace: path,
+            strict,
         } => {
             let root = path.map_or_else(|| args.workspace.clone(), std::path::PathBuf::from);
-            build::run(&root, &targets)
+            build::run(&root, &targets, strict)
         }
         Command::Info => info::run(&args.workspace),
         Command::Deploy => deploy::run(&args.workspace),

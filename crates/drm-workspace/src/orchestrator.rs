@@ -22,6 +22,8 @@ use crate::codegen;
 use crate::deploy;
 use crate::model::handles::HandleTable;
 use crate::model::{self, ModelError, NodeEntry, NodeName, TreeInput, WorkspaceModel};
+use crate::verify::engine::{ALL_CHECKS, CheckId, V_SW, verify};
+use crate::verify::from_model::deployment_config;
 use crate::verify::{VerifyLiteFinding, verify_lite};
 
 /// Generation root under the workspace (`.drm/gen`). REQ: REQ-TOOL-029.
@@ -118,6 +120,9 @@ pub struct BuildRequest {
     pub workspace: PathBuf,
     /// Optional node subset; `None` builds every declared node.
     pub targets: Option<BTreeSet<NodeName>>,
+    /// Run the full verifier ([`verify`]) instead of only the V-SW slice.
+    /// `false` keeps the additive default: `verify_lite` only. REQ: REQ-TOOL-012.
+    pub strict: bool,
 }
 
 /// One orchestration step, emitted in order (I-BO1 sequence probe).
@@ -140,6 +145,16 @@ pub enum BuildStep {
     Adapter(NodeName),
 }
 
+/// Which verification pass a build actually ran. REQ: REQ-TOOL-012.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifySummary {
+    /// `true` when the full catalog ([`verify`]) ran, `false` for the V-SW
+    /// `verify_lite` slice.
+    pub full: bool,
+    /// Check ids that contributed to this pass, in catalogue order.
+    pub checks: Vec<CheckId>,
+}
+
 /// Outcome of a successful `drm build`. REQ: REQ-TOOL-012.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildReport {
@@ -149,6 +164,8 @@ pub struct BuildReport {
     pub dirty: usize,
     /// Number of topics covered by the verify pass.
     pub verified: usize,
+    /// Which verifier checks actually ran and whether the full engine ran.
+    pub verify: VerifySummary,
     /// Nodes whose adapter ran, sorted.
     pub built: Vec<NodeName>,
     /// Handle table after assignment (for lockfile persistence).
@@ -170,6 +187,9 @@ pub enum BuildError {
     Codegen(Status),
     /// `drm verify` reported negatives; adapters are never invoked.
     Verify(Vec<VerifyLiteFinding>),
+    /// The full verifier reported negatives in strict mode; each message already
+    /// carries its check id and REQ citation. REQ: REQ-TOOL-059.
+    VerifyFull(Vec<String>),
     /// A native adapter could not be resolved or failed.
     Adapter {
         /// Offending node.
@@ -192,6 +212,13 @@ impl fmt::Display for BuildError {
                     f,
                     "verify failed ({} finding(s)); adapters not invoked",
                     findings.len()
+                )
+            }
+            Self::VerifyFull(errors) => {
+                write!(
+                    f,
+                    "verify failed ({} finding(s)); adapters not invoked",
+                    errors.len()
                 )
             }
             Self::Adapter { node, message } => write!(f, "adapter for node `{node}`: {message}"),
@@ -410,10 +437,31 @@ pub fn build(
     codegen::execute(&gen_plan, &mut db, &req.workspace).map_err(BuildError::Codegen)?;
 
     observe(BuildStep::Verify);
-    let findings = verify_lite(&model);
-    if !findings.is_empty() {
-        return Err(BuildError::Verify(findings));
-    }
+    let verify_summary = if req.strict {
+        let deploy = deployment_config(&model, &handles);
+        let report = verify(&model, &deploy);
+        let errors = report
+            .failures()
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+        if !errors.is_empty() {
+            return Err(BuildError::VerifyFull(errors));
+        }
+        VerifySummary {
+            full: true,
+            checks: ALL_CHECKS.to_vec(),
+        }
+    } else {
+        let findings = verify_lite(&model);
+        if !findings.is_empty() {
+            return Err(BuildError::Verify(findings));
+        }
+        VerifySummary {
+            full: false,
+            checks: vec![V_SW],
+        }
+    };
 
     let targets = resolve_targets(req.targets.as_ref(), &model);
     let mut built = Vec::new();
@@ -436,6 +484,7 @@ pub fn build(
         generated: gen_plan.expected_outputs.len(),
         dirty: gen_plan.dirty_units.len(),
         verified: model.topics.len(),
+        verify: verify_summary,
         built,
         handles,
     })

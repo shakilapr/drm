@@ -75,6 +75,7 @@ fn build_order() {
     let req = BuildRequest {
         workspace: root.clone(),
         targets: None,
+        strict: false,
     };
     let mut recorder = Recorder::default();
     let mut steps: Vec<BuildStep> = Vec::new();
@@ -122,6 +123,7 @@ fn verify_failure_aborts_before_adapters() {
     let req = BuildRequest {
         workspace: root.clone(),
         targets: None,
+        strict: false,
     };
     let mut recorder = Recorder::default();
     let mut steps: Vec<BuildStep> = Vec::new();
@@ -193,6 +195,7 @@ fn info_projection_is_deterministic() {
     let req = BuildRequest {
         workspace: root.clone(),
         targets: None,
+        strict: false,
     };
     let mut recorder = Recorder::default();
     build(&req, &HandleTable::default(), &mut recorder, &mut |_| {})
@@ -217,6 +220,7 @@ fn build_target_subset() {
     let req = BuildRequest {
         workspace: root.clone(),
         targets: Some(BTreeSet::from(["planner".to_string()])),
+        strict: false,
     };
     let mut recorder = Recorder::default();
     build(&req, &HandleTable::default(), &mut recorder, &mut |_| {})
