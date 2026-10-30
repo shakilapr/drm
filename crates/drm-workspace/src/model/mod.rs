@@ -128,6 +128,20 @@ pub enum ModelError {
         /// Second defining package.
         second: PackageName,
     },
+    /// Two topic paths in one package differ only by ASCII case.
+    ///
+    /// Preserving declared case (so a ROS-shaped `CmdVel` keeps its name) is only
+    /// safe while this cannot happen: on a case-insensitive filesystem such as
+    /// Windows the two files are one file, so a workspace that builds here would
+    /// silently lose a topic there. The old two-segment-lowercase rule
+    /// (`REQ-TOOL-056`) prevented this by forbidding uppercase outright; naming
+    /// the collision keeps the protection without forbidding depth or case.
+    CaseCollisionTopic {
+        /// The two paths, sorted, as written.
+        first: TopicName,
+        /// The other path.
+        second: TopicName,
+    },
     /// Same node identity declared twice (both file stems named).
     DuplicateNode {
         /// Declared node name.
@@ -206,6 +220,13 @@ impl fmt::Display for ModelError {
                 second,
             } => {
                 write!(f, "duplicate topic `{topic}` in `{first}` and `{second}`")
+            }
+            Self::CaseCollisionTopic { first, second } => {
+                write!(
+                    f,
+                    "topics `{first}` and `{second}` differ only by case; \
+                     a case-insensitive filesystem would merge them into one file"
+                )
             }
             Self::DuplicateNode {
                 node,
@@ -306,6 +327,28 @@ pub fn build(tree: &TreeInput) -> Result<WorkspaceModel, Vec<ModelError>> {
                     topic: format!("{name}/{stem}"),
                     first: (*name).clone(),
                     second: (*name).clone(),
+                });
+            }
+        }
+        // Case-fold collisions: `<pkg>/CmdVel` and `<pkg>/cmdvel` are one file on
+        // Windows, so allowing both would make a workspace whose identity depends
+        // on the build host (REQ-TOOL-056). Detected across full paths, including
+        // nested ones, because depth is now allowed.
+        let mut folded: BTreeMap<String, &str> = BTreeMap::new();
+        for stem in stems.keys().copied() {
+            let path = format!("{name}/{stem}");
+            let key = path.to_ascii_lowercase();
+            if let Some(previous) = folded.insert(key, stem)
+                && previous != stem
+            {
+                let (first, second) = if previous < stem {
+                    (previous.to_string(), stem.to_string())
+                } else {
+                    (stem.to_string(), previous.to_string())
+                };
+                errs.push(ModelError::CaseCollisionTopic {
+                    first: format!("{name}/{first}"),
+                    second: format!("{name}/{second}"),
                 });
             }
         }

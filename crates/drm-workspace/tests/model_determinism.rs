@@ -149,6 +149,7 @@ fn model_conflicts() {
                     assert_eq!(topic, "delta/broken");
                 }
                 other @ (drm_workspace::model::ModelError::DuplicateTopic { .. }
+                | drm_workspace::model::ModelError::CaseCollisionTopic { .. }
                 | drm_workspace::model::ModelError::DuplicateNode { .. }
                 | drm_workspace::model::ModelError::DuplicateNodeDir { .. }
                 | drm_workspace::model::ModelError::NodeManifest { .. }
