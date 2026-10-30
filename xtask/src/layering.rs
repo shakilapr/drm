@@ -20,7 +20,7 @@ enum Layer {
 /// REQ: REQ-QAL-006 — layer membership mirrors codebase.md 2.1 exactly.
 fn layer_of(crate_name: &str) -> Option<Layer> {
     match crate_name {
-        "drm-types" => Some(Layer::Types),
+        "drm-types" | "drm-cdr" => Some(Layer::Types),
         "drm-core" | "drm-ffi" | "drm-router" | "drm-spatial" => Some(Layer::Runtime),
         "drm-workspace" => Some(Layer::Toolchain),
         "drm-record" | "drm-diag" | "drm-trace" | "drm-rpc" => Some(Layer::Ops),
