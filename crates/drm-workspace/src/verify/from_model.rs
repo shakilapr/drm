@@ -7,9 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::budget::{ChannelCost, ComputeCost, MemoryBudget};
+use crate::model::WorkspaceModel;
 use crate::model::handles::HandleTable;
 use crate::model::runtime::channel_expectations;
-use crate::model::WorkspaceModel;
 
 use super::engine::{DeploymentConfig, LinkCapability, Transport};
 
@@ -117,15 +117,16 @@ mod tests {
         let tree = TreeInput {
             packages: vec![PackageInput {
                 name: "pkg".to_string(),
-                topics: vec![("t".to_string(), b"@history: 4\n@pool_size: 2\nv: u64\n".to_vec())],
+                topics: vec![(
+                    "t".to_string(),
+                    b"@history: 4\n@pool_size: 2\nv: u64\n".to_vec(),
+                )],
             }],
             nodes: vec![(
                 "n".to_string(),
                 b"name = \"n\"\npublishes = [\"pkg/t\"]\n".to_vec(),
             )],
-            topology: Some(
-                b"[computes]\nc1 = true\n[placement]\nn = \"c1\"\n".to_vec(),
-            ),
+            topology: Some(b"[computes]\nc1 = true\n[placement]\nn = \"c1\"\n".to_vec()),
         };
         let model = build(&tree).unwrap_or_else(|e| unreachable!("{e:?}"));
         let deploy = deployment_config(&model, &HandleTable::default());

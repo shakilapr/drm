@@ -421,9 +421,9 @@ int main(int argc, char **argv) {
         const std::string segment = segment_name(config.deployment_id, channel.connection.slot);
         // QoS self-check: state the chosen reliability and its provenance before the
         // endpoint exists, so an operator can see a mismatch without waiting on DDS.
-        std::cout << "bridge: QoS " << (channel.direction == Direction::ToDrm ? "subscription"
-                                                                             : "publisher")
-                  << " " << channel.ros_topic << ": "
+        std::cout << "bridge: QoS "
+                  << (channel.direction == Direction::ToDrm ? "subscription" : "publisher") << " "
+                  << channel.ros_topic << ": "
                   << (channel_is_best_effort(channel) ? "BEST_EFFORT" : "RELIABLE") << " ("
                   << reliability_reason(channel) << ")\n";
         if (channel.direction == Direction::ToDrm && !channel_is_best_effort(channel)) {

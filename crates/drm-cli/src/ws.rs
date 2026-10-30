@@ -239,14 +239,6 @@ fn file_name(path: &Path) -> Result<String, CliError> {
         .ok_or_else(|| CliError::Io(format!("non-UTF-8 path `{}`", path.display())))
 }
 
-/// UTF-8 file stem of a path. REQ: REQ-TOOL-045.
-fn stem(path: &Path) -> Result<String, CliError> {
-    path.file_stem()
-        .and_then(std::ffi::OsStr::to_str)
-        .map(str::to_string)
-        .ok_or_else(|| CliError::Io(format!("non-UTF-8 file stem `{}`", path.display())))
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};

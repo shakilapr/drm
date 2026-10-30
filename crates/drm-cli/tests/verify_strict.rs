@@ -58,10 +58,7 @@ fn workspace(tag: &str, body: &str) -> PathBuf {
 #[test]
 fn uppercase_topic_needs_strict_flag() {
     let root = workspace("uppercase", "v: u32\n");
-    write(
-        &root.join("packages/Robot/topics/CmdVel.drm"),
-        "v: u32\n",
-    );
+    write(&root.join("packages/Robot/topics/CmdVel.drm"), "v: u32\n");
     write(
         &root.join("packages/Robot/nodes/robot/drm.toml"),
         "name = \"robot\"\npublishes = [\"Robot/CmdVel\"]\n[build]\ncommand = [\"true\"]\n",
