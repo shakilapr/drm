@@ -23,7 +23,7 @@ use crate::{build, ws};
 /// # Errors
 /// [`CliError`] from the initial build or any subsequent declaration reload.
 pub fn run(root: &Path, once: bool) -> Result<(), CliError> {
-    build::run(root, &[])?;
+    build::run(root, &[], false)?;
     if once {
         return Ok(());
     }
@@ -112,7 +112,7 @@ fn dispatch(
         }
     }
     if declaration {
-        build::run(root, &[])?;
+        build::run(root, &[], false)?;
         *state = load_state(root)?;
     }
     Ok(())

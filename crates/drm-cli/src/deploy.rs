@@ -28,7 +28,7 @@ pub fn run(root: &Path) -> Result<(), CliError> {
     // Read the identity of the *previous* deployment before building: the build
     // refreshes the artifact, so comparing afterwards would always say "reused".
     let before = recorded_id(root);
-    build::run(root, &[])?;
+    build::run(root, &[], false)?;
     let discovered = ws::discover(root)?;
     let model = ws::build_model(&discovered).map_err(|errs| {
         CliError::Manifest(format!(

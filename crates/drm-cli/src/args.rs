@@ -62,6 +62,9 @@ pub enum Command {
         targets: Vec<String>,
         /// Optional positional workspace (overrides `--workspace`).
         workspace: Option<String>,
+        /// Run the full verifier (V-SCH…V-REC) instead of the V-SW slice only.
+        /// REQ: REQ-TOOL-012.
+        strict: bool,
     },
     /// `drm info` — read-only model + verify projection (REQ-TOOL-045).
     Info,
@@ -125,7 +128,7 @@ Usage:
   drm [--workspace <dir>] ids compact --yes Re-pack handles dense (explicit; I-H4)
   drm [--workspace <dir>] assign <topic> --consume <node>
   drm [--workspace <dir>] assign <topic> --publish <node>
-  drm [--workspace <dir>] build [--target <node>]...
+  drm [--workspace <dir>] build [--target <node>]... [--verify]
   drm [--workspace <dir>] deploy
   drm [--workspace <dir>] clean
   drm [--workspace <dir>] info
@@ -145,6 +148,7 @@ Options:
   --level <level>         `log`: error|warn|info|debug|trace (default info)
   --stdio                 `studio`: speak JSON-RPC over stdin/stdout
   --trust                 `studio`: mark the workspace trusted (unlocks writes)
+  --verify, --strict      `build`: run the full verifier (V-SCH…V-REC)
   -h, --help              Print this help
 ";
 
@@ -165,6 +169,7 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
     let mut raw_hex = false;
     let mut stdio = false;
     let mut trust = false;
+    let mut strict = false;
     let mut level = String::from("info");
 
     let mut i = 0;
@@ -207,16 +212,13 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
                 yes = true;
                 i += 1;
             }
-            "--raw" => {
-                raw_hex = true;
-                i += 1;
-            }
-            "--stdio" => {
-                stdio = true;
-                i += 1;
-            }
-            "--trust" => {
-                trust = true;
+            "--raw" | "--stdio" | "--trust" | "--verify" | "--strict" => {
+                match arg {
+                    "--raw" => raw_hex = true,
+                    "--stdio" => stdio = true,
+                    "--trust" => trust = true,
+                    _ => strict = true,
+                }
                 i += 1;
             }
             "--level" => {
@@ -248,6 +250,7 @@ pub fn parse(raw: &[String]) -> Result<Args, String> {
             raw_hex,
             stdio,
             trust,
+            strict,
             level,
             targets,
             consume,
@@ -267,6 +270,7 @@ struct Flags {
     raw_hex: bool,
     stdio: bool,
     trust: bool,
+    strict: bool,
     level: String,
     targets: Vec<String>,
     consume: Option<String>,
@@ -282,6 +286,7 @@ fn build_command(positionals: &[String], flags: Flags) -> Result<Command, String
         raw_hex,
         stdio,
         trust,
+        strict,
         level,
         targets,
         consume,
@@ -297,10 +302,12 @@ fn build_command(positionals: &[String], flags: Flags) -> Result<Command, String
             0 | 1 => Ok(Command::Build {
                 targets,
                 workspace: None,
+                strict,
             }),
             2 => Ok(Command::Build {
                 targets,
                 workspace: Some(positionals[1].clone()),
+                strict,
             }),
             _ => Err(format!("unexpected `build` argument `{}`", positionals[2])),
         },
@@ -491,6 +498,7 @@ mod tests {
             super::Command::Build {
                 targets: vec!["controller".to_string()],
                 workspace: Some("examples/mixed_robot".to_string()),
+                strict: false,
             }
         );
         assert_eq!(

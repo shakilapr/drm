@@ -13,11 +13,12 @@ use crate::error::CliError;
 use crate::ids;
 
 /// Runs `drm build` against `root`, optionally restricted to `targets`.
+/// `strict` opts into the full verifier; the default keeps the V-SW slice only.
 /// REQ: REQ-TOOL-012.
 ///
 /// # Errors
 /// [`CliError`] mapped from the orchestration failure class.
-pub fn run(root: &Path, targets: &[String]) -> Result<(), CliError> {
+pub fn run(root: &Path, targets: &[String], strict: bool) -> Result<(), CliError> {
     let request = BuildRequest {
         workspace: root.to_path_buf(),
         targets: if targets.is_empty() {
@@ -25,6 +26,7 @@ pub fn run(root: &Path, targets: &[String]) -> Result<(), CliError> {
         } else {
             Some(targets.iter().cloned().collect::<BTreeSet<_>>())
         },
+        strict,
     };
     let prior = load_prior(root)?;
     let mut runner = SpawnRunner;
@@ -36,15 +38,32 @@ pub fn run(root: &Path, targets: &[String]) -> Result<(), CliError> {
     ids::write(&root.join(ids::LOCKFILE_REL), &report.handles)?;
 
     println!(
-        "build: {} generated ({} rendered), {} verified, {} built [{}]",
+        "build: {} generated ({} rendered), {} topics checked by {}, {} built [{}]",
         report.generated,
         report.dirty,
         report.verified,
+        verify_label(&report.verify),
         report.built.len(),
         report.built.join(", ")
     );
     println!("steps: {}", steps.len());
     Ok(())
+}
+
+/// Names the verifier pass that actually ran, so `verify_lite` can never be
+/// mistaken for the full engine. REQ: REQ-TOOL-012.
+fn verify_label(summary: &drm_workspace::orchestrator::VerifySummary) -> String {
+    let ids = summary
+        .checks
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if summary.full {
+        format!("full verifier [{ids}]")
+    } else {
+        format!("verify-lite [{ids}]")
+    }
 }
 
 /// Loads the committed handle table, or an empty table when no lockfile exists.
@@ -82,6 +101,7 @@ fn map_error(err: BuildError) -> CliError {
                 .join("; ");
             CliError::Verify(detail)
         }
+        BuildError::VerifyFull(errors) => CliError::Verify(errors.join("; ")),
         BuildError::Adapter { node, message } => {
             CliError::Io(format!("adapter for node `{node}`: {message}"))
         }

@@ -7,6 +7,7 @@
 //! (workspace-model.md I-D12). REQ: REQ-TOOL-064, REQ-TOOL-070.
 
 pub mod engine;
+pub mod from_model;
 
 use std::collections::BTreeMap;
 use std::fmt;
