@@ -344,9 +344,10 @@ pub fn discover_tree(root: &Path) -> Result<TreeInput, BuildError> {
     for pkg in sorted_dirs(&packages_dir)? {
         let name = file_name(&pkg)?;
         let mut topics = Vec::new();
-        for file in files_with_ext(&pkg.join("topics"), "drm")? {
-            let stem = file_stem(&file)?;
-            topics.push((stem, read(&file)?));
+        let topics_dir = pkg.join("topics");
+        for file in files_with_ext(&topics_dir, "drm")? {
+            let relative = topic_path(&topics_dir, &file)?;
+            topics.push((relative, read(&file)?));
         }
         packages.push(model::PackageInput { name, topics });
     }
@@ -489,10 +490,33 @@ fn sorted_dirs(dir: &Path) -> Result<Vec<PathBuf>, BuildError> {
 /// # Errors
 /// [`BuildError::Io`] when an existing directory cannot be read.
 fn files_with_ext(dir: &Path, ext: &str) -> Result<Vec<PathBuf>, BuildError> {
-    Ok(entries(dir)?
-        .into_iter()
-        .filter(|p| p.is_file() && p.extension().and_then(std::ffi::OsStr::to_str) == Some(ext))
-        .collect())
+    let mut out = Vec::new();
+    collect_with_ext(dir, ext, &mut out)?;
+    Ok(out)
+}
+
+/// Depth-first collection of `ext` files under `dir`.
+///
+/// Recursive because a topic path is `<package>/<relative/path>/<stem>`
+/// (`architecture.md` §Workspace Layout): a ROS-shaped name such as
+/// `robot/sensors/lidar/front` is a directory tree, not one file. The flat walk
+/// this replaces silently dropped every nested topic — `drm build` reported
+/// `0 generated` and exited 0 while the workspace plainly held files.
+/// REQ: REQ-TOOL-045.
+fn collect_with_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) -> Result<(), BuildError> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in entries(dir)? {
+        if entry.is_dir() {
+            collect_with_ext(&entry, ext, out)?;
+        } else if entry.is_file()
+            && entry.extension().and_then(std::ffi::OsStr::to_str) == Some(ext)
+        {
+            out.push(entry);
+        }
+    }
+    Ok(())
 }
 
 /// Sorted directory entries (empty when the directory is absent).
@@ -534,15 +558,42 @@ fn file_name(path: &Path) -> Result<String, BuildError> {
         .ok_or_else(|| BuildError::Io(format!("non-UTF-8 path `{}`", path.display())))
 }
 
-/// UTF-8 file stem of a path. REQ: REQ-TOOL-045.
+/// The topic path of `file` relative to its `topics/` directory, without the
+/// `.drm` extension, with `/` separators. REQ: REQ-TOOL-045, REQ-TOOL-056.
+///
+/// `topics/nested/deep/lidar.drm` -> `nested/deep/lidar`: identity keeps the
+/// depth the user declared instead of collapsing to the file stem.
 ///
 /// # Errors
-/// [`BuildError::Io`] for a non-UTF-8 stem.
-fn file_stem(path: &Path) -> Result<String, BuildError> {
-    path.file_stem()
-        .and_then(std::ffi::OsStr::to_str)
-        .map(str::to_string)
-        .ok_or_else(|| BuildError::Io(format!("non-UTF-8 file stem `{}`", path.display())))
+/// [`BuildError::Io`] when the path is not under `topics_dir`, contains a
+/// non-`Normal` component, or is not UTF-8.
+fn topic_path(topics_dir: &Path, file: &Path) -> Result<String, BuildError> {
+    let rel = file.strip_prefix(topics_dir).map_err(|_| {
+        BuildError::Io(format!(
+            "`{}` is not under `{}`",
+            file.display(),
+            topics_dir.display()
+        ))
+    })?;
+    let mut segments: Vec<String> = Vec::new();
+    for component in rel.components() {
+        let std::path::Component::Normal(part) = component else {
+            return Err(BuildError::Io(format!(
+                "unexpected path component in `{}`",
+                file.display()
+            )));
+        };
+        let text = part
+            .to_str()
+            .ok_or_else(|| BuildError::Io(format!("non-UTF-8 path `{}`", file.display())))?;
+        segments.push(text.to_string());
+    }
+    let last = segments
+        .pop()
+        .ok_or_else(|| BuildError::Io(format!("`{}` has no file name", file.display())))?;
+    let stem = last.strip_suffix(".drm").unwrap_or(&last).to_string();
+    segments.push(stem);
+    Ok(segments.join("/"))
 }
 
 #[cfg(test)]

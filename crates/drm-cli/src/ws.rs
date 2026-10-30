@@ -73,13 +73,14 @@ pub fn discover(root: &Path) -> Result<Discovered, CliError> {
     for pkg in subdirs(&packages_dir)? {
         let pkg_name = file_name(&pkg)?;
         let mut topics: Vec<(String, Vec<u8>)> = Vec::new();
-        for topic_file in files_with_ext(&pkg.join("topics"), "drm")? {
-            let stem = stem(&topic_file)?;
+        let topics_dir = pkg.join("topics");
+        for topic_file in files_with_ext(&topics_dir, "drm")? {
+            let relative = topic_path(&topics_dir, &topic_file)?;
             let bytes = fs::read(&topic_file).map_err(|e| {
                 CliError::Io(format!("cannot read `{}` ({e})", topic_file.display()))
             })?;
-            out.topics.insert(format!("{pkg_name}/{stem}"));
-            topics.push((stem, bytes));
+            out.topics.insert(format!("{pkg_name}/{relative}"));
+            topics.push((relative, bytes));
         }
         topics.sort_by(|a, b| a.0.cmp(&b.0));
         out.packages.push(PackageInput {
@@ -146,15 +147,74 @@ fn subdirs(dir: &Path) -> Result<Vec<PathBuf>, CliError> {
     Ok(entries)
 }
 
-/// Files in `dir` whose extension equals `ext`, sorted by path (empty when the
-/// directory is absent). REQ: REQ-TOOL-045.
+/// Files under `dir` whose extension equals `ext`, recursively, sorted by path
+/// (empty when the directory is absent). REQ: REQ-TOOL-045.
+///
+/// Recursive because a topic's path is `<package>/<relative/path>/<stem>`
+/// (`architecture.md` §Workspace Layout), so a ROS-shaped name such as
+/// `robot/sensors/lidar/front` is a directory tree, not a single file. The old
+/// one-level walk silently dropped every nested topic: the build reported
+/// `0 generated` and exited 0 on a workspace that plainly had files in it.
 fn files_with_ext(dir: &Path, ext: &str) -> Result<Vec<PathBuf>, CliError> {
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
-    let mut entries = read_entries(dir)?;
-    entries.retain(|p| p.is_file() && p.extension().and_then(std::ffi::OsStr::to_str) == Some(ext));
-    Ok(entries)
+    let mut out = Vec::new();
+    collect_with_ext(dir, ext, &mut out)?;
+    Ok(out)
+}
+
+/// Depth-first collection of `ext` files under `dir` into `out`.
+/// REQ: REQ-TOOL-045.
+fn collect_with_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) -> Result<(), CliError> {
+    for entry in read_entries(dir)? {
+        if entry.is_dir() {
+            collect_with_ext(&entry, ext, out)?;
+        } else if entry.is_file()
+            && entry.extension().and_then(std::ffi::OsStr::to_str) == Some(ext)
+        {
+            out.push(entry);
+        }
+    }
+    Ok(())
+}
+
+/// The topic path of `file` relative to its `topics/` directory, without the
+/// `.drm` extension and with `/` separators. REQ: REQ-TOOL-045, REQ-TOOL-056.
+///
+/// `topics/nested/deep/lidar.drm` -> `nested/deep/lidar`, so identity keeps the
+/// declared depth instead of collapsing to the file stem.
+///
+/// # Errors
+/// [`CliError::Io`] when the path is not under `topics_dir`, is not UTF-8, or is
+/// not reachable as a relative path.
+fn topic_path(topics_dir: &Path, file: &Path) -> Result<String, CliError> {
+    let rel = file.strip_prefix(topics_dir).map_err(|_| {
+        CliError::Io(format!(
+            "`{}` is not under `{}`",
+            file.display(),
+            topics_dir.display()
+        ))
+    })?;
+    let mut segments: Vec<String> = Vec::new();
+    for component in rel.components() {
+        let std::path::Component::Normal(part) = component else {
+            return Err(CliError::Io(format!(
+                "unexpected path component in `{}`",
+                file.display()
+            )));
+        };
+        let text = part
+            .to_str()
+            .ok_or_else(|| CliError::Io(format!("non-UTF-8 path `{}`", file.display())))?;
+        segments.push(text.to_string());
+    }
+    let last = segments
+        .pop()
+        .ok_or_else(|| CliError::Io(format!("`{}` has no file name", file.display())))?;
+    let stem = last.strip_suffix(".drm").unwrap_or(&last).to_string();
+    segments.push(stem);
+    Ok(segments.join("/"))
 }
 
 /// Sorted entries of `dir`. REQ: REQ-TOOL-045.
@@ -231,5 +291,42 @@ mod tests {
     fn missing_packages_is_friendly() {
         let root = std::env::temp_dir().join(format!("drm-cli-ws-missing-{}", std::process::id()));
         assert!(super::discover(&root).is_err());
+    }
+
+    /// REQ: REQ-TOOL-045, REQ-TOOL-056 — a nested topic keeps its full path
+    /// instead of collapsing to the file stem.
+    ///
+    /// ROS-shaped names (`/robot1/sensors/lidar`) have arbitrary depth, so the
+    /// walk must recurse. Before this, a nested file was silently ignored: the
+    /// build reported `0 generated` and exited 0.
+    #[test]
+    fn discover_keeps_nested_topic_paths() {
+        let root = temp_root("nested");
+        let deep = root.join("packages/robot/topics/nested/deep");
+        std::fs::create_dir_all(&deep).unwrap_or_else(|e| unreachable!("mkdir: {e}"));
+        write(&deep.join("lidar.drm"), "v: f32\n");
+        write(&root.join("packages/robot/topics/flat.drm"), "v: f32\n");
+
+        let d = super::discover(&root).unwrap_or_else(|e| unreachable!("{e}"));
+        assert!(
+            d.topics.contains("robot/nested/deep/lidar"),
+            "nested topic kept its path; found {:?}",
+            d.topics
+        );
+        assert!(d.topics.contains("robot/flat"));
+    }
+
+    /// REQ: REQ-TOOL-056 — an uppercase segment is preserved, not lowercased.
+    ///
+    /// The two-segment lowercase rule existed for Windows case-insensitivity, not
+    /// because short lowercase names are meaningful. Preserving case is safe once
+    /// a case-fold collision is an error (see
+    /// `crates/drm-cli/tests/topic_identity.rs`).
+    #[test]
+    fn discover_preserves_declared_case() {
+        let root = temp_root("case");
+        write(&root.join("packages/control/topics/CmdVel.drm"), "v: f32\n");
+        let d = super::discover(&root).unwrap_or_else(|e| unreachable!("{e}"));
+        assert!(d.topics.contains("control/CmdVel"), "found {:?}", d.topics);
     }
 }
